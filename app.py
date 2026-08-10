@@ -111,7 +111,10 @@ CONFIG_DIR = os.environ.get("CONFIG_DIR", os.path.dirname(os.path.abspath(__file
 os.makedirs(CONFIG_DIR, exist_ok=True)  # in case a fresh volume mount is still empty
 CONFIG_PATH = os.path.join(CONFIG_DIR, "config.json")
 
-EMPTY_CONFIG = {"instances": [], "media_servers": [], "requesters": [], "users": [], "secret_key": ""}
+EMPTY_CONFIG = {
+    "instances": [], "media_servers": [], "requesters": [], "users": [],
+    "tmdb": {"api_key": ""}, "secret_key": "",
+}
 
 
 def load_config() -> dict:
@@ -179,6 +182,7 @@ CONFIG = load_config()
 APPS = build_apps(CONFIG)
 MEDIA_SERVERS = CONFIG.get("media_servers", [])
 REQUESTERS = CONFIG.get("requesters", [])
+TMDB = CONFIG.get("tmdb", {"api_key": ""})
 USERS = CONFIG.get("users", [])
 
 # Flask needs a secret key to sign session cookies. Generate one on first
@@ -512,7 +516,9 @@ def get_library_item(record: dict, kind: str, config: dict) -> dict:
         detail = ""
 
     return {"title": title, "detail": detail, "status": status, "genre": genre,
-            "cover_url": cover_url, "item_id": record.get("id")}
+            "cover_url": cover_url, "item_id": record.get("id"),
+            "tmdb_id": record.get("tmdbId") if kind == "movie" else None,
+            "tvdb_id": record.get("tvdbId") if kind == "series" else None}
 
 
 def fetch_library(name: str, config: dict) -> dict:
@@ -587,7 +593,13 @@ def fetch_movie_details(config: dict, movie_id: int) -> dict:
         credit_resp.raise_for_status()
         credits_data = credit_resp.json()
         cast = [
-            {"name": c.get("personName", "?"), "role": c.get("character", "")}
+            {
+                "name": c.get("personName", "?"), "role": c.get("character", ""),
+                # Best-guess field name for the TMDB person id on Radarr's
+                # credit resource - if filmography lookups never work,
+                # check the raw JSON here for the actual field name.
+                "person_tmdb_id": c.get("personTmdbId"),
+            }
             for c in credits_data if c.get("type") == "cast"
         ][:20]
     except requests.exceptions.RequestException:
@@ -630,7 +642,10 @@ def fetch_series_details(config: dict, series_id: int) -> dict:
         credit_resp.raise_for_status()
         credits_data = credit_resp.json()
         cast = [
-            {"name": c.get("personName", "?"), "role": c.get("character", "")}
+            {
+                "name": c.get("personName", "?"), "role": c.get("character", ""),
+                "person_tmdb_id": c.get("personTmdbId"),
+            }
             for c in credits_data if c.get("type") == "cast"
         ][:20]
     except requests.exceptions.RequestException:
@@ -1172,6 +1187,94 @@ def api_play_links():
 
 
 # ---------------------------------------------------------------------------
+# TMDB actor filmography (click a cast member's name)
+# ---------------------------------------------------------------------------
+
+
+def tmdb_get(path: str, params: dict = None) -> dict:
+    params = dict(params or {})
+    params["api_key"] = TMDB["api_key"]
+    response = requests.get(f"https://api.themoviedb.org/3{path}", params=params, timeout=10)
+    response.raise_for_status()
+    return response.json()
+
+
+def fetch_tv_tvdb_id(tmdb_tv_id) -> "int | None":
+    """One extra TMDB call to translate a TMDB TV id into a TVDB id,
+    since Sonarr identifies shows by TVDB id, not TMDB id."""
+    try:
+        data = tmdb_get(f"/tv/{tmdb_tv_id}/external_ids")
+        return data.get("tvdb_id")
+    except requests.exceptions.RequestException:
+        return None
+
+
+@app.route("/api/actor-filmography/<instance_name>")
+@login_required
+def api_actor_filmography(instance_name):
+    if not TMDB.get("api_key"):
+        return jsonify({"error": "TMDB API key isn't configured in Settings"}), 400
+
+    config = APPS.get(instance_name)
+    if not config:
+        return jsonify({"error": "unknown instance"}), 404
+
+    kind = config["library_kind"]
+    if kind not in ("movie", "series"):
+        return jsonify({"error": "not applicable to this instance"}), 400
+
+    person_id = request.args.get("person_id", "").strip()
+    if not person_id:
+        return jsonify({"error": "missing person_id"}), 400
+
+    try:
+        credits_data = tmdb_get(f"/person/{person_id}/combined_credits")
+    except requests.exceptions.RequestException as err:
+        return jsonify({"error": str(err)}), 502
+
+    media_type = "movie" if kind == "movie" else "tv"
+    # De-dupe (the same person can appear twice for a title, e.g. actor
+    # and director) and sort by popularity so the most relevant credits
+    # are checked first, since TV matching below is capped for cost.
+    seen_ids = set()
+    credits_list = []
+    for c in credits_data.get("cast", []) + credits_data.get("crew", []):
+        if c.get("media_type") != media_type or c.get("id") in seen_ids:
+            continue
+        seen_ids.add(c["id"])
+        credits_list.append(c)
+    credits_list.sort(key=lambda c: c.get("popularity", 0), reverse=True)
+
+    try:
+        library = fetch_library(instance_name, config)
+    except requests.exceptions.RequestException as err:
+        return jsonify({"error": str(err)}), 502
+
+    matches = []
+    if kind == "movie":
+        owned_tmdb_ids = {item["tmdb_id"] for item in library["library_items"] if item.get("tmdb_id")}
+        matches = [c for c in credits_list if c.get("id") in owned_tmdb_ids]
+    else:
+        owned_tvdb_ids = {item["tvdb_id"] for item in library["library_items"] if item.get("tvdb_id")}
+        # Capped to bound the extra per-credit TMDB calls this needs -
+        # sorted by popularity above, so the cap rarely matters in practice.
+        for c in credits_list[:50]:
+            tvdb_id = fetch_tv_tvdb_id(c["id"])
+            if tvdb_id in owned_tvdb_ids:
+                matches.append(c)
+
+    results = [
+        {
+            "title": c.get("title") or c.get("name") or "(untitled)",
+            "year": (c.get("release_date") or c.get("first_air_date") or "")[:4],
+            "poster_url": f"https://image.tmdb.org/t/p/w200{c['poster_path']}" if c.get("poster_path") else "",
+        }
+        for c in matches
+    ]
+    return jsonify({"results": results})
+
+
+# ---------------------------------------------------------------------------
 # Settings
 # ---------------------------------------------------------------------------
 
@@ -1194,10 +1297,25 @@ def api_settings_test():
             return jsonify({"ok": False, "error": "administrator access required"}), 403
 
     body = request.get_json(force=True)
-    category = body.get("category")       # "instance" | "media_server" | "requester"
+    category = body.get("category")       # "instance" | "media_server" | "requester" | "tmdb"
     kind_or_type = body.get("kind_or_type")
     url = (body.get("url") or "").strip()
     credential = (body.get("credential") or "").strip()
+
+    if category == "tmdb":
+        # TMDB's API endpoint is fixed - there's no URL field for this one.
+        try:
+            response = requests.get(
+                "https://api.themoviedb.org/3/authentication",
+                params={"api_key": credential}, timeout=8,
+            )
+            response.raise_for_status()
+        except requests.exceptions.HTTPError:
+            detail = response.text[:200] if response is not None else "no response body"
+            return jsonify({"ok": False, "error": f"HTTP {response.status_code}: {detail}"})
+        except requests.exceptions.RequestException as err:
+            return jsonify({"ok": False, "error": str(err)})
+        return jsonify({"ok": True})
 
     if not url:
         return jsonify({"ok": False, "error": "URL is required"})
@@ -1248,13 +1366,20 @@ def parse_indexed_entries(form, prefix: str, fields: list) -> list:
     list of dicts. Suffixes are arbitrary strings (not necessarily
     sequential), so cards can be added/removed client-side freely
     without the backend needing to know about gaps.
+
+    Order matters here (it's what determines sidebar order for
+    instances), so suffixes are collected in first-seen order - form
+    submission follows DOM order, which follows however the cards were
+    arranged/reordered on the page - rather than an unordered set.
     """
-    suffixes = set()
+    suffixes = []
+    seen = set()
     pattern = re.compile(rf"^{re.escape(prefix)}_name_(.+)$")
     for key in form.keys():
         m = pattern.match(key)
-        if m:
-            suffixes.add(m.group(1))
+        if m and m.group(1) not in seen:
+            seen.add(m.group(1))
+            suffixes.append(m.group(1))
 
     entries = []
     for suffix in suffixes:
@@ -1278,12 +1403,14 @@ def parse_users(form, existing_users: list) -> list:
     it", and the admin role always has full permissions regardless of
     what any checkbox says.
     """
-    suffixes = set()
+    suffixes = []
+    seen = set()
     pattern = re.compile(r"^user_username_(.+)$")
     for key in form.keys():
         m = pattern.match(key)
-        if m:
-            suffixes.add(m.group(1))
+        if m and m.group(1) not in seen:
+            seen.add(m.group(1))
+            suffixes.append(m.group(1))
 
     existing_by_username = {u["username"]: u for u in existing_users}
     users = []
@@ -1330,7 +1457,7 @@ def parse_users(form, existing_users: list) -> list:
 @login_required
 @admin_required
 def settings():
-    global CONFIG, APPS, MEDIA_SERVERS, REQUESTERS, USERS
+    global CONFIG, APPS, MEDIA_SERVERS, REQUESTERS, USERS, TMDB
 
     if request.method == "POST":
         new_config = {
@@ -1341,6 +1468,7 @@ def settings():
             "requesters": dedupe_names(parse_indexed_entries(
                 request.form, "requester", ["type", "url", "credential", "enabled"])),
             "users": parse_users(request.form, CONFIG.get("users", [])),
+            "tmdb": {"api_key": request.form.get("tmdb_api_key", "").strip()},
             "secret_key": CONFIG["secret_key"],  # never edited via the form - carry it forward
         }
         save_config(new_config)
@@ -1352,6 +1480,7 @@ def settings():
         MEDIA_SERVERS = CONFIG["media_servers"]
         REQUESTERS = CONFIG["requesters"]
         USERS = CONFIG["users"]
+        TMDB = CONFIG["tmdb"]
 
         # Only the admin can reach this route, so keep their session
         # pointed at their account even if they just renamed themselves.
@@ -1367,6 +1496,7 @@ def settings():
         media_servers=CONFIG.get("media_servers", []),
         requesters=CONFIG.get("requesters", []),
         users=CONFIG.get("users", []),
+        tmdb=CONFIG.get("tmdb", {"api_key": ""}),
         kind_options=KIND_META,
         media_server_type_options=MEDIA_SERVER_TYPES,
         requester_type_options=REQUESTER_TYPES,

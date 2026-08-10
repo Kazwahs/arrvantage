@@ -497,7 +497,20 @@
         .cast-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(140px, 1fr)); gap: 0.5rem; }
         .cast-entry { font-size: 0.82rem; }
         .cast-name { display: block; }
+        .cast-name-clickable { color: var(--accent); cursor: pointer; }
+        .cast-name-clickable:hover { text-decoration: underline; }
         .cast-role { color: var(--muted); font-size: 0.78rem; }
+
+        .back-to-cast-btn {
+            background: none;
+            border: none;
+            color: var(--accent);
+            font-size: 0.85rem;
+            cursor: pointer;
+            padding: 0;
+            margin-bottom: 1rem;
+        }
+        .back-to-cast-btn:hover { text-decoration: underline; }
 
         .expandable-row {
             padding: 0.6rem 0;
@@ -1006,7 +1019,7 @@
                 }
 
                 const kind = INSTANCE_KINDS[instance];
-                if (kind === 'movie') renderMovieModal(data);
+                if (kind === 'movie') renderMovieModal(instance, data);
                 else if (kind === 'series') renderSeriesModal(instance, itemId, data);
                 else if (kind === 'artist') renderArtistModal(instance, data);
                 else if (kind === 'author') renderAuthorModal(data);
@@ -1021,13 +1034,13 @@
             document.getElementById('modal-overlay').classList.remove('open');
         }
 
-        function renderMovieModal(data) {
+        function renderMovieModal(instance, data) {
             const content = document.getElementById('modal-body');
             content.innerHTML = `
                 <div class="modal-rating">${data.rating}</div>
                 <div class="modal-overview">${data.overview}</div>
                 <div class="modal-section-title">Cast</div>
-                ${renderCast(data.cast, data.cast_available)}
+                ${renderCast(instance, data.cast, data.cast_available)}
             `;
         }
 
@@ -1047,7 +1060,7 @@
                 <div class="modal-section-title">Seasons</div>
                 ${seasonRows || '<div class="modal-empty">No seasons found</div>'}
                 <div class="modal-section-title">Cast</div>
-                ${renderCast(data.cast, data.cast_available)}
+                ${renderCast(instance, data.cast, data.cast_available)}
             `;
         }
 
@@ -1132,15 +1145,70 @@
             `;
         }
 
-        function renderCast(cast, available) {
+        function renderCast(instance, cast, available) {
             if (!available) return '<div class="modal-empty">Cast info not available for this instance.</div>';
             if (!cast || cast.length === 0) return '<div class="modal-empty">No cast listed.</div>';
             return `<div class="cast-grid">${cast.map(c => `
                 <div class="cast-entry">
-                    <span class="cast-name">${c.name}</span>
+                    ${c.person_tmdb_id
+                        ? `<span class="cast-name cast-name-clickable" onclick="showActorFilmography('${instance}', ${c.person_tmdb_id}, '${c.name.replace(/'/g, "\\'")}')">${c.name}</span>`
+                        : `<span class="cast-name">${c.name}</span>`
+                    }
                     <span class="cast-role">${c.role || ''}</span>
                 </div>
             `).join('')}</div>`;
+        }
+
+        // --- Actor filmography (click a cast member's name) ---
+
+        let savedModalBody = null; // holds the cast view's HTML while filmography is shown, for "Back"
+
+        async function showActorFilmography(instance, personId, personName) {
+            const body = document.getElementById('modal-body');
+            savedModalBody = body.innerHTML;
+
+            body.innerHTML = `
+                <button class="back-to-cast-btn" onclick="restoreCastView()">&larr; Back</button>
+                <div class="modal-section-title">${personName} - other titles in your library</div>
+                <div class="modal-loading">Searching...</div>
+            `;
+
+            try {
+                const response = await fetch(`/api/actor-filmography/${instance}?person_id=${personId}`);
+                const data = await response.json();
+                const listEl = body.querySelector('.modal-loading');
+
+                if (data.error) {
+                    listEl.outerHTML = `<div class="modal-empty">${data.error}</div>`;
+                    return;
+                }
+                if (!data.results.length) {
+                    listEl.outerHTML = '<div class="modal-empty">No other titles by this person found in your library.</div>';
+                    return;
+                }
+
+                listEl.outerHTML = `<div class="library-grid">${data.results.map(r => `
+                    <div class="library-card">
+                        <div class="cover-wrap">
+                            ${r.poster_url
+                                ? `<img src="${r.poster_url}" alt="${r.title}" loading="lazy" onerror="this.style.display='none'; this.nextElementSibling.style.display='flex';">`
+                                : ''
+                            }
+                            <div class="cover-fallback" ${r.poster_url ? 'style="display:none;"' : ''}>${r.title}</div>
+                        </div>
+                        <div class="card-title">${r.title}${r.year ? ' (' + r.year + ')' : ''}</div>
+                    </div>
+                `).join('')}</div>`;
+            } catch (err) {
+                body.querySelector('.modal-loading').outerHTML = '<div class="modal-empty">Search failed.</div>';
+            }
+        }
+
+        function restoreCastView() {
+            if (savedModalBody !== null) {
+                document.getElementById('modal-body').innerHTML = savedModalBody;
+                savedModalBody = null;
+            }
         }
 
         // --- Plex / Jellyfin play links: fetched separately from the

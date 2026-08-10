@@ -1,19 +1,16 @@
 services:
   aarvantage:
-    # Replace <token>, yourusername, and the repo name below.
-    build: https://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@github.com/Kazwahs/arrvantage.git
+    build: >-
+      https://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@github.com/Kazwahs/arrvantage.git
     container_name: aarvantage
-    restart: unless-stopped
-    ports:
-      # Left side: whatever port fits your setup. Right side: leave as 5000.
-      - "30099:5000"
-    volumes:
-      # Point this at a real TrueNAS dataset path you created for
-      # persistent config storage (instances, users, API keys).
-      - /mnt/NasWahs1/appdata/arrvantage:/app/data
     environment:
       - CONFIG_DIR=/app/data
-      # Flip to "true" once your reverse proxy + SSL is confirmed working.
       - FORCE_HTTPS_COOKIES=false
-      
-      
+    ports:
+      - '30099:5000'
+    restart: unless-stopped
+    volumes:
+      - /mnt/NasWahs1/appdata/arrvantage:/app/data
+
+
+TMDB API: a914f50a4067fba2efbcc990079ed1a7

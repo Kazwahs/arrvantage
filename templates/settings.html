@@ -125,6 +125,20 @@
             cursor: pointer;
         }
 
+        .reorder-btn {
+            flex-shrink: 0;
+            width: 26px;
+            height: 26px;
+            background: none;
+            border: 1px solid var(--border);
+            border-radius: 6px;
+            color: var(--muted);
+            font-size: 0.85rem;
+            cursor: pointer;
+            padding: 0;
+        }
+        .reorder-btn:hover { color: var(--accent); border-color: var(--accent); }
+
         .remove-btn {
             flex-shrink: 0;
             background: none;
@@ -287,6 +301,27 @@
             </details>
 
             <details class="group">
+                <summary>Movie/TV Metadata (TMDB)</summary>
+                <div class="group-body">
+                    <div class="step-hint">Powers the "click a cast member's name" feature in movie/show detail views. Optional - skip this if you don't want that feature. Get a free API key from themoviedb.org under Settings &rarr; API.</div>
+                    <div class="entry-card" id="card-tmdb" data-original-credential="{{ tmdb.api_key }}">
+                        <div class="field">
+                            <label for="tmdb_api_key">API Key</label>
+                            <div class="key-row">
+                                <input type="password" id="tmdb_api_key" name="tmdb_api_key" value="{{ tmdb.api_key }}"
+                                       oninput="markUntestedTmdb()">
+                                <button type="button" class="toggle-btn" onclick="toggleField('tmdb_api_key', this)">Show</button>
+                            </div>
+                        </div>
+                        <div class="test-row">
+                            <button type="button" class="test-btn" id="test-btn-tmdb" onclick="testTmdb(this)">Test</button>
+                            <span id="test-status-tmdb" class="test-status"></span>
+                        </div>
+                    </div>
+                </div>
+            </details>
+
+            <details class="group">
                 <summary>Users</summary>
                 <div class="group-body">
                     <div id="user-cards"></div>
@@ -328,6 +363,7 @@
                 testCategory: 'instance',
                 urlPlaceholder: 'http://192.168.1.X:PORT',
                 hasColor: true,
+                reorderable: true,
             },
             mediaserver: {
                 formPrefix: 'mediaserver',
@@ -384,6 +420,10 @@
                         <input type="text" class="name-input" id="${fieldId(category, 'name', suffix)}"
                                name="${cfg.formPrefix}_name_${suffix}" value="${name.replace(/"/g, '&quot;')}"
                                placeholder="Name (e.g. Radarr 4K)" oninput="markUntested('${category}', '${suffix}')">
+                        ${cfg.reorderable ? `
+                        <button type="button" class="reorder-btn" onclick="moveCard('${category}', '${suffix}', -1)" title="Move up">&uarr;</button>
+                        <button type="button" class="reorder-btn" onclick="moveCard('${category}', '${suffix}', 1)" title="Move down">&darr;</button>
+                        ` : ''}
                         ${cfg.hasColor ? `
                         <input type="color" class="color-input" id="${fieldId(category, 'color', suffix)}"
                                name="${cfg.formPrefix}_color_${suffix}" value="${entry.color || '#5b8cff'}" title="Button color">
@@ -440,6 +480,18 @@
             document.getElementById(`card-${key}`).remove();
             delete testedOk[key];
             updateSaveButtonState();
+        }
+
+        function moveCard(category, suffix, direction) {
+            const card = document.getElementById(`card-${cardKey(category, suffix)}`);
+            const sibling = direction < 0 ? card.previousElementSibling : card.nextElementSibling;
+            if (!sibling) return; // already at the top/bottom
+
+            if (direction < 0) {
+                card.parentNode.insertBefore(card, sibling);
+            } else {
+                card.parentNode.insertBefore(sibling, card);
+            }
         }
 
         function toggleField(id, btn) {
@@ -621,6 +673,69 @@
         }
 
         existingUsers.forEach((entry, i) => addUserCard({ ...entry, __suffix: `existing-${i}` }));
+
+        // --- TMDB (single field, no add/remove needed) ---
+
+        function markUntestedTmdb() {
+            const field = document.getElementById('tmdb_api_key');
+            const card = document.getElementById('card-tmdb');
+            const statusEl = document.getElementById('test-status-tmdb');
+            const value = field.value.trim();
+
+            if (value === '') {
+                testedOk['tmdb'] = true;
+                statusEl.textContent = 'Not configured';
+                statusEl.className = 'test-status test-empty';
+            } else if (value === card.dataset.originalCredential) {
+                testedOk['tmdb'] = true;
+                statusEl.textContent = 'Saved';
+                statusEl.className = 'test-status test-empty';
+            } else {
+                testedOk['tmdb'] = false;
+                statusEl.textContent = 'Needs testing';
+                statusEl.className = 'test-status test-empty';
+            }
+            updateSaveButtonState();
+        }
+
+        async function testTmdb(btn) {
+            const statusEl = document.getElementById('test-status-tmdb');
+            btn.disabled = true;
+            const originalLabel = btn.textContent;
+            btn.textContent = 'Testing...';
+
+            try {
+                const response = await fetch('/api/settings/test', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({
+                        category: 'tmdb',
+                        credential: document.getElementById('tmdb_api_key').value.trim(),
+                    }),
+                });
+                const result = await response.json();
+
+                if (result.ok) {
+                    testedOk['tmdb'] = true;
+                    statusEl.textContent = 'Connected';
+                    statusEl.className = 'test-status test-ok';
+                } else {
+                    testedOk['tmdb'] = false;
+                    statusEl.textContent = result.error || 'Failed';
+                    statusEl.className = 'test-status test-fail';
+                }
+            } catch (err) {
+                testedOk['tmdb'] = false;
+                statusEl.textContent = 'Request failed';
+                statusEl.className = 'test-status test-fail';
+            }
+
+            btn.disabled = false;
+            btn.textContent = originalLabel;
+            updateSaveButtonState();
+        }
+
+        markUntestedTmdb();
     </script>
 </body>
 </html>
