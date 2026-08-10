@@ -510,7 +510,7 @@ def get_person_image_url(credit: dict, config: dict) -> str:
     return f"{config['url'].rstrip('/')}{path}{separator}apikey={config['api_key']}"
 
 
-
+def get_library_item(record: dict, kind: str, config: dict) -> dict:
     genre = get_genre(record)
     status = get_status_category(kind, record)
     cover_url = get_cover_url(record, config)
