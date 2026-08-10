@@ -16,6 +16,6 @@
 
   <!-- Wordmark -->
   <text x="80" y="90" text-anchor="middle" font-family="Arial, sans-serif" font-size="19" letter-spacing="0.5">
-    <tspan font-weight="600" fill="#8b93a3">aar</tspan><tspan font-weight="800" fill="#e4e6eb">Vantage</tspan>
+    <tspan font-weight="600" fill="#8b93a3">arr</tspan><tspan font-weight="800" fill="#e4e6eb">Vantage</tspan>
   </text>
 </svg>

@@ -1,10 +1,10 @@
 services:
-  aarvantage:
+  arrvantage:
     # On TrueNAS's Custom App YAML editor, point this at wherever the
     # project folder actually lives on TrueNAS storage, e.g.:
-    # build: /mnt/yourpool/apps/aarvantage
+    # build: /mnt/yourpool/apps/arrvantage
     build: .
-    container_name: aarvantage
+    container_name: arrvantage
     restart: unless-stopped
     ports:
       # Left side is the port on your host/reverse proxy - change it
@@ -18,7 +18,7 @@ services:
       # it's included in your normal dataset snapshots/backups, and
       # survives image rebuilds. Create the dataset first, then use
       # its real path here, e.g.:
-      # - /mnt/yourpool/apps/aarvantage/data:/app/data
+      # - /mnt/yourpool/apps/arrvantage/data:/app/data
       - ./data:/app/data
     environment:
       - CONFIG_DIR=/app/data
