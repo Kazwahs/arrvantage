@@ -2,6 +2,12 @@
 # install Flask/gunicorn without extra build tools.
 FROM python:3.12-slim
 
+# Without this, Python buffers stdout when it's not attached to a real
+# terminal (always true in a container) - meaning print() statements
+# (like the diagnostic logging in app.py) can sit invisible in a buffer
+# instead of showing up in `docker logs` right away.
+ENV PYTHONUNBUFFERED=1
+
 WORKDIR /app
 
 # Install dependencies first, separately from app code - Docker caches
