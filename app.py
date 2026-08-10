@@ -671,9 +671,14 @@ def fetch_series_details(config: dict, series_id: int) -> dict:
             }
             for c in credits_data if c.get("type") == "cast"
         ][:20]
-    except requests.exceptions.RequestException:
+    except requests.exceptions.HTTPError:
+        detail = credit_resp.text[:300] if credit_resp is not None else "no response body"
+        print(f"[sonarr credit] HTTP {credit_resp.status_code} for seriesId={series_id}: {detail}")
+        cast_available = False
+    except requests.exceptions.RequestException as err:
         # Sonarr's cast/credit support varies more by version than
         # Radarr's does - this may just not be available for you.
+        print(f"[sonarr credit] request failed for seriesId={series_id}: {err}")
         cast_available = False
 
     return {
