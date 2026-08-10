@@ -489,7 +489,28 @@ def get_cover_url(record: dict, config: dict) -> str:
     return f"{config['url'].rstrip('/')}{path}{separator}apikey={config['api_key']}"
 
 
-def get_library_item(record: dict, kind: str, config: dict) -> dict:
+def get_person_image_url(credit: dict, config: dict) -> str:
+    """
+    Same idea as get_cover_url, but for a cast member's headshot on a
+    credit record. Best-guess coverType value ("headshot") - if actor
+    photos never show up, check the raw credit JSON for the real one.
+    """
+    images = credit.get("images") or []
+    photo = next((img for img in images if img.get("coverType") in ("headshot", "poster")), None)
+    if not photo:
+        return ""
+
+    if photo.get("remoteUrl"):
+        return photo["remoteUrl"]
+
+    path = photo.get("url", "")
+    if not path:
+        return ""
+    separator = "&" if "?" in path else "?"
+    return f"{config['url'].rstrip('/')}{path}{separator}apikey={config['api_key']}"
+
+
+
     genre = get_genre(record)
     status = get_status_category(kind, record)
     cover_url = get_cover_url(record, config)
@@ -599,6 +620,7 @@ def fetch_movie_details(config: dict, movie_id: int) -> dict:
                 # credit resource - if filmography lookups never work,
                 # check the raw JSON here for the actual field name.
                 "person_tmdb_id": c.get("personTmdbId"),
+                "image_url": get_person_image_url(c, config),
             }
             for c in credits_data if c.get("type") == "cast"
         ][:20]
@@ -645,6 +667,7 @@ def fetch_series_details(config: dict, series_id: int) -> dict:
             {
                 "name": c.get("personName", "?"), "role": c.get("character", ""),
                 "person_tmdb_id": c.get("personTmdbId"),
+                "image_url": get_person_image_url(c, config),
             }
             for c in credits_data if c.get("type") == "cast"
         ][:20]
@@ -1252,24 +1275,27 @@ def api_actor_filmography(instance_name):
 
     matches = []
     if kind == "movie":
-        owned_tmdb_ids = {item["tmdb_id"] for item in library["library_items"] if item.get("tmdb_id")}
-        matches = [c for c in credits_list if c.get("id") in owned_tmdb_ids]
+        # Map tmdb_id -> this instance's own item_id for each owned movie,
+        # so a clicked result can open that exact item's detail modal.
+        owned = {item["tmdb_id"]: item["item_id"] for item in library["library_items"] if item.get("tmdb_id")}
+        matches = [(c, owned[c["id"]]) for c in credits_list if c.get("id") in owned]
     else:
-        owned_tvdb_ids = {item["tvdb_id"] for item in library["library_items"] if item.get("tvdb_id")}
+        owned = {item["tvdb_id"]: item["item_id"] for item in library["library_items"] if item.get("tvdb_id")}
         # Capped to bound the extra per-credit TMDB calls this needs -
         # sorted by popularity above, so the cap rarely matters in practice.
         for c in credits_list[:50]:
             tvdb_id = fetch_tv_tvdb_id(c["id"])
-            if tvdb_id in owned_tvdb_ids:
-                matches.append(c)
+            if tvdb_id in owned:
+                matches.append((c, owned[tvdb_id]))
 
     results = [
         {
             "title": c.get("title") or c.get("name") or "(untitled)",
             "year": (c.get("release_date") or c.get("first_air_date") or "")[:4],
+            "item_id": item_id,
             "poster_url": f"https://image.tmdb.org/t/p/w200{c['poster_path']}" if c.get("poster_path") else "",
         }
-        for c in matches
+        for c, item_id in matches
     ]
     return jsonify({"results": results})
 

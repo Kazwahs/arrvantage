@@ -496,6 +496,16 @@
 
         .cast-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(140px, 1fr)); gap: 0.5rem; }
         .cast-entry { font-size: 0.82rem; }
+
+        .cast-photo {
+            width: 100%;
+            aspect-ratio: 1 / 1;
+            border-radius: 8px;
+            overflow: hidden;
+            background: var(--sidebar);
+            margin-bottom: 0.4rem;
+        }
+        .cast-photo img { width: 100%; height: 100%; object-fit: cover; display: block; }
         .cast-name { display: block; }
         .cast-name-clickable { color: var(--accent); cursor: pointer; }
         .cast-name-clickable:hover { text-decoration: underline; }
@@ -1150,6 +1160,9 @@
             if (!cast || cast.length === 0) return '<div class="modal-empty">No cast listed.</div>';
             return `<div class="cast-grid">${cast.map(c => `
                 <div class="cast-entry">
+                    <div class="cast-photo">
+                        ${c.image_url ? `<img src="${c.image_url}" alt="${c.name}" loading="lazy" onerror="this.style.display='none';">` : ''}
+                    </div>
                     ${c.person_tmdb_id
                         ? `<span class="cast-name cast-name-clickable" onclick="showActorFilmography('${instance}', ${c.person_tmdb_id}, '${c.name.replace(/'/g, "\\'")}')">${c.name}</span>`
                         : `<span class="cast-name">${c.name}</span>`
@@ -1188,8 +1201,8 @@
                 }
 
                 listEl.outerHTML = `<div class="library-grid">${data.results.map(r => `
-                    <div class="library-card">
-                        <div class="cover-wrap">
+                    <div class="library-card" data-title="${r.title.replace(/"/g, '&quot;')}" data-cover="${r.poster_url}">
+                        <div class="cover-wrap" onclick="openDetails(this, '${instance}', ${r.item_id})">
                             ${r.poster_url
                                 ? `<img src="${r.poster_url}" alt="${r.title}" loading="lazy" onerror="this.style.display='none'; this.nextElementSibling.style.display='flex';">`
                                 : ''
