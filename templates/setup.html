@@ -210,11 +210,11 @@
                 </div>
                 <div class="field">
                     <label for="password">Password</label>
-                    <input type="password" id="password" name="password">
+                    <input type="password" id="password" name="password" autocomplete="new-password">
                 </div>
                 <div class="field">
                     <label for="confirm">Confirm Password</label>
-                    <input type="password" id="confirm" name="confirm">
+                    <input type="password" id="confirm" name="confirm" autocomplete="new-password">
                 </div>
                 <div class="error" id="step1-error" style="display:none;"></div>
                 <div class="nav-row">
@@ -339,7 +339,7 @@
                         <div class="key-row">
                             <input type="password" id="${fieldId(category, cfg.credentialField, suffix)}"
                                    name="${cfg.formPrefix}_${cfg.credentialField}_${suffix}" value="${credential}"
-                                   oninput="markUntested('${category}', '${suffix}')">
+                                   autocomplete="new-password" oninput="markUntested('${category}', '${suffix}')">
                             <button type="button" class="toggle-btn" onclick="toggleField('${fieldId(category, cfg.credentialField, suffix)}', this)">Show</button>
                         </div>
                     </div>

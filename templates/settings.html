@@ -308,7 +308,7 @@
                         <div class="field">
                             <label for="tmdb_api_key">API Key</label>
                             <div class="key-row">
-                                <input type="password" id="tmdb_api_key" name="tmdb_api_key" value="{{ tmdb.api_key }}"
+                                <input type="password" id="tmdb_api_key" name="tmdb_api_key" value="{{ tmdb.api_key }}" autocomplete="new-password"
                                        oninput="markUntestedTmdb()">
                                 <button type="button" class="toggle-btn" onclick="toggleField('tmdb_api_key', this)">Show</button>
                             </div>
@@ -454,7 +454,7 @@
                         <div class="key-row">
                             <input type="password" id="${fieldId(category, cfg.credentialField, suffix)}"
                                    name="${cfg.formPrefix}_${cfg.credentialField}_${suffix}" value="${credential.replace(/"/g, '&quot;')}"
-                                   oninput="markUntested('${category}', '${suffix}')">
+                                   autocomplete="new-password" oninput="markUntested('${category}', '${suffix}')">
                             <button type="button" class="toggle-btn" onclick="toggleField('${fieldId(category, cfg.credentialField, suffix)}', this)">Show</button>
                         </div>
                     </div>
@@ -639,6 +639,7 @@
                         <label>Password</label>
                         <div class="key-row">
                             <input type="password" id="user_password_${suffix}" name="user_password_${suffix}"
+                                   autocomplete="new-password"
                                    placeholder="${isNew ? 'Required for new users' : 'Leave blank to keep current password'}">
                             <button type="button" class="toggle-btn" onclick="toggleField('user_password_${suffix}', this)">Show</button>
                         </div>
