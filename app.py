@@ -654,39 +654,14 @@ def fetch_series_details(config: dict, series_id: int) -> dict:
         for s in series.get("seasons", [])
     ]
 
-    cast = []
-    cast_available = True
-    try:
-        credit_resp = requests.get(
-            f"{base}/api/v3/credit", headers=headers,
-            params={"seriesId": series_id}, timeout=10,
-        )
-        credit_resp.raise_for_status()
-        credits_data = credit_resp.json()
-        cast = [
-            {
-                "name": c.get("personName", "?"), "role": c.get("character", ""),
-                "person_tmdb_id": c.get("personTmdbId"),
-                "image_url": get_person_image_url(c, config),
-            }
-            for c in credits_data if c.get("type") == "cast"
-        ][:20]
-    except requests.exceptions.HTTPError:
-        detail = credit_resp.text[:300] if credit_resp is not None else "no response body"
-        print(f"[sonarr credit] HTTP {credit_resp.status_code} for seriesId={series_id}: {detail}")
-        cast_available = False
-    except requests.exceptions.RequestException as err:
-        # Sonarr's cast/credit support varies more by version than
-        # Radarr's does - this may just not be available for you.
-        print(f"[sonarr credit] request failed for seriesId={series_id}: {err}")
-        cast_available = False
+    # Sonarr doesn't expose a cast/credit endpoint the way Radarr does
+    # (its metadata pipeline is TVDB-based, not TMDB-based) - confirmed
+    # via a 404 on /api/v3/credit, so this isn't attempted at all.
 
     return {
         "overview": series.get("overview", "No description available."),
         "rating": get_rating_text(series.get("ratings", {})),
         "seasons": seasons,
-        "cast": cast,
-        "cast_available": cast_available,
     }
 
 
