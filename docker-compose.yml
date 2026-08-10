@@ -1,0 +1,27 @@
+services:
+  aarvantage:
+    # On TrueNAS's Custom App YAML editor, point this at wherever the
+    # project folder actually lives on TrueNAS storage, e.g.:
+    # build: /mnt/yourpool/apps/aarvantage
+    build: .
+    container_name: aarvantage
+    restart: unless-stopped
+    ports:
+      # Left side is the port on your host/reverse proxy - change it
+      # to whatever fits your setup (e.g. a NodePort-style 30xxx port
+      # if that matches how your other *arr containers are exposed).
+      # Right side (5000) is the app's internal port - leave that as-is.
+      - "5000:5000"
+    volumes:
+      # Bind-mount to an actual TrueNAS dataset path rather than a
+      # relative "./data" - keeps config.json on real ZFS storage so
+      # it's included in your normal dataset snapshots/backups, and
+      # survives image rebuilds. Create the dataset first, then use
+      # its real path here, e.g.:
+      # - /mnt/yourpool/apps/aarvantage/data:/app/data
+      - ./data:/app/data
+    environment:
+      - CONFIG_DIR=/app/data
+      # Flip to "true" once your reverse proxy + SSL cert are confirmed
+      # working end-to-end - this makes the login cookie HTTPS-only.
+      - FORCE_HTTPS_COOKIES=false

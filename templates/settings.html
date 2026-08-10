@@ -1,0 +1,626 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Settings - aarVantage</title>
+    <style>
+        :root {
+            --bg: #14161a;
+            --panel: #1c1f26;
+            --sidebar: #181a20;
+            --border: #2a2e37;
+            --text: #e4e6eb;
+            --muted: #8b93a3;
+            --accent: #5b8cff;
+            --success: #4ade80;
+            --error: #ff6b6b;
+        }
+
+        * { box-sizing: border-box; }
+        body {
+            margin: 0;
+            padding: 2rem 1.5rem 4rem 1.5rem;
+            background: var(--bg);
+            color: var(--text);
+            font-family: -apple-system, "Segoe UI", Roboto, sans-serif;
+        }
+
+        .page { max-width: 640px; margin: 0 auto; }
+
+        .back-link { color: var(--muted); text-decoration: none; font-size: 0.85rem; }
+        .back-link:hover { color: var(--accent); }
+
+        h1 { font-size: 1.4rem; margin: 0.75rem 0 0.25rem 0; }
+        .subtitle { color: var(--muted); font-size: 0.85rem; margin-bottom: 1.5rem; }
+
+        .saved-banner {
+            background: rgba(74, 222, 128, 0.1);
+            border: 1px solid var(--success);
+            color: var(--success);
+            border-radius: 8px;
+            padding: 0.6rem 1rem;
+            font-size: 0.85rem;
+            margin-bottom: 1.5rem;
+        }
+
+        .save-hint { color: var(--muted); font-size: 0.8rem; margin: -0.5rem 0 1.25rem 0; }
+
+        /* --- Collapsible group --- */
+
+        .group {
+            background: var(--panel);
+            border: 1px solid var(--border);
+            border-radius: 10px;
+            margin-bottom: 1.25rem;
+            overflow: hidden;
+        }
+
+        .group summary {
+            cursor: pointer;
+            padding: 1rem 1.25rem;
+            font-size: 1rem;
+            font-weight: 600;
+            list-style: none;
+        }
+        .group summary::-webkit-details-marker { display: none; }
+        .group summary::before { content: "\25B8  "; color: var(--accent); }
+        .group[open] summary::before { content: "\25BE  "; }
+
+        .group-body { padding: 0 1.25rem 1.25rem 1.25rem; }
+
+        /* --- Per-entry card --- */
+
+        .entry-card {
+            background: var(--sidebar);
+            border: 1px solid var(--border);
+            border-radius: 8px;
+            padding: 1rem;
+            margin-bottom: 1rem;
+            transition: opacity 0.15s;
+        }
+        .entry-card.disabled-card { opacity: 0.5; }
+
+        .entry-header {
+            display: flex;
+            align-items: center;
+            gap: 0.5rem;
+            margin-bottom: 0.9rem;
+        }
+        .entry-header input[type="text"].name-input {
+            font-size: 0.9rem;
+            font-weight: 600;
+            flex: 1;
+        }
+
+        .admin-badge {
+            flex-shrink: 0;
+            background: rgba(91, 140, 255, 0.15);
+            color: var(--accent);
+            font-size: 0.72rem;
+            font-weight: 600;
+            padding: 0.3rem 0.6rem;
+            border-radius: 6px;
+        }
+
+        .perm-row { display: flex; gap: 1.25rem; }
+        .perm-check {
+            display: flex;
+            align-items: center;
+            gap: 0.4rem;
+            font-size: 0.85rem;
+            color: var(--text);
+            cursor: pointer;
+        }
+        .perm-check input { width: 15px; height: 15px; cursor: pointer; }
+
+        .color-input {
+            flex-shrink: 0;
+            width: 34px;
+            height: 34px;
+            padding: 2px;
+            border: 1px solid var(--border);
+            border-radius: 6px;
+            background: var(--panel);
+            cursor: pointer;
+        }
+
+        .remove-btn {
+            flex-shrink: 0;
+            background: none;
+            border: 1px solid var(--border);
+            border-radius: 6px;
+            color: var(--muted);
+            font-size: 0.75rem;
+            padding: 0.4rem 0.6rem;
+            cursor: pointer;
+        }
+        .remove-btn:hover { color: var(--error); border-color: var(--error); }
+
+        /* Toggle switch */
+        .switch { position: relative; display: inline-block; width: 38px; height: 22px; flex-shrink: 0; }
+        .switch input { opacity: 0; width: 0; height: 0; }
+        .switch-track {
+            position: absolute;
+            cursor: pointer;
+            top: 0; left: 0; right: 0; bottom: 0;
+            background: var(--border);
+            border-radius: 22px;
+            transition: background 0.15s;
+        }
+        .switch-track::before {
+            content: "";
+            position: absolute;
+            width: 16px; height: 16px;
+            left: 3px; bottom: 3px;
+            background: var(--text);
+            border-radius: 50%;
+            transition: transform 0.15s;
+        }
+        .switch input:checked + .switch-track { background: var(--accent); }
+        .switch input:checked + .switch-track::before { transform: translateX(16px); }
+
+        label { display: block; font-size: 0.78rem; color: var(--muted); margin-bottom: 0.3rem; }
+        .field { margin-bottom: 0.9rem; }
+        .field:last-child { margin-bottom: 0; }
+
+        .key-row { display: flex; gap: 0.4rem; }
+
+        input[type="text"], input[type="password"], select {
+            width: 100%;
+            background: var(--panel);
+            border: 1px solid var(--border);
+            border-radius: 6px;
+            padding: 0.5rem 0.65rem;
+            color: var(--text);
+            font-size: 0.88rem;
+        }
+
+        .toggle-btn {
+            flex-shrink: 0;
+            background: var(--panel);
+            border: 1px solid var(--border);
+            border-radius: 6px;
+            color: var(--muted);
+            font-size: 0.78rem;
+            padding: 0 0.75rem;
+            cursor: pointer;
+        }
+        .toggle-btn:hover { color: var(--text); border-color: var(--accent); }
+
+        .test-row {
+            display: flex;
+            align-items: center;
+            gap: 0.6rem;
+            margin-top: 0.9rem;
+            padding-top: 0.9rem;
+            border-top: 1px solid var(--border);
+        }
+
+        .test-btn {
+            background: var(--panel);
+            border: 1px solid var(--border);
+            border-radius: 6px;
+            color: var(--text);
+            font-size: 0.8rem;
+            padding: 0.4rem 0.9rem;
+            cursor: pointer;
+        }
+        .test-btn:hover:not(:disabled) { border-color: var(--accent); }
+        .test-btn:disabled { opacity: 0.6; cursor: default; }
+
+        .test-status { font-size: 0.8rem; }
+        .test-status.test-ok { color: var(--success); }
+        .test-status.test-fail { color: var(--error); }
+        .test-status.test-empty { color: var(--muted); }
+
+        .add-btn {
+            background: none;
+            border: 1px dashed var(--border);
+            border-radius: 8px;
+            color: var(--muted);
+            font-size: 0.85rem;
+            padding: 0.6rem;
+            width: 100%;
+            cursor: pointer;
+        }
+        .add-btn:hover { color: var(--accent); border-color: var(--accent); }
+
+        .save-row { display: flex; justify-content: flex-end; align-items: center; gap: 0.75rem; margin-top: 0.5rem; }
+
+        .save-btn {
+            background: var(--accent);
+            border: none;
+            border-radius: 8px;
+            color: white;
+            font-size: 0.9rem;
+            font-weight: 600;
+            padding: 0.65rem 1.5rem;
+            cursor: pointer;
+        }
+        .save-btn:hover:not(:disabled) { background: #4a7ae0; }
+        .save-btn:disabled { opacity: 0.5; cursor: default; }
+        /* --- Mobile layout --- */
+
+        @media (max-width: 600px) {
+            body { padding: 1.25rem 1rem 3rem 1rem; }
+            .entry-header { flex-wrap: wrap; }
+            .entry-header .name-input { min-width: 100%; order: -1; margin-bottom: 0.5rem; }
+            .perm-row { flex-direction: column; gap: 0.5rem; }
+        }
+    </style>
+</head>
+<body>
+    <div class="page">
+        <a class="back-link" href="/">&larr; Back to dashboard</a>
+        <h1>Settings</h1>
+        <div class="subtitle">Instances, media servers, and requesters - stored in config.json.</div>
+
+        {% if saved %}
+        <div class="saved-banner">Settings saved.</div>
+        {% endif %}
+
+        <form method="POST" action="/settings" id="settings-form">
+
+            <details class="group">
+                <summary>Instances</summary>
+                <div class="group-body">
+                    <div id="instance-cards"></div>
+                    <button type="button" class="add-btn" onclick="addCard('instance')">+ Add instance</button>
+                </div>
+            </details>
+
+            <details class="group">
+                <summary>Media Servers</summary>
+                <div class="group-body">
+                    <div id="mediaserver-cards"></div>
+                    <button type="button" class="add-btn" onclick="addCard('mediaserver')">+ Add media server</button>
+                </div>
+            </details>
+
+            <details class="group">
+                <summary>Requesters</summary>
+                <div class="group-body">
+                    <div id="requester-cards"></div>
+                    <button type="button" class="add-btn" onclick="addCard('requester')">+ Add requester</button>
+                </div>
+            </details>
+
+            <details class="group">
+                <summary>Users</summary>
+                <div class="group-body">
+                    <div id="user-cards"></div>
+                    <button type="button" class="add-btn" onclick="addUserCard()">+ Add user</button>
+                </div>
+            </details>
+
+            <div class="save-hint">New or changed entries need a successful Test before saving. Unchanged, disabled, or empty entries are skipped.</div>
+            <div class="save-row">
+                <button type="submit" class="save-btn" id="save-btn" disabled>Save Settings</button>
+            </div>
+        </form>
+    </div>
+
+    <script>
+        // ---------------------------------------------------------------
+        // Data handed over from the server: existing saved entries, plus
+        // the dropdown options for each category.
+        // ---------------------------------------------------------------
+
+        const existingInstances = {{ instances | tojson }};
+        const existingMediaServers = {{ media_servers | tojson }};
+        const existingRequesters = {{ requesters | tojson }};
+        const existingUsers = {{ users | tojson }};
+
+        const kindOptions = {{ kind_options | tojson }};           // {kind: {label, ...}}
+        const mediaServerTypeOptions = {{ media_server_type_options | tojson }};  // {type: label}
+        const requesterTypeOptions = {{ requester_type_options | tojson }};      // {type: label}
+
+        const CATEGORY_CONFIG = {
+            instance: {
+                formPrefix: 'instance',
+                credentialField: 'api_key',
+                credentialLabel: 'API Key',
+                kindField: 'kind',
+                kindLabel: 'Type',
+                options: kindOptions,
+                optionLabel: (opt) => opt.label,
+                testCategory: 'instance',
+                urlPlaceholder: 'http://192.168.1.X:PORT',
+                hasColor: true,
+            },
+            mediaserver: {
+                formPrefix: 'mediaserver',
+                credentialField: 'credential',
+                credentialLabel: 'Token / API Key',
+                kindField: 'type',
+                kindLabel: 'Service',
+                options: mediaServerTypeOptions,
+                optionLabel: (opt) => opt,
+                testCategory: 'media_server',
+                urlPlaceholder: 'http://192.168.1.X:PORT',
+            },
+            requester: {
+                formPrefix: 'requester',
+                credentialField: 'credential',
+                credentialLabel: 'API Key',
+                kindField: 'type',
+                kindLabel: 'Service',
+                options: requesterTypeOptions,
+                optionLabel: (opt) => opt,
+                testCategory: 'requester',
+                urlPlaceholder: 'http://192.168.1.X:PORT',
+            },
+        };
+
+        const testedOk = {};
+        let newCounter = 0;
+
+        function optionsHTML(category, selected) {
+            const cfg = CATEGORY_CONFIG[category];
+            return Object.keys(cfg.options).map(key => `
+                <option value="${key}" ${key === selected ? 'selected' : ''}>${cfg.optionLabel(cfg.options[key])}</option>
+            `).join('');
+        }
+
+        function cardKey(category, suffix) { return `${category}_${suffix}`; }
+
+        function fieldId(category, field, suffix) { return `${category}_${field}_${suffix}`; }
+
+        function buildCardHTML(category, suffix, entry) {
+            const cfg = CATEGORY_CONFIG[category];
+            const name = entry.name || '';
+            const kindVal = entry[cfg.kindField] || Object.keys(cfg.options)[0];
+            const url = entry.url || '';
+            const credential = entry[cfg.credentialField] || '';
+            const enabled = entry.enabled !== undefined ? entry.enabled : true;
+
+            return `
+                <div class="entry-card" id="card-${cardKey(category, suffix)}"
+                     data-original-url="${url.replace(/"/g, '&quot;')}"
+                     data-original-credential="${credential.replace(/"/g, '&quot;')}"
+                     data-original-kind="${kindVal}">
+                    <div class="entry-header">
+                        <input type="text" class="name-input" id="${fieldId(category, 'name', suffix)}"
+                               name="${cfg.formPrefix}_name_${suffix}" value="${name.replace(/"/g, '&quot;')}"
+                               placeholder="Name (e.g. Radarr 4K)" oninput="markUntested('${category}', '${suffix}')">
+                        ${cfg.hasColor ? `
+                        <input type="color" class="color-input" id="${fieldId(category, 'color', suffix)}"
+                               name="${cfg.formPrefix}_color_${suffix}" value="${entry.color || '#5b8cff'}" title="Button color">
+                        ` : ''}
+                        <label class="switch">
+                            <input type="checkbox" id="${fieldId(category, 'enabled', suffix)}"
+                                   name="${cfg.formPrefix}_enabled_${suffix}" ${enabled ? 'checked' : ''}
+                                   onchange="onToggleEnabled('${category}', '${suffix}')">
+                            <span class="switch-track"></span>
+                        </label>
+                        <button type="button" class="remove-btn" onclick="removeCard('${category}', '${suffix}')">Remove</button>
+                    </div>
+                    <div class="field">
+                        <label for="${fieldId(category, cfg.kindField, suffix)}">${cfg.kindLabel}</label>
+                        <select id="${fieldId(category, cfg.kindField, suffix)}" name="${cfg.formPrefix}_${cfg.kindField}_${suffix}"
+                                onchange="markUntested('${category}', '${suffix}')">
+                            ${optionsHTML(category, kindVal)}
+                        </select>
+                    </div>
+                    <div class="field">
+                        <label for="${fieldId(category, 'url', suffix)}">Server URL</label>
+                        <input type="text" id="${fieldId(category, 'url', suffix)}" name="${cfg.formPrefix}_url_${suffix}"
+                               value="${url.replace(/"/g, '&quot;')}" placeholder="${cfg.urlPlaceholder}"
+                               oninput="markUntested('${category}', '${suffix}')">
+                    </div>
+                    <div class="field">
+                        <label for="${fieldId(category, cfg.credentialField, suffix)}">${cfg.credentialLabel}</label>
+                        <div class="key-row">
+                            <input type="password" id="${fieldId(category, cfg.credentialField, suffix)}"
+                                   name="${cfg.formPrefix}_${cfg.credentialField}_${suffix}" value="${credential.replace(/"/g, '&quot;')}"
+                                   oninput="markUntested('${category}', '${suffix}')">
+                            <button type="button" class="toggle-btn" onclick="toggleField('${fieldId(category, cfg.credentialField, suffix)}', this)">Show</button>
+                        </div>
+                    </div>
+                    <div class="test-row">
+                        <button type="button" class="test-btn" id="test-btn-${cardKey(category, suffix)}"
+                                onclick="testConnection('${category}', '${suffix}', this)">Test</button>
+                        <span id="test-status-${cardKey(category, suffix)}" class="test-status"></span>
+                    </div>
+                </div>
+            `;
+        }
+
+        function addCard(category, entry) {
+            entry = entry || {};
+            const suffix = entry.__suffix || `new-${newCounter++}`;
+            const container = document.getElementById(`${category}-cards`);
+            container.insertAdjacentHTML('beforeend', buildCardHTML(category, suffix, entry));
+            onToggleEnabled(category, suffix); // sets initial disabled-card / test-btn state
+        }
+
+        function removeCard(category, suffix) {
+            const key = cardKey(category, suffix);
+            document.getElementById(`card-${key}`).remove();
+            delete testedOk[key];
+            updateSaveButtonState();
+        }
+
+        function toggleField(id, btn) {
+            const field = document.getElementById(id);
+            const isHidden = field.type === 'password';
+            field.type = isHidden ? 'text' : 'password';
+            btn.textContent = isHidden ? 'Hide' : 'Show';
+        }
+
+        function isEnabled(category, suffix) {
+            return document.getElementById(fieldId(category, 'enabled', suffix)).checked;
+        }
+
+        function markUntested(category, suffix) {
+            const key = cardKey(category, suffix);
+            const cfg = CATEGORY_CONFIG[category];
+            const card = document.getElementById(`card-${key}`);
+            const urlField = document.getElementById(fieldId(category, 'url', suffix));
+            const credentialField = document.getElementById(fieldId(category, cfg.credentialField, suffix));
+            const kindField = document.getElementById(fieldId(category, cfg.kindField, suffix));
+            const statusEl = document.getElementById(`test-status-${key}`);
+
+            const url = urlField.value.trim();
+            const changed = url !== card.dataset.originalUrl
+                || credentialField.value.trim() !== card.dataset.originalCredential
+                || kindField.value !== card.dataset.originalKind;
+
+            if (!isEnabled(category, suffix)) {
+                testedOk[key] = true; // disabled - not in use, nothing to validate
+                statusEl.textContent = 'Disabled';
+                statusEl.className = 'test-status test-empty';
+            } else if (url === '') {
+                testedOk[key] = true; // nothing configured - nothing to block saving
+                statusEl.textContent = 'Not configured';
+                statusEl.className = 'test-status test-empty';
+            } else if (!changed) {
+                testedOk[key] = true; // unchanged from what's already saved and was validated before
+                statusEl.textContent = 'Saved';
+                statusEl.className = 'test-status test-empty';
+            } else {
+                testedOk[key] = false;
+                statusEl.textContent = 'Needs testing';
+                statusEl.className = 'test-status test-empty';
+            }
+            updateSaveButtonState();
+        }
+
+        function onToggleEnabled(category, suffix) {
+            const key = cardKey(category, suffix);
+            const card = document.getElementById(`card-${key}`);
+            const testBtn = document.getElementById(`test-btn-${key}`);
+            const enabled = isEnabled(category, suffix);
+
+            card.classList.toggle('disabled-card', !enabled);
+            testBtn.disabled = !enabled;
+            markUntested(category, suffix);
+        }
+
+        async function testConnection(category, suffix, btn) {
+            const key = cardKey(category, suffix);
+            const cfg = CATEGORY_CONFIG[category];
+            const statusEl = document.getElementById(`test-status-${key}`);
+            btn.disabled = true;
+            const originalLabel = btn.textContent;
+            btn.textContent = 'Testing...';
+            statusEl.textContent = '';
+            statusEl.className = 'test-status';
+
+            const payload = {
+                category: cfg.testCategory,
+                kind_or_type: document.getElementById(fieldId(category, cfg.kindField, suffix)).value,
+                url: document.getElementById(fieldId(category, 'url', suffix)).value.trim(),
+                credential: document.getElementById(fieldId(category, cfg.credentialField, suffix)).value.trim(),
+            };
+
+            try {
+                const response = await fetch('/api/settings/test', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify(payload),
+                });
+                const result = await response.json();
+
+                if (result.ok) {
+                    testedOk[key] = true;
+                    statusEl.textContent = 'Connected';
+                    statusEl.className = 'test-status test-ok';
+                } else {
+                    testedOk[key] = false;
+                    statusEl.textContent = result.error || 'Failed';
+                    statusEl.className = 'test-status test-fail';
+                }
+            } catch (err) {
+                testedOk[key] = false;
+                statusEl.textContent = 'Request failed';
+                statusEl.className = 'test-status test-fail';
+            }
+
+            btn.disabled = false;
+            btn.textContent = originalLabel;
+            updateSaveButtonState();
+        }
+
+        function updateSaveButtonState() {
+            const allOk = Object.values(testedOk).every(v => v === true);
+            document.getElementById('save-btn').disabled = !allOk;
+        }
+
+        // ---------------------------------------------------------------
+        // Initial render: one card per already-saved entry.
+        // ---------------------------------------------------------------
+
+        existingInstances.forEach((entry, i) => addCard('instance', { ...entry, __suffix: `existing-${i}` }));
+        existingMediaServers.forEach((entry, i) => addCard('mediaserver', { ...entry, __suffix: `existing-${i}` }));
+        existingRequesters.forEach((entry, i) => addCard('requester', { ...entry, __suffix: `existing-${i}` }));
+
+        // ---------------------------------------------------------------
+        // Users - different shape from the other categories (username/
+        // password instead of url/credential, two permission checkboxes
+        // instead of a kind/type dropdown, and the admin account can't
+        // be removed) - so these get their own dedicated functions
+        // rather than reusing CATEGORY_CONFIG.
+        // ---------------------------------------------------------------
+
+        let newUserCounter = 0;
+
+        function buildUserCardHTML(suffix, entry) {
+            const isAdmin = entry.role === 'admin';
+            const username = entry.username || '';
+            const perms = entry.permissions || { requesting: false, searching: false };
+            const isNew = !entry.username; // brand new, unsaved row
+
+            return `
+                <div class="entry-card" id="card-user_${suffix}">
+                    <div class="entry-header">
+                        <input type="text" class="name-input" name="user_username_${suffix}"
+                               value="${username.replace(/"/g, '&quot;')}" placeholder="Username">
+                        <input type="hidden" name="user_role_${suffix}" value="${isAdmin ? 'admin' : 'user'}">
+                        ${isAdmin
+                            ? `<span class="admin-badge">Administrator</span>`
+                            : `<button type="button" class="remove-btn" onclick="removeUserCard('${suffix}')">Remove</button>`
+                        }
+                    </div>
+                    <div class="field">
+                        <label>Password</label>
+                        <div class="key-row">
+                            <input type="password" id="user_password_${suffix}" name="user_password_${suffix}"
+                                   placeholder="${isNew ? 'Required for new users' : 'Leave blank to keep current password'}">
+                            <button type="button" class="toggle-btn" onclick="toggleField('user_password_${suffix}', this)">Show</button>
+                        </div>
+                    </div>
+                    ${!isAdmin ? `
+                    <div class="field">
+                        <label>Permissions</label>
+                        <div class="perm-row">
+                            <label class="perm-check">
+                                <input type="checkbox" name="user_perm_requesting_${suffix}" ${perms.requesting ? 'checked' : ''}>
+                                Allow Requesting
+                            </label>
+                            <label class="perm-check">
+                                <input type="checkbox" name="user_perm_searching_${suffix}" ${perms.searching ? 'checked' : ''}>
+                                Allow Searching
+                            </label>
+                        </div>
+                    </div>
+                    ` : `<div class="save-hint" style="margin: 0.5rem 0 0 0;">Administrators always have every permission.</div>`}
+                </div>
+            `;
+        }
+
+        function addUserCard(entry) {
+            entry = entry || {};
+            const suffix = entry.__suffix || `new-${newUserCounter++}`;
+            document.getElementById('user-cards').insertAdjacentHTML('beforeend', buildUserCardHTML(suffix, entry));
+        }
+
+        function removeUserCard(suffix) {
+            document.getElementById(`card-user_${suffix}`).remove();
+        }
+
+        existingUsers.forEach((entry, i) => addUserCard({ ...entry, __suffix: `existing-${i}` }));
+    </script>
+</body>
+</html>

@@ -1,0 +1,1258 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>aarVantage</title>
+    <style>
+        :root {
+            --bg: #14161a;
+            --panel: #1c1f26;
+            --sidebar: #181a20;
+            --border: #2a2e37;
+            --text: #e4e6eb;
+            --muted: #8b93a3;
+            --accent: #5b8cff;
+            --error: #ff6b6b;
+            --success: #4ade80;
+        }
+
+        * { box-sizing: border-box; }
+        html, body { height: 100%; margin: 0; }
+
+        body {
+            display: flex;
+            background: var(--bg);
+            color: var(--text);
+            font-family: -apple-system, "Segoe UI", Roboto, sans-serif;
+        }
+
+        /* --- Left sidebar: one tab per instance --- */
+
+        .sidebar {
+            width: 190px;
+            flex-shrink: 0;
+            background: var(--sidebar);
+            border-right: 1px solid var(--border);
+            padding: 1.25rem 0;
+            overflow-y: auto;
+        }
+
+        .sidebar-logo {
+            display: flex;
+            justify-content: center;
+            padding: 1.25rem 1rem 0.5rem 1rem;
+        }
+        .sidebar-logo img { width: 100%; max-width: 150px; }
+
+        .sidebar-divider {
+            border: none;
+            border-top: 1px solid rgba(255, 255, 255, 0.12);
+            margin: 0.75rem 1.25rem 1rem 1.25rem;
+        }
+
+        .sidebar-title {
+            font-size: 0.75rem;
+            text-transform: uppercase;
+            letter-spacing: 0.05em;
+            color: var(--muted);
+            padding: 0 1.25rem 0.75rem 1.25rem;
+        }
+
+        .instance-tab {
+            display: flex;
+            align-items: center;
+            gap: 0.65rem;
+            width: calc(100% - 1.5rem);
+            margin: 0 0.75rem 0.5rem 0.75rem;
+            text-align: left;
+            padding: 0.6rem 0.75rem;
+            background: var(--panel);
+            border: 1px solid var(--border);
+            border-radius: 8px;
+            color: var(--muted);
+            font-size: 0.9rem;
+            cursor: pointer;
+            transition: border-color 0.15s, color 0.15s, background 0.15s;
+        }
+
+        .instance-tab:hover { color: var(--text); border-color: var(--tab-color, var(--accent)); }
+
+        .instance-tab.active {
+            color: var(--text);
+            border-color: var(--tab-color, var(--accent));
+            background: rgba(91, 140, 255, 0.1);
+        }
+
+        .instance-logo {
+            width: 22px;
+            height: 22px;
+            border-radius: 5px;
+            object-fit: contain;
+            flex-shrink: 0;
+            background: var(--sidebar);
+        }
+
+
+        /* --- Main area --- */
+
+        .main { flex: 1; display: flex; flex-direction: column; min-width: 0; }
+
+        .topbar {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            gap: 1rem;
+            padding: 1rem 1.5rem 0 1.5rem;
+            border-bottom: 1px solid var(--border);
+        }
+
+        .view-tabs { display: flex; gap: 0.5rem; padding-bottom: 0.75rem; }
+
+        .topbar-right { display: flex; align-items: center; gap: 0.5rem; }
+
+        .topbar-search {
+            background: var(--panel);
+            border: 1px solid var(--border);
+            border-radius: 6px;
+            padding: 0.4rem 0.65rem;
+            color: var(--text);
+            font-size: 0.85rem;
+            width: 220px;
+            margin-bottom: 0.6rem;
+        }
+
+        .settings-link {
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            width: 34px;
+            height: 34px;
+            flex-shrink: 0;
+            background: var(--panel);
+            border: 1px solid var(--border);
+            border-radius: 6px;
+            margin-bottom: 0.6rem;
+        }
+        .settings-link:hover { border-color: var(--accent); }
+        .settings-link img { width: 18px; height: 18px; }
+
+        .user-menu {
+            display: flex;
+            align-items: center;
+            gap: 0.5rem;
+            margin-bottom: 0.6rem;
+            padding-left: 0.5rem;
+            border-left: 1px solid var(--border);
+        }
+        .user-name { font-size: 0.82rem; color: var(--muted); }
+        .logout-link { font-size: 0.8rem; color: var(--muted); text-decoration: none; }
+        .logout-link:hover { color: var(--accent); }
+
+        .view-tab {
+            background: var(--panel);
+            border: 1px solid var(--border);
+            border-radius: 8px;
+            color: var(--muted);
+            font-size: 0.9rem;
+            padding: 0.5rem 1rem;
+            cursor: pointer;
+            transition: border-color 0.15s, color 0.15s, background 0.15s;
+        }
+
+        .view-tab:hover { color: var(--text); border-color: var(--accent); }
+        .view-tab.active {
+            color: var(--text);
+            border-color: var(--accent);
+            background: rgba(91, 140, 255, 0.1);
+        }
+        .view-tab.hidden { display: none; }
+
+        .content { padding: 1.5rem; overflow-y: auto; }
+
+        .panel { display: none; }
+        .panel.active { display: block; }
+
+        .item {
+            padding: 0.6rem 0;
+            border-top: 1px solid var(--border);
+            font-size: 0.9rem;
+            display: flex;
+            justify-content: space-between;
+        }
+        .item:first-child { border-top: none; }
+
+        .item-time { color: var(--accent); font-size: 0.8rem; white-space: nowrap; margin-left: 1rem; }
+        .item-event { color: var(--muted); font-size: 0.8rem; white-space: nowrap; margin-left: 1rem; }
+        .item-date { color: var(--muted); font-size: 0.78rem; white-space: nowrap; margin-left: 0.75rem; }
+        .item-status { font-size: 0.78rem; white-space: nowrap; margin-left: 1rem; color: var(--muted); }
+
+        .empty, .placeholder {
+            color: var(--muted);
+            font-size: 0.9rem;
+            font-style: italic;
+            padding: 1rem 0;
+        }
+
+        .error { color: var(--error); font-size: 0.9rem; }
+
+        /* --- Request tab: search box + results --- */
+
+        .search-row { display: flex; gap: 0.5rem; margin-bottom: 1rem; }
+
+        .search-row input {
+            flex: 1;
+            background: var(--panel);
+            border: 1px solid var(--border);
+            border-radius: 6px;
+            padding: 0.5rem 0.75rem;
+            color: var(--text);
+            font-size: 0.9rem;
+        }
+
+        .search-row button, .request-btn {
+            background: var(--accent);
+            border: none;
+            border-radius: 6px;
+            color: white;
+            padding: 0.5rem 1rem;
+            font-size: 0.85rem;
+            cursor: pointer;
+        }
+
+        .request-btn { padding: 0.3rem 0.75rem; }
+        .request-btn:disabled { background: var(--muted); cursor: default; }
+
+        .search-result {
+            display: flex;
+            align-items: center;
+            gap: 0.75rem;
+            padding: 0.5rem 0;
+            border-top: 1px solid var(--border);
+        }
+
+        .search-result-title { flex: 1; font-size: 0.9rem; }
+        .search-result:first-child { border-top: none; }
+
+        .request-row {
+            display: flex;
+            align-items: center;
+            gap: 0.75rem;
+            padding: 0.5rem 0;
+            border-top: 1px solid var(--border);
+        }
+        .request-row:first-child { border-top: none; }
+
+        .request-thumb {
+            width: 80px;
+            height: 120px;
+            flex-shrink: 0;
+            border-radius: 4px;
+            overflow: hidden;
+            background: var(--sidebar);
+            border: 1px solid var(--border);
+            position: relative;
+        }
+        .request-thumb img { width: 100%; height: 100%; object-fit: cover; display: block; }
+        .request-thumb-fallback { width: 100%; height: 100%; }
+
+        .request-info { min-width: 0; }
+        .request-title { font-size: 0.88rem; }
+        .request-meta { font-size: 0.78rem; color: var(--muted); margin-top: 0.15rem; }
+
+        .section-label {
+            font-size: 0.75rem;
+            text-transform: uppercase;
+            letter-spacing: 0.05em;
+            color: var(--muted);
+            margin: 1.5rem 0 0.5rem 0;
+        }
+        .section-label:first-child { margin-top: 0; }
+
+        /* --- Library: filters + poster card grid --- */
+
+        .filter-row { display: flex; gap: 0.5rem; margin-bottom: 1.25rem; }
+
+        .filter-row select {
+            background: var(--panel);
+            border: 1px solid var(--border);
+            border-radius: 6px;
+            padding: 0.4rem 0.6rem;
+            color: var(--text);
+            font-size: 0.85rem;
+        }
+
+        .library-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fill, minmax(140px, 1fr));
+            gap: 1rem;
+        }
+
+        /* --- Alphabet index (right side, Library tab only) --- */
+
+        .alpha-index {
+            width: 40px;
+            flex-shrink: 0;
+            display: flex;
+            flex-direction: column;
+            align-items: stretch;
+            justify-content: center;
+            gap: 1px;
+            padding: 0.5rem 0;
+            border-left: 1px solid var(--border);
+            background: var(--sidebar);
+            overflow-y: auto;
+        }
+
+        .alpha-index.hidden { display: none; }
+
+        .alpha-index button {
+            background: none;
+            border: none;
+            color: var(--muted);
+            font-size: 1.3rem;
+            cursor: pointer;
+            padding: 1px 0;
+        }
+        .alpha-index button:hover { color: var(--accent); }
+
+        .library-card {
+            display: flex;
+            flex-direction: column;
+        }
+
+        .cover-wrap {
+            width: 100%;
+            aspect-ratio: 2 / 3;
+            border-radius: 8px;
+            overflow: hidden;
+            background: var(--panel);
+            border: 1px solid var(--border);
+            position: relative;
+            cursor: pointer;
+            transition: border-color 0.15s;
+        }
+
+        .cover-wrap:hover { border-color: var(--accent); }
+
+        .cover-wrap img {
+            width: 100%;
+            height: 100%;
+            object-fit: cover;
+            display: block;
+        }
+
+        .cover-fallback {
+            position: absolute;
+            top: 0; left: 0; right: 0; bottom: 0;
+            width: 100%;
+            height: 100%;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            color: var(--muted);
+            font-size: 0.75rem;
+            text-align: center;
+            padding: 0.5rem;
+        }
+
+        .status-badge {
+            position: absolute;
+            top: 0.4rem;
+            right: 0.4rem;
+            font-size: 0.68rem;
+            padding: 0.15rem 0.4rem;
+            border-radius: 4px;
+            background: rgba(20, 22, 26, 0.85);
+            color: var(--text);
+        }
+
+        .status-badge.status-downloaded, .status-badge.status-complete { color: var(--success); }
+        .status-badge.status-missing { color: var(--error); }
+        .status-badge.status-partial { color: var(--accent); }
+
+        .card-title {
+            font-size: 0.85rem;
+            margin-top: 0.5rem;
+            line-height: 1.25;
+        }
+
+        .card-genre {
+            font-size: 0.75rem;
+            color: var(--muted);
+            margin-top: 0.15rem;
+        }
+
+        .card-actions { display: flex; gap: 0.35rem; margin-top: 0.5rem; }
+
+        .mini-btn {
+            flex: 1;
+            background: var(--sidebar);
+            border: 1px solid var(--border);
+            border-radius: 5px;
+            color: var(--text);
+            font-size: 0.7rem;
+            padding: 0.3rem 0.25rem;
+            cursor: pointer;
+        }
+        .mini-btn:hover { border-color: var(--accent); color: var(--accent); }
+        .mini-btn:disabled { opacity: 0.6; cursor: default; }
+
+        .release-row {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            gap: 0.75rem;
+            padding: 0.6rem 0;
+            border-top: 1px solid var(--border);
+        }
+        .release-row:first-child { border-top: none; }
+        .release-row.release-rejected { opacity: 0.5; }
+
+        .release-info { min-width: 0; }
+        .release-title {
+            font-size: 0.85rem;
+            overflow: hidden;
+            text-overflow: ellipsis;
+            white-space: nowrap;
+        }
+        .release-meta { font-size: 0.75rem; color: var(--muted); margin-top: 0.15rem; }
+
+        /* --- Detail modal --- */
+
+        .modal-overlay {
+            display: none;
+            position: fixed;
+            top: 0; left: 0; right: 0; bottom: 0;
+            background: rgba(0, 0, 0, 0.6);
+            z-index: 100;
+            align-items: center;
+            justify-content: center;
+            padding: 2rem;
+        }
+
+        .modal-overlay.open { display: flex; }
+
+        .modal-box {
+            background: var(--panel);
+            border: 1px solid var(--border);
+            border-radius: 10px;
+            max-width: 640px;
+            width: 100%;
+            max-height: 85vh;
+            overflow-y: auto;
+            padding: 1.5rem;
+            position: relative;
+        }
+
+        .modal-close { position: absolute; top: 1rem; right: 1rem; background: none; border: none; color: var(--muted); font-size: 1.3rem; cursor: pointer; line-height: 1; }
+        .modal-close:hover { color: var(--text); }
+
+        .modal-header {
+            display: flex;
+            gap: 1rem;
+            margin-bottom: 1.25rem;
+            padding-right: 2rem;
+        }
+
+        .modal-cover {
+            width: 100px;
+            flex-shrink: 0;
+            aspect-ratio: 2 / 3;
+            border-radius: 8px;
+            overflow: hidden;
+            background: var(--sidebar);
+            border: 1px solid var(--border);
+        }
+
+        .modal-cover img { width: 100%; height: 100%; object-fit: cover; display: block; }
+
+        .modal-cover-fallback {
+            width: 100%;
+            height: 100%;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            color: var(--muted);
+            font-size: 0.7rem;
+            text-align: center;
+            padding: 0.4rem;
+        }
+
+        .modal-header-text { display: flex; flex-direction: column; justify-content: center; }
+        .modal-title { font-size: 1.2rem; font-weight: 600; margin: 0; line-height: 1.3; }
+        .modal-rating { color: var(--accent); font-size: 0.85rem; margin-top: 0.4rem; }
+
+        .modal-overview { font-size: 0.9rem; color: var(--text); line-height: 1.5; margin-bottom: 1.25rem; }
+
+        .modal-section-title {
+            font-size: 0.75rem;
+            text-transform: uppercase;
+            letter-spacing: 0.05em;
+            color: var(--muted);
+            margin: 1.25rem 0 0.5rem 0;
+        }
+        .modal-section-title:first-of-type { margin-top: 0; }
+
+        .cast-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(140px, 1fr)); gap: 0.5rem; }
+        .cast-entry { font-size: 0.82rem; }
+        .cast-name { display: block; }
+        .cast-role { color: var(--muted); font-size: 0.78rem; }
+
+        .expandable-row {
+            padding: 0.6rem 0;
+            border-top: 1px solid var(--border);
+            cursor: pointer;
+            font-size: 0.9rem;
+            display: flex;
+            justify-content: space-between;
+        }
+        .expandable-row:first-child { border-top: none; }
+        .expandable-row:hover { color: var(--accent); }
+
+        .sub-list { padding: 0.4rem 0 0.6rem 1rem; }
+        .sub-list .item { padding: 0.3rem 0; font-size: 0.85rem; border-top: none; }
+
+        .modal-loading, .modal-empty { color: var(--muted); font-size: 0.9rem; padding: 1rem 0; }
+
+        .play-links-row { display: flex; flex-wrap: wrap; gap: 0.6rem; margin-bottom: 1.25rem; }
+
+        .play-btn {
+            flex: 1;
+            min-width: 120px;
+            text-align: center;
+            padding: 0.55rem;
+            border-radius: 6px;
+            font-size: 0.85rem;
+            font-weight: 600;
+            text-decoration: none;
+            color: white;
+            background: var(--accent);
+        }
+        .play-btn:hover { filter: brightness(1.1); }
+
+        .play-btn-plex { background: #f5c518; color: #1a1a1a; }
+        .play-btn-jellyfin { background: #8b5cf6; }
+        .play-btn-emby { background: #52c41a; }
+        /* --- Mobile layout (phones / narrow windows) --- */
+
+        @media (max-width: 768px) {
+            body { flex-direction: column; height: auto; min-height: 100%; }
+
+            .sidebar {
+                width: 100%;
+                display: flex;
+                flex-direction: row;
+                gap: 0.5rem;
+                padding: 0.75rem;
+                overflow-x: auto;
+                border-right: none;
+                border-bottom: 1px solid var(--border);
+            }
+            .sidebar-logo { display: none; }
+            .sidebar-divider { display: none; }
+            .sidebar-title { display: none; }
+            .instance-tab {
+                width: auto;
+                flex-shrink: 0;
+                margin: 0;
+                white-space: nowrap;
+            }
+
+            .alpha-index { display: none; }
+
+            .main { min-width: 0; }
+
+            .topbar {
+                flex-wrap: wrap;
+                gap: 0.5rem;
+                padding: 0.75rem 0.75rem 0 0.75rem;
+            }
+            .view-tabs { flex-wrap: wrap; gap: 0.4rem; padding-bottom: 0.5rem; }
+            .view-tab { padding: 0.45rem 0.75rem; font-size: 0.82rem; }
+
+            .topbar-right { width: 100%; flex-wrap: wrap; }
+            .topbar-search { width: 100%; flex: 1; min-width: 0; }
+            .user-menu { margin-bottom: 0.6rem; }
+
+            .content { padding: 1rem; }
+
+            .library-grid { grid-template-columns: repeat(auto-fill, minmax(105px, 1fr)); gap: 0.75rem; }
+            .card-title { font-size: 0.8rem; }
+            .card-actions { flex-direction: column; }
+
+            .filter-row { flex-wrap: wrap; }
+            .filter-row select { flex: 1; min-width: 45%; }
+
+            .modal-overlay { padding: 0.75rem; align-items: flex-end; }
+            .modal-box { max-height: 92vh; padding: 1.25rem; }
+            .modal-header { gap: 0.75rem; }
+            .modal-cover { width: 80px; }
+
+            .play-links-row { flex-direction: column; }
+            .play-btn { min-width: 0; }
+
+            .search-row { flex-direction: column; }
+
+            .request-row, .search-result { flex-wrap: wrap; }
+        }
+    </style>
+</head>
+<body>
+
+    <div class="sidebar">
+        <div class="sidebar-logo">
+            <img src="/static/icons/logo.svg" alt="aarVantage">
+        </div>
+        <hr class="sidebar-divider">
+        <div class="sidebar-title">Instances</div>
+        {% for instance in instances %}
+        <button class="instance-tab{% if loop.first %} active{% endif %}"
+                data-instance="{{ instance.name }}"
+                data-seerr-type="{{ instance.seerr_media_type or '' }}"
+                data-kind="{{ instance.library_kind }}"
+                data-queue-count="{{ instance.queue_items|length }}"
+                style="--tab-color: {{ instance.color }};"
+                onclick="selectInstance('{{ instance.name }}')">
+            <img class="instance-logo" src="{{ instance.logo_url }}" alt="" onerror="this.style.display='none';">
+            {{ instance.name }}
+        </button>
+        {% endfor %}
+    </div>
+
+    <div class="main">
+        <div class="topbar">
+            <div class="view-tabs">
+                <button class="view-tab active" data-view="library" onclick="selectView('library')">Library</button>
+                <button class="view-tab" data-view="request" onclick="selectView('request')">Request</button>
+                <button class="view-tab" data-view="queue" onclick="selectView('queue')">Queue <span id="queue-tab-count">0</span></button>
+                <button class="view-tab" data-view="history" onclick="selectView('history')">History</button>
+            </div>
+            <div class="topbar-right">
+                <input type="text" id="global-search" class="topbar-search" placeholder="Search this tab..." oninput="applyGlobalSearch()">
+                {% if is_admin %}
+                <a class="settings-link" href="/settings" title="Settings">
+                    <img src="/static/icons/settings.svg" alt="Settings">
+                </a>
+                {% endif %}
+                <div class="user-menu">
+                    <span class="user-name">{{ username }}</span>
+                    <a class="logout-link" href="/logout">Log out</a>
+                </div>
+            </div>
+        </div>
+
+        <div class="content">
+            {% for instance in instances %}
+
+            <!-- Library panel -->
+            <div class="panel" data-instance="{{ instance.name }}" data-view="library">
+                {% if instance.library_error %}
+                    <div class="error">{{ instance.library_error }}</div>
+                {% elif instance.library_items|length == 0 %}
+                    <div class="empty">Nothing in the library yet</div>
+                {% else %}
+                    <div class="filter-row">
+                        <select id="status-filter-{{ instance.name }}" onchange="filterLibrary('{{ instance.name }}')">
+                            <option value="all">All statuses</option>
+                            {% for s in instance.status_options %}<option value="{{ s }}">{{ s }}</option>{% endfor %}
+                        </select>
+                        <select id="genre-filter-{{ instance.name }}" onchange="filterLibrary('{{ instance.name }}')">
+                            <option value="all">All genres</option>
+                            {% for g in instance.genre_options %}<option value="{{ g }}">{{ g }}</option>{% endfor %}
+                        </select>
+                    </div>
+
+                    <div class="library-grid" id="library-rows-{{ instance.name }}">
+                        {% for item in instance.library_items %}
+                        <div class="library-card"
+                             data-status="{{ item.status }}"
+                             data-genre="{{ item.genre }}"
+                             data-title="{{ item.title }}"
+                             data-cover="{{ item.cover_url }}">
+                            <div class="cover-wrap" onclick="openDetails(this, '{{ instance.name }}', {{ item.item_id }})">
+                                {% if item.cover_url %}
+                                    <img src="{{ item.cover_url }}" alt="{{ item.title }}" loading="lazy"
+                                         onerror="this.style.display='none'; this.nextElementSibling.style.display='flex';">
+                                {% endif %}
+                                <div class="cover-fallback" {% if item.cover_url %}style="display:none;"{% endif %}>{{ item.title }}</div>
+                                <span class="status-badge status-{{ item.status|lower }}">{{ item.status }}</span>
+                            </div>
+                            <div class="card-title">{{ item.title }}</div>
+                            <div class="card-genre">{{ item.genre }}</div>
+                            {% if item.status == "Missing" and can_search %}
+                            <div class="card-actions">
+                                <button class="mini-btn" onclick="event.stopPropagation(); triggerAutoSearch(this, '{{ instance.name }}', {{ item.item_id }})">Auto Search</button>
+                                <button class="mini-btn" onclick="event.stopPropagation(); openInteractiveSearch(this, '{{ instance.name }}', {{ item.item_id }})">Find Releases</button>
+                            </div>
+                            {% endif %}
+                        </div>
+                        {% endfor %}
+                    </div>
+                {% endif %}
+            </div>
+            <!-- Request panel: search Overseerr + list existing requests -->
+            <div class="panel" data-instance="{{ instance.name }}" data-view="request">
+                {% if instance.seerr_media_type %}
+                    <div class="search-row">
+                        <input type="text" placeholder="Search to request..."
+                               data-instance="{{ instance.name }}"
+                               data-media-type="{{ instance.seerr_media_type }}"
+                               onkeydown="if(event.key==='Enter') runSearch(this)">
+                        <button onclick="runSearch(this.previousElementSibling)">Search</button>
+                    </div>
+                    <div class="search-results" id="results-{{ instance.name }}"></div>
+
+                    <div class="section-label">Existing requests</div>
+                    <div id="requests-list-{{ instance.name }}">
+                        {% if instance.request_items|length == 0 %}
+                            <div class="empty">No requests yet</div>
+                        {% else %}
+                            {% for r in instance.request_items %}
+                            <div class="request-row">
+                                <div class="request-thumb">
+                                    {% if r.poster_url %}
+                                        <img src="{{ r.poster_url }}" alt="{{ r.title }}" loading="lazy"
+                                             onerror="this.style.display='none'; this.nextElementSibling.style.display='flex';">
+                                    {% endif %}
+                                    <div class="request-thumb-fallback" {% if r.poster_url %}style="display:none;"{% endif %}></div>
+                                </div>
+                                <div class="request-info">
+                                    <div class="request-title">{{ r.title }}</div>
+                                    <div class="request-meta">{{ r.status }} &middot; req. by {{ r.requested_by }}</div>
+                                </div>
+                            </div>
+                            {% endfor %}
+                        {% endif %}
+                    </div>
+                {% else %}
+                    <div class="placeholder">{{ instance.name }} isn't a movie/TV instance, so Overseerr requests don't apply here.</div>
+                {% endif %}
+            </div>
+
+            <!-- Queue panel -->
+            <div class="panel" data-instance="{{ instance.name }}" data-view="queue">
+                {% if instance.error %}
+                    <div class="error">{{ instance.error }}</div>
+                {% elif instance.queue_items|length == 0 %}
+                    <div class="empty">Queue is empty</div>
+                {% else %}
+                    {% for item in instance.queue_items %}
+                    <div class="item">
+                        <span>{{ item.title }}</span>
+                        <span class="item-time">{{ item.time_left }}</span>
+                    </div>
+                    {% endfor %}
+                {% endif %}
+            </div>
+
+            <!-- History panel -->
+            <div class="panel" data-instance="{{ instance.name }}" data-view="history">
+                {% if instance.error %}
+                    <div class="error">{{ instance.error }}</div>
+                {% elif instance.history_items|length == 0 %}
+                    <div class="empty">No history yet</div>
+                {% else %}
+                    {% for item in instance.history_items %}
+                    <div class="item">
+                        <span>{{ item.title }}</span>
+                        <span class="item-event">{{ item.event }}</span>
+                        <span class="item-date">{{ item.date }}</span>
+                    </div>
+                    {% endfor %}
+                {% endif %}
+            </div>
+
+            {% endfor %}
+        </div>
+    </div>
+
+    <div class="alpha-index" id="alpha-index">
+        <button onclick="jumpToLetter('#')">#</button>
+        {% for letter in "ABCDEFGHIJKLMNOPQRSTUVWXYZ" %}
+        <button onclick="jumpToLetter('{{ letter }}')">{{ letter }}</button>
+        {% endfor %}
+    </div>
+
+    <div class="modal-overlay" id="modal-overlay" onclick="if(event.target === this) closeDetails()">
+        <div class="modal-box">
+            <button class="modal-close" onclick="closeDetails()">&times;</button>
+            <div id="modal-header"></div>
+            <div id="modal-body"></div>
+        </div>
+    </div>
+
+    <script>
+        let currentInstance = document.querySelector('.instance-tab').dataset.instance;
+        let currentView = 'library';
+
+        function selectInstance(name) {
+            currentInstance = name;
+            document.querySelectorAll('.instance-tab').forEach(el => {
+                el.classList.toggle('active', el.dataset.instance === name);
+            });
+            updateQueueTabCount();
+            updateRequestTabVisibility();
+            render();
+        }
+
+        function updateQueueTabCount() {
+            const activeTab = document.querySelector(`.instance-tab[data-instance="${currentInstance}"]`);
+            document.getElementById('queue-tab-count').textContent = activeTab ? activeTab.dataset.queueCount : '0';
+        }
+
+        function selectView(view) {
+            currentView = view;
+            document.querySelectorAll('.view-tab').forEach(el => {
+                el.classList.toggle('active', el.dataset.view === view);
+            });
+            document.getElementById('alpha-index').classList.toggle('hidden', view !== 'library');
+            render();
+        }
+
+        function updateRequestTabVisibility() {
+            const activeInstanceEl = document.querySelector(`.instance-tab[data-instance="${currentInstance}"]`);
+            const hasRequests = activeInstanceEl.dataset.seerrType !== '';
+            const requestTab = document.querySelector('.view-tab[data-view="request"]');
+            requestTab.classList.toggle('hidden', !hasRequests);
+
+            // If Request was selected but this instance doesn't support it, bounce back to Library
+            if (!hasRequests && currentView === 'request') {
+                selectView('library');
+            }
+        }
+
+        function render() {
+            document.querySelectorAll('.panel').forEach(panel => {
+                const match = panel.dataset.instance === currentInstance && panel.dataset.view === currentView;
+                panel.classList.toggle('active', match);
+            });
+            applyGlobalSearch();
+        }
+
+        // --- Overseerr search + request (talks to our own Flask routes,
+        // which in turn talk to Overseerr - the browser never calls
+        // Overseerr directly) ---
+
+        async function runSearch(inputEl) {
+            const query = inputEl.value.trim();
+            const instance = inputEl.dataset.instance;
+            const mediaType = inputEl.dataset.mediaType;
+            const resultsEl = document.getElementById(`results-${instance}`);
+
+            if (!query) return;
+            resultsEl.innerHTML = '<div class="empty">Searching...</div>';
+
+            try {
+                const response = await fetch(`/api/seerr/search?q=${encodeURIComponent(query)}&media_type=${mediaType}`);
+                const results = await response.json();
+
+                if (results.error) {
+                    resultsEl.innerHTML = `<div class="error">Search failed: ${results.error}</div>`;
+                    return;
+                }
+                if (!results.length) {
+                    resultsEl.innerHTML = '<div class="empty">No results</div>';
+                    return;
+                }
+
+                resultsEl.innerHTML = '';
+                results.forEach(item => {
+                    const row = document.createElement('div');
+                    row.className = 'search-result';
+                    row.innerHTML = `
+                        <div class="request-thumb">
+                            ${item.poster_url ? `<img src="${item.poster_url}" alt="${item.title}" loading="lazy" onerror="this.style.display='none'; this.nextElementSibling.style.display='flex';">` : ''}
+                            <div class="request-thumb-fallback" ${item.poster_url ? 'style="display:none;"' : ''}></div>
+                        </div>
+                        <span class="search-result-title">${item.title} ${item.year ? '(' + item.year + ')' : ''}</span>
+                        <button class="request-btn">Request</button>
+                    `;
+                    row.querySelector('button').onclick = () => submitRequest(item, row);
+                    resultsEl.appendChild(row);
+                });
+            } catch (err) {
+                resultsEl.innerHTML = '<div class="error">Search failed - is Overseerr reachable?</div>';
+            }
+        }
+
+        async function submitRequest(item, rowEl) {
+            const button = rowEl.querySelector('button');
+            button.disabled = true;
+            button.textContent = 'Requesting...';
+
+            try {
+                const response = await fetch('/api/seerr/request', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ media_type: item.media_type, tmdb_id: item.tmdb_id })
+                });
+                const result = await response.json();
+
+                if (result.ok) {
+                    button.textContent = 'Requested';
+                } else {
+                    button.textContent = 'Failed';
+                    button.title = result.error || 'Unknown error';
+                    button.disabled = false;
+                }
+            } catch (err) {
+                button.textContent = 'Failed';
+                button.disabled = false;
+            }
+        }
+
+        updateQueueTabCount();
+        updateRequestTabVisibility();
+        render();
+
+        function filterLibrary(instance) {
+            const status = document.getElementById(`status-filter-${instance}`).value;
+            const genre = document.getElementById(`genre-filter-${instance}`).value;
+            const query = document.getElementById('global-search').value.trim().toLowerCase();
+            const cards = document.querySelectorAll(`#library-rows-${instance} .library-card`);
+
+            cards.forEach(card => {
+                const matchStatus = status === 'all' || card.dataset.status === status;
+                const matchGenre = genre === 'all' || card.dataset.genre.split(', ').includes(genre);
+                const matchQuery = !query || card.dataset.title.toLowerCase().includes(query);
+                card.style.display = (matchStatus && matchGenre && matchQuery) ? 'flex' : 'none';
+            });
+        }
+
+        // --- Global search bar: filters whichever tab is currently
+        // visible. Library combines this with the status/genre dropdowns
+        // above; every other tab does a simple text match on each row. ---
+
+        function applyGlobalSearch() {
+            if (currentView === 'library') {
+                filterLibrary(currentInstance);
+                return;
+            }
+
+            const query = document.getElementById('global-search').value.trim().toLowerCase();
+            const activePanel = document.querySelector('.panel.active');
+            if (!activePanel) return;
+
+            activePanel.querySelectorAll('.item').forEach(row => {
+                const matches = !query || row.textContent.toLowerCase().includes(query);
+                row.style.display = matches ? 'flex' : 'none';
+            });
+        }
+
+        // --- Alphabet index: jumps to the first visible card in the
+        // current instance's library whose title starts with the letter.
+        // Only shown while the Library tab is active. ---
+
+        function jumpToLetter(letter) {
+            const cards = document.querySelectorAll(`#library-rows-${currentInstance} .library-card`);
+            const matchesLetter = title => letter === '#'
+                ? /^[0-9]/.test(title)
+                : title.toUpperCase().startsWith(letter);
+            let target = null;
+
+            for (const card of cards) {
+                if (matchesLetter(card.dataset.title)) {
+                    target = card;
+                    if (card.style.display !== 'none') break; // prefer a currently-visible match
+                }
+            }
+
+            if (target) {
+                target.scrollIntoView({ behavior: 'smooth', block: 'start' });
+            }
+        }
+
+        // --- Detail modal (click a cover to open) ---
+
+        const INSTANCE_KINDS = {};
+        document.querySelectorAll('.instance-tab').forEach(el => {
+            INSTANCE_KINDS[el.dataset.instance] = el.dataset.kind;
+        });
+
+        async function openDetails(coverEl, instance, itemId) {
+            const card = coverEl.closest('.library-card');
+            const title = card.dataset.title;
+            const coverUrl = card.dataset.cover;
+
+            const overlay = document.getElementById('modal-overlay');
+            const header = document.getElementById('modal-header');
+            const body = document.getElementById('modal-body');
+
+            header.innerHTML = `
+                <div class="modal-header">
+                    <div class="modal-cover">
+                        ${coverUrl
+                            ? `<img src="${coverUrl}" alt="${title}" onerror="this.style.display='none'; this.nextElementSibling.style.display='flex';">
+                               <div class="modal-cover-fallback" style="display:none;">${title}</div>`
+                            : `<div class="modal-cover-fallback">${title}</div>`
+                        }
+                    </div>
+                    <div class="modal-header-text">
+                        <div class="modal-title">${title}</div>
+                    </div>
+                </div>
+            `;
+            body.innerHTML = '<div class="modal-loading">Loading...</div>';
+            overlay.classList.add('open');
+
+            try {
+                const response = await fetch(`/api/details/${instance}/${itemId}`);
+                const data = await response.json();
+
+                if (data.error) {
+                    body.innerHTML = `<div class="modal-loading">Could not load details: ${data.error}</div>`;
+                    return;
+                }
+
+                const kind = INSTANCE_KINDS[instance];
+                if (kind === 'movie') renderMovieModal(data);
+                else if (kind === 'series') renderSeriesModal(instance, itemId, data);
+                else if (kind === 'artist') renderArtistModal(instance, data);
+                else if (kind === 'author') renderAuthorModal(data);
+
+                loadPlayLinks(title, kind); // no-op for 'author' - books aren't playable
+            } catch (err) {
+                body.innerHTML = '<div class="modal-loading">Something went wrong loading details.</div>';
+            }
+        }
+
+        function closeDetails() {
+            document.getElementById('modal-overlay').classList.remove('open');
+        }
+
+        function renderMovieModal(data) {
+            const content = document.getElementById('modal-body');
+            content.innerHTML = `
+                <div class="modal-rating">${data.rating}</div>
+                <div class="modal-overview">${data.overview}</div>
+                <div class="modal-section-title">Cast</div>
+                ${renderCast(data.cast, data.cast_available)}
+            `;
+        }
+
+        function renderSeriesModal(instance, seriesId, data) {
+            const content = document.getElementById('modal-body');
+            const seasonRows = data.seasons.map(s => `
+                <div class="expandable-row" onclick="toggleSeason(this, '${instance}', ${seriesId}, ${s.season_number})">
+                    <span>Season ${s.season_number}</span>
+                    <span class="col-muted">${s.have}/${s.total} episodes</span>
+                </div>
+                <div class="sub-list" style="display:none;"></div>
+            `).join('');
+
+            content.innerHTML = `
+                <div class="modal-rating">${data.rating}</div>
+                <div class="modal-overview">${data.overview}</div>
+                <div class="modal-section-title">Seasons</div>
+                ${seasonRows || '<div class="modal-empty">No seasons found</div>'}
+                <div class="modal-section-title">Cast</div>
+                ${renderCast(data.cast, data.cast_available)}
+            `;
+        }
+
+        async function toggleSeason(rowEl, instance, seriesId, seasonNumber) {
+            const subList = rowEl.nextElementSibling;
+            const isOpen = subList.style.display !== 'none';
+
+            if (isOpen) {
+                subList.style.display = 'none';
+                return;
+            }
+
+            subList.style.display = 'block';
+            if (subList.dataset.loaded) return;
+
+            subList.innerHTML = '<div class="modal-loading">Loading episodes...</div>';
+            try {
+                const response = await fetch(`/api/details/sonarr-episodes/${instance}/${seriesId}/${seasonNumber}`);
+                const episodes = await response.json();
+                subList.innerHTML = episodes.map(e => `
+                    <div class="item">
+                        <span>${e.episode_number}. ${e.title}</span>
+                        <span class="col-muted">${e.air_date || ''}</span>
+                    </div>
+                `).join('') || '<div class="modal-empty">No episodes found</div>';
+                subList.dataset.loaded = 'true';
+            } catch (err) {
+                subList.innerHTML = '<div class="modal-empty">Could not load episodes</div>';
+            }
+        }
+
+        function renderArtistModal(instance, data) {
+            const content = document.getElementById('modal-body');
+            const albumRows = data.albums.map(a => `
+                <div class="expandable-row" onclick="toggleAlbum(this, '${instance}', ${a.album_id})">
+                    <span>${a.title}</span>
+                    <span class="col-muted">${a.year}</span>
+                </div>
+                <div class="sub-list" style="display:none;"></div>
+            `).join('');
+
+            content.innerHTML = `
+                <div class="modal-section-title">Albums</div>
+                ${albumRows || '<div class="modal-empty">No albums found</div>'}
+            `;
+        }
+
+        async function toggleAlbum(rowEl, instance, albumId) {
+            const subList = rowEl.nextElementSibling;
+            const isOpen = subList.style.display !== 'none';
+
+            if (isOpen) {
+                subList.style.display = 'none';
+                return;
+            }
+
+            subList.style.display = 'block';
+            if (subList.dataset.loaded) return;
+
+            subList.innerHTML = '<div class="modal-loading">Loading tracks...</div>';
+            try {
+                const response = await fetch(`/api/details/lidarr-tracks/${instance}/${albumId}`);
+                const tracks = await response.json();
+                subList.innerHTML = tracks.map(t => `
+                    <div class="item"><span>${t.track_number}. ${t.title}</span></div>
+                `).join('') || '<div class="modal-empty">No tracks found</div>';
+                subList.dataset.loaded = 'true';
+            } catch (err) {
+                subList.innerHTML = '<div class="modal-empty">Could not load tracks</div>';
+            }
+        }
+
+        function renderAuthorModal(data) {
+            const content = document.getElementById('modal-body');
+            const bookRows = data.books.map(b => `
+                <div class="item"><span>${b.title}</span><span class="col-muted">${b.year}</span></div>
+            `).join('');
+
+            content.innerHTML = `
+                <div class="modal-section-title">Works</div>
+                ${bookRows || '<div class="modal-empty">No books found</div>'}
+            `;
+        }
+
+        function renderCast(cast, available) {
+            if (!available) return '<div class="modal-empty">Cast info not available for this instance.</div>';
+            if (!cast || cast.length === 0) return '<div class="modal-empty">No cast listed.</div>';
+            return `<div class="cast-grid">${cast.map(c => `
+                <div class="cast-entry">
+                    <span class="cast-name">${c.name}</span>
+                    <span class="cast-role">${c.role || ''}</span>
+                </div>
+            `).join('')}</div>`;
+        }
+
+        // --- Plex / Jellyfin play links: fetched separately from the
+        // main details, since it involves searching two other services
+        // by title rather than reading arr's own data. ---
+
+        async function loadPlayLinks(title, kind) {
+            if (kind === 'author') return; // books aren't playable
+
+            try {
+                const response = await fetch(`/api/play-links?title=${encodeURIComponent(title)}&kind=${kind}`);
+                const data = await response.json();
+
+                if (!data.links || data.links.length === 0) return; // no confident match - show nothing
+
+                const row = document.createElement('div');
+                row.className = 'play-links-row';
+                row.innerHTML = data.links.map(link => `
+                    <a class="play-btn play-btn-${link.type}" href="${link.url}" target="_blank" rel="noopener">Play on ${link.name}</a>
+                `).join('');
+                document.getElementById('modal-body').prepend(row);
+            } catch (err) {
+                // Not critical - just skip showing play buttons if this fails.
+            }
+        }
+
+        // --- Search (automated + interactive) ---
+
+        async function triggerAutoSearch(btn, instance, itemId) {
+            btn.disabled = true;
+            const original = btn.textContent;
+            btn.textContent = 'Searching...';
+
+            try {
+                const response = await fetch(`/api/search/auto/${instance}/${itemId}`, { method: 'POST' });
+                const result = await response.json();
+                btn.textContent = result.ok ? 'Triggered' : 'Failed';
+            } catch (err) {
+                btn.textContent = 'Failed';
+            }
+
+            setTimeout(() => { btn.disabled = false; btn.textContent = original; }, 3000);
+        }
+
+        async function openInteractiveSearch(btn, instance, itemId) {
+            const card = btn.closest('.library-card');
+            const title = card.dataset.title;
+
+            const overlay = document.getElementById('modal-overlay');
+            const header = document.getElementById('modal-header');
+            const body = document.getElementById('modal-body');
+
+            header.innerHTML = `
+                <div class="modal-header">
+                    <div class="modal-header-text">
+                        <div class="modal-title">Find releases: ${title}</div>
+                    </div>
+                </div>
+            `;
+            body.innerHTML = '<div class="modal-loading">Searching indexers...</div>';
+            overlay.classList.add('open');
+
+            try {
+                const response = await fetch(`/api/search/interactive/${instance}/${itemId}`);
+                const releases = await response.json();
+
+                if (releases.error) {
+                    body.innerHTML = `<div class="modal-loading">Search failed: ${releases.error}</div>`;
+                    return;
+                }
+                if (!releases.length) {
+                    body.innerHTML = '<div class="modal-empty">No releases found.</div>';
+                    return;
+                }
+
+                body.innerHTML = releases.map(r => `
+                    <div class="release-row ${r.rejected ? 'release-rejected' : ''}">
+                        <div class="release-info">
+                            <div class="release-title">${r.title}</div>
+                            <div class="release-meta">${r.indexer} &middot; ${r.quality} &middot; ${r.size_gb} GB${r.seeders !== null && r.seeders !== undefined ? ' &middot; ' + r.seeders + ' seeders' : ''}</div>
+                        </div>
+                        <button class="request-btn" onclick="grabRelease(this, '${instance}', '${r.guid}', ${r.indexer_id})">Grab</button>
+                    </div>
+                `).join('');
+            } catch (err) {
+                body.innerHTML = '<div class="modal-loading">Search failed.</div>';
+            }
+        }
+
+        async function grabRelease(btn, instance, guid, indexerId) {
+            btn.disabled = true;
+            btn.textContent = 'Grabbing...';
+
+            try {
+                const response = await fetch(`/api/search/grab/${instance}`, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ guid: guid, indexer_id: indexerId }),
+                });
+                const result = await response.json();
+                if (result.ok) {
+                    btn.textContent = 'Grabbed';
+                } else {
+                    btn.textContent = 'Failed';
+                    btn.disabled = false;
+                }
+            } catch (err) {
+                btn.textContent = 'Failed';
+                btn.disabled = false;
+            }
+        }
+    </script>
+
+</body>
+</html>

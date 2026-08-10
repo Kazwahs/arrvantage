@@ -1,0 +1,14 @@
+# Never commit this - it holds your live instance URLs, API keys,
+# Plex/Jellyfin/Overseerr credentials, and user password hashes.
+config.json
+data/
+
+# Python
+__pycache__/
+*.pyc
+*.pyo
+
+# Editor/OS cruft
+.vscode/
+.DS_Store
+Thumbs.db

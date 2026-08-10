@@ -1,0 +1,10 @@
+__pycache__/
+*.pyc
+.git
+.gitignore
+
+# Never let a real config.json (API keys, password hashes) get baked
+# into an image build, even if the Dockerfile changes later to use a
+# broader COPY command.
+config.json
+data/

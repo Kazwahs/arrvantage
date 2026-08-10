@@ -1,0 +1,90 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Log in - aarVantage</title>
+    <style>
+        :root {
+            --bg: #14161a;
+            --panel: #1c1f26;
+            --border: #2a2e37;
+            --text: #e4e6eb;
+            --muted: #8b93a3;
+            --accent: #5b8cff;
+            --error: #ff6b6b;
+        }
+        * { box-sizing: border-box; }
+        html, body { height: 100%; margin: 0; }
+        body {
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            background: var(--bg);
+            color: var(--text);
+            font-family: -apple-system, "Segoe UI", Roboto, sans-serif;
+        }
+        .box {
+            background: var(--panel);
+            border: 1px solid var(--border);
+            border-radius: 10px;
+            padding: 2rem;
+            width: 100%;
+            max-width: 320px;
+        }
+        h1 { font-size: 1.2rem; margin: 0 0 1.25rem 0; text-align: center; }
+        label { display: block; font-size: 0.78rem; color: var(--muted); margin-bottom: 0.3rem; }
+        .field { margin-bottom: 1rem; }
+        input[type="text"], input[type="password"] {
+            width: 100%;
+            background: var(--bg);
+            border: 1px solid var(--border);
+            border-radius: 6px;
+            padding: 0.55rem 0.7rem;
+            color: var(--text);
+            font-size: 0.9rem;
+        }
+        .error {
+            background: rgba(255, 107, 107, 0.1);
+            border: 1px solid var(--error);
+            color: var(--error);
+            border-radius: 6px;
+            padding: 0.6rem 0.8rem;
+            font-size: 0.82rem;
+            margin-bottom: 1rem;
+        }
+        button {
+            width: 100%;
+            background: var(--accent);
+            border: none;
+            border-radius: 8px;
+            color: white;
+            font-size: 0.9rem;
+            font-weight: 600;
+            padding: 0.65rem;
+            cursor: pointer;
+            margin-top: 0.5rem;
+        }
+        button:hover { background: #4a7ae0; }
+    </style>
+</head>
+<body>
+    <div class="box">
+        <h1>aarVantage</h1>
+        {% if error %}
+        <div class="error">{{ error }}</div>
+        {% endif %}
+        <form method="POST" action="/login">
+            <div class="field">
+                <label for="username">Username</label>
+                <input type="text" id="username" name="username" autofocus>
+            </div>
+            <div class="field">
+                <label for="password">Password</label>
+                <input type="password" id="password" name="password">
+            </div>
+            <button type="submit">Log In</button>
+        </form>
+    </div>
+</body>
+</html>
