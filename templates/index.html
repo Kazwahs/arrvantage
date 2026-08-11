@@ -533,6 +533,10 @@
             justify-content: space-between;
         }
         .expandable-row:first-child { border-top: none; }
+
+        .collection-row { align-items: center; gap: 0.75rem; }
+        .collection-row .request-thumb { margin: 0; }
+        .collection-title { flex: 1; }
         .expandable-row:hover { color: var(--accent); }
 
         .sub-list { padding: 0.4rem 0 0.6rem 1rem; }
@@ -727,8 +731,15 @@
                             <div class="empty">No collections found</div>
                         {% else %}
                             {% for col in instance.collections %}
-                            <div class="expandable-row" onclick="toggleCollection(this)">
-                                <span>{{ col.title }}</span>
+                            <div class="expandable-row collection-row" onclick="toggleCollection(this)">
+                                <div class="request-thumb">
+                                    {% if col.cover_url %}
+                                        <img src="{{ col.cover_url }}" alt="{{ col.title }}" loading="lazy"
+                                             onerror="this.style.display='none'; this.nextElementSibling.style.display='flex';">
+                                    {% endif %}
+                                    <div class="request-thumb-fallback" {% if col.cover_url %}style="display:none;"{% endif %}></div>
+                                </div>
+                                <span class="collection-title">{{ col.title }}</span>
                                 <span class="col-muted">{{ col.owned_count }}/{{ col.total_count }} owned</span>
                             </div>
                             <div class="sub-list" style="display:none;">

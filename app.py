@@ -617,6 +617,7 @@ def fetch_collections(config: dict, owned_tmdb_ids: set) -> list:
             "owned_count": owned_count,
             "total_count": len(movies),
             "movies": movies,
+            "cover_url": get_cover_url(entry, config),
         })
 
     collections.sort(key=lambda c: c["title"].lower())
