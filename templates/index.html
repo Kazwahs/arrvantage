@@ -534,9 +534,7 @@
         }
         .expandable-row:first-child { border-top: none; }
 
-        .collection-row { align-items: center; gap: 0.75rem; }
-        .collection-row .request-thumb { margin: 0; }
-        .collection-title { flex: 1; }
+        .collection-badge { font-size: 0.68rem; }
         .expandable-row:hover { color: var(--accent); }
 
         .sub-list { padding: 0.4rem 0 0.6rem 1rem; }
@@ -726,35 +724,21 @@
                     </div>
 
                     {% if instance.library_kind == "movie" %}
-                    <div class="collections-list" id="collections-{{ instance.name }}" style="display:none;">
+                    <div class="collections-list library-grid" id="collections-{{ instance.name }}" style="display:none;">
                         {% if instance.collections|length == 0 %}
                             <div class="empty">No collections found</div>
                         {% else %}
                             {% for col in instance.collections %}
-                            <div class="expandable-row collection-row" onclick="toggleCollection(this)">
-                                <div class="request-thumb">
+                            <div class="library-card">
+                                <div class="cover-wrap" onclick="openCollectionModal('{{ instance.name }}', {{ col.collection_id }})">
                                     {% if col.cover_url %}
                                         <img src="{{ col.cover_url }}" alt="{{ col.title }}" loading="lazy"
                                              onerror="this.style.display='none'; this.nextElementSibling.style.display='flex';">
                                     {% endif %}
-                                    <div class="request-thumb-fallback" {% if col.cover_url %}style="display:none;"{% endif %}></div>
+                                    <div class="cover-fallback" {% if col.cover_url %}style="display:none;"{% endif %}>{{ col.title }}</div>
+                                    <span class="status-badge collection-badge">{{ col.owned_count }}/{{ col.total_count }}</span>
                                 </div>
-                                <span class="collection-title">{{ col.title }}</span>
-                                <span class="col-muted">{{ col.owned_count }}/{{ col.total_count }} owned</span>
-                            </div>
-                            <div class="sub-list" style="display:none;">
-                                {% for m in col.movies %}
-                                <div class="item">
-                                    <span>{{ m.title }}{% if m.year %} ({{ m.year }}){% endif %}</span>
-                                    {% if m.owned %}
-                                        <span class="col-muted">Owned</span>
-                                    {% elif can_search %}
-                                        <button class="mini-btn" onclick="addMissingCollectionMovie(this, '{{ instance.name }}', {{ m.tmdb_id }}, '{{ m.title.replace("'", "") }}', {{ col.quality_profile_id }}, '{{ col.root_folder_path }}')">Add &amp; Search</button>
-                                    {% else %}
-                                        <span class="col-muted">Missing</span>
-                                    {% endif %}
-                                </div>
-                                {% endfor %}
+                                <div class="card-title">{{ col.title }}</div>
                             </div>
                             {% endfor %}
                         {% endif %}
@@ -856,6 +840,15 @@
     <script>
         let currentInstance = document.querySelector('.instance-tab').dataset.instance;
         let currentView = 'library';
+
+        const CAN_SEARCH = {{ can_search | tojson }};
+        const COLLECTIONS_DATA = {
+            {% for instance in instances %}
+            {% if instance.library_kind == "movie" %}
+            "{{ instance.name }}": {{ instance.collections | tojson }},
+            {% endif %}
+            {% endfor %}
+        };
 
         function selectInstance(name) {
             currentInstance = name;
@@ -1000,12 +993,46 @@
             const collections = document.getElementById(`collections-${instance}`);
 
             grid.style.display = mode === 'collections' ? 'none' : 'grid';
-            collections.style.display = mode === 'collections' ? 'block' : 'none';
+            collections.style.display = mode === 'collections' ? 'grid' : 'none';
         }
 
-        function toggleCollection(rowEl) {
-            const subList = rowEl.nextElementSibling;
-            subList.style.display = subList.style.display === 'none' ? 'block' : 'none';
+        function openCollectionModal(instance, collectionId) {
+            const collections = COLLECTIONS_DATA[instance] || [];
+            const col = collections.find(c => c.collection_id === collectionId);
+            if (!col) return;
+
+            const header = document.getElementById('modal-header');
+            const body = document.getElementById('modal-body');
+
+            header.innerHTML = `
+                <div class="modal-header">
+                    <div class="modal-cover">
+                        ${col.cover_url
+                            ? `<img src="${col.cover_url}" alt="${col.title}" onerror="this.style.display='none'; this.nextElementSibling.style.display='flex';">
+                               <div class="modal-cover-fallback" style="display:none;">${col.title}</div>`
+                            : `<div class="modal-cover-fallback">${col.title}</div>`
+                        }
+                    </div>
+                    <div class="modal-header-text">
+                        <div class="modal-title">${col.title}</div>
+                        <div class="modal-rating">${col.owned_count}/${col.total_count} owned</div>
+                    </div>
+                </div>
+            `;
+
+            body.innerHTML = col.movies.map(m => `
+                <div class="item">
+                    <span>${m.title}${m.year ? ' (' + m.year + ')' : ''}</span>
+                    ${m.owned
+                        ? '<span class="col-muted">Owned</span>'
+                        : (CAN_SEARCH
+                            ? `<button class="mini-btn" onclick="addMissingCollectionMovie(this, '${instance}', ${m.tmdb_id}, '${m.title.replace(/'/g, "\\'")}', ${col.quality_profile_id}, '${col.root_folder_path}')">Add &amp; Search</button>`
+                            : '<span class="col-muted">Missing</span>')
+                    }
+                </div>
+            `).join('') || '<div class="modal-empty">No movies found in this collection</div>';
+
+            document.getElementById('modal-overlay').classList.add('open');
         }
 
         async function addMissingCollectionMovie(btn, instance, tmdbId, title, qualityProfileId, rootFolderPath) {
