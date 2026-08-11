@@ -775,6 +775,7 @@ def fetch_sonarr_episodes(config: dict, series_id: int, season_number: int) -> l
     episodes.sort(key=lambda e: e.get("episodeNumber", 0))
     return [
         {
+            "episode_id": e.get("id"),
             "episode_number": e.get("episodeNumber"),
             "title": e.get("title", "(untitled)"),
             "air_date": e.get("airDate", ""),
@@ -1000,6 +1001,63 @@ def api_search_grab(instance_name):
         return jsonify({"ok": True})
     except requests.exceptions.RequestException as err:
         return jsonify({"ok": False, "error": str(err)}), 502
+
+
+def trigger_episode_auto_search(config: dict, episode_id: int) -> None:
+    """Sonarr treats 'search this one episode' as its own command,
+    separate from SeriesSearch (which searches every missing episode
+    in the whole show)."""
+    url = f"{config['url'].rstrip('/')}/api/v3/command"
+    headers = {"X-Api-Key": config["api_key"]}
+    response = requests.post(url, headers=headers, json={"name": "EpisodeSearch", "episodeIds": [episode_id]}, timeout=15)
+    response.raise_for_status()
+
+
+@app.route("/api/search/episode-auto/<instance_name>/<int:episode_id>", methods=["POST"])
+@login_required
+@permission_required("searching")
+def api_search_episode_auto(instance_name, episode_id):
+    config = APPS.get(instance_name)
+    if not config or config.get("library_kind") != "series":
+        return jsonify({"ok": False, "error": "not a series instance"}), 404
+    try:
+        trigger_episode_auto_search(config, episode_id)
+        return jsonify({"ok": True})
+    except requests.exceptions.RequestException as err:
+        return jsonify({"ok": False, "error": str(err)}), 502
+
+
+def fetch_episode_releases(config: dict, episode_id: int) -> list:
+    url = f"{config['url'].rstrip('/')}/api/v3/release"
+    headers = {"X-Api-Key": config["api_key"]}
+    response = requests.get(url, headers=headers, params={"episodeId": episode_id}, timeout=30)
+    response.raise_for_status()
+    return [
+        {
+            "guid": r.get("guid"),
+            "indexer_id": r.get("indexerId"),
+            "title": r.get("title", "(untitled release)"),
+            "indexer": r.get("indexer", "?"),
+            "size_gb": round((r.get("size") or 0) / (1024 ** 3), 2),
+            "seeders": r.get("seeders"),
+            "quality": ((r.get("quality") or {}).get("quality") or {}).get("name", "?"),
+            "rejected": bool(r.get("rejected", False)),
+        }
+        for r in response.json()
+    ]
+
+
+@app.route("/api/search/episode-interactive/<instance_name>/<int:episode_id>")
+@login_required
+@permission_required("searching")
+def api_search_episode_interactive(instance_name, episode_id):
+    config = APPS.get(instance_name)
+    if not config or config.get("library_kind") != "series":
+        return jsonify({"error": "not a series instance"}), 404
+    try:
+        return jsonify(fetch_episode_releases(config, episode_id))
+    except requests.exceptions.RequestException as err:
+        return jsonify({"error": str(err)}), 502
 
 
 # ---------------------------------------------------------------------------

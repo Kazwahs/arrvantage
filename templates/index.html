@@ -540,6 +540,14 @@
         .sub-list { padding: 0.4rem 0 0.6rem 1rem; }
         .sub-list .item { padding: 0.3rem 0; font-size: 0.85rem; border-top: none; }
 
+        .episode-row {
+            padding: 0.5rem 0;
+            border-top: 1px solid var(--border);
+            font-size: 0.85rem;
+        }
+        .episode-row:first-child { border-top: none; }
+        .episode-main { display: flex; justify-content: space-between; gap: 0.75rem; }
+
         .modal-loading, .modal-empty { color: var(--muted); font-size: 0.9rem; padding: 1rem 0; }
 
         .play-links-row { display: flex; flex-wrap: wrap; gap: 0.6rem; margin-bottom: 1.25rem; }
@@ -1266,9 +1274,17 @@
                 const response = await fetch(`/api/details/sonarr-episodes/${instance}/${seriesId}/${seasonNumber}`);
                 const episodes = await response.json();
                 subList.innerHTML = episodes.map(e => `
-                    <div class="item">
-                        <span>${e.episode_number}. ${e.title}</span>
-                        <span class="col-muted">${e.air_date || ''}</span>
+                    <div class="episode-row">
+                        <div class="episode-main">
+                            <span>${e.episode_number}. ${e.title}</span>
+                            <span class="col-muted">${e.air_date || ''} &middot; ${e.has_file ? 'Downloaded' : 'Missing'}</span>
+                        </div>
+                        ${!e.has_file && CAN_SEARCH ? `
+                        <div class="card-actions">
+                            <button class="mini-btn" onclick="triggerEpisodeAutoSearch(this, '${instance}', ${e.episode_id})">Auto Search</button>
+                            <button class="mini-btn" onclick="openEpisodeInteractiveSearch('${instance}', ${e.episode_id}, '${e.title.replace(/'/g, "\\'")}')">Find Releases</button>
+                        </div>
+                        ` : ''}
                     </div>
                 `).join('') || '<div class="modal-empty">No episodes found</div>';
                 subList.dataset.loaded = 'true';
@@ -1444,6 +1460,60 @@
             }
 
             setTimeout(() => { btn.disabled = false; btn.textContent = original; }, 3000);
+        }
+
+        async function triggerEpisodeAutoSearch(btn, instance, episodeId) {
+            btn.disabled = true;
+            const original = btn.textContent;
+            btn.textContent = 'Searching...';
+
+            try {
+                const response = await fetch(`/api/search/episode-auto/${instance}/${episodeId}`, { method: 'POST' });
+                const result = await response.json();
+                btn.textContent = result.ok ? 'Triggered' : 'Failed';
+            } catch (err) {
+                btn.textContent = 'Failed';
+            }
+
+            setTimeout(() => { btn.disabled = false; btn.textContent = original; }, 3000);
+        }
+
+        async function openEpisodeInteractiveSearch(instance, episodeId, episodeTitle) {
+            const body = document.getElementById('modal-body');
+            savedModalBody = body.innerHTML; // same back-navigation pattern used elsewhere in the modal
+
+            body.innerHTML = `
+                <button class="back-to-cast-btn" onclick="restoreCastView()">&larr; Back</button>
+                <div class="modal-section-title">Find releases: ${episodeTitle}</div>
+                <div class="modal-loading">Searching indexers...</div>
+            `;
+
+            try {
+                const response = await fetch(`/api/search/episode-interactive/${instance}/${episodeId}`);
+                const releases = await response.json();
+                const loadingEl = body.querySelector('.modal-loading');
+
+                if (releases.error) {
+                    loadingEl.outerHTML = `<div class="modal-loading">Search failed: ${releases.error}</div>`;
+                    return;
+                }
+                if (!releases.length) {
+                    loadingEl.outerHTML = '<div class="modal-empty">No releases found.</div>';
+                    return;
+                }
+
+                loadingEl.outerHTML = releases.map(r => `
+                    <div class="release-row ${r.rejected ? 'release-rejected' : ''}">
+                        <div class="release-info">
+                            <div class="release-title">${r.title}</div>
+                            <div class="release-meta">${r.indexer} &middot; ${r.quality} &middot; ${r.size_gb} GB${r.seeders !== null && r.seeders !== undefined ? ' &middot; ' + r.seeders + ' seeders' : ''}</div>
+                        </div>
+                        <button class="request-btn" onclick="grabRelease(this, '${instance}', '${r.guid}', ${r.indexer_id})">Grab</button>
+                    </div>
+                `).join('');
+            } catch (err) {
+                body.querySelector('.modal-loading').outerHTML = '<div class="modal-loading">Search failed.</div>';
+            }
         }
 
         async function openInteractiveSearch(btn, instance, itemId) {
