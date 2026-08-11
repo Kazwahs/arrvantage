@@ -686,6 +686,12 @@
                             <option value="all">All genres</option>
                             {% for g in instance.genre_options %}<option value="{{ g }}">{{ g }}</option>{% endfor %}
                         </select>
+                        {% if instance.library_kind == "movie" %}
+                        <select id="view-mode-{{ instance.name }}" onchange="toggleLibraryViewMode('{{ instance.name }}')">
+                            <option value="movies">All Movies</option>
+                            <option value="collections">Collections</option>
+                        </select>
+                        {% endif %}
                     </div>
 
                     <div class="library-grid" id="library-rows-{{ instance.name }}">
@@ -714,6 +720,35 @@
                         </div>
                         {% endfor %}
                     </div>
+
+                    {% if instance.library_kind == "movie" %}
+                    <div class="collections-list" id="collections-{{ instance.name }}" style="display:none;">
+                        {% if instance.collections|length == 0 %}
+                            <div class="empty">No collections found</div>
+                        {% else %}
+                            {% for col in instance.collections %}
+                            <div class="expandable-row" onclick="toggleCollection(this)">
+                                <span>{{ col.title }}</span>
+                                <span class="col-muted">{{ col.owned_count }}/{{ col.total_count }} owned</span>
+                            </div>
+                            <div class="sub-list" style="display:none;">
+                                {% for m in col.movies %}
+                                <div class="item">
+                                    <span>{{ m.title }}{% if m.year %} ({{ m.year }}){% endif %}</span>
+                                    {% if m.owned %}
+                                        <span class="col-muted">Owned</span>
+                                    {% elif can_search %}
+                                        <button class="mini-btn" onclick="addMissingCollectionMovie(this, '{{ instance.name }}', {{ m.tmdb_id }}, '{{ m.title.replace("'", "") }}', {{ col.quality_profile_id }}, '{{ col.root_folder_path }}')">Add &amp; Search</button>
+                                    {% else %}
+                                        <span class="col-muted">Missing</span>
+                                    {% endif %}
+                                </div>
+                                {% endfor %}
+                            </div>
+                            {% endfor %}
+                        {% endif %}
+                    </div>
+                    {% endif %}
                 {% endif %}
             </div>
             <!-- Request panel: search Overseerr + list existing requests -->
@@ -943,6 +978,51 @@
                 const matchQuery = !query || card.dataset.title.toLowerCase().includes(query);
                 card.style.display = (matchStatus && matchGenre && matchQuery) ? 'flex' : 'none';
             });
+        }
+
+        // --- Collections view (Radarr only): toggle between the normal
+        // movie grid and a list of collections showing what's missing ---
+
+        function toggleLibraryViewMode(instance) {
+            const mode = document.getElementById(`view-mode-${instance}`).value;
+            const grid = document.getElementById(`library-rows-${instance}`);
+            const collections = document.getElementById(`collections-${instance}`);
+
+            grid.style.display = mode === 'collections' ? 'none' : 'grid';
+            collections.style.display = mode === 'collections' ? 'block' : 'none';
+        }
+
+        function toggleCollection(rowEl) {
+            const subList = rowEl.nextElementSibling;
+            subList.style.display = subList.style.display === 'none' ? 'block' : 'none';
+        }
+
+        async function addMissingCollectionMovie(btn, instance, tmdbId, title, qualityProfileId, rootFolderPath) {
+            btn.disabled = true;
+            btn.textContent = 'Adding...';
+
+            try {
+                const response = await fetch(`/api/collections/add-movie/${instance}`, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({
+                        tmdb_id: tmdbId, title: title,
+                        quality_profile_id: qualityProfileId, root_folder_path: rootFolderPath,
+                    }),
+                });
+                const result = await response.json();
+
+                if (result.ok) {
+                    btn.textContent = 'Added';
+                } else {
+                    btn.textContent = 'Failed';
+                    btn.title = result.error || 'Unknown error';
+                    btn.disabled = false;
+                }
+            } catch (err) {
+                btn.textContent = 'Failed';
+                btn.disabled = false;
+            }
         }
 
         // --- Global search bar: filters whichever tab is currently

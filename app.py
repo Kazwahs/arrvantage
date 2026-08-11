@@ -576,6 +576,94 @@ def fetch_library(name: str, config: dict) -> dict:
     }
 
 
+def fetch_collections(config: dict, owned_tmdb_ids: set) -> list:
+    """
+    Radarr-only: fetches Movie Collections (e.g. "The Dark Knight
+    Collection") and marks which of each collection's movies are
+    already in your library vs missing entirely.
+
+    Field names here are my best inference from Radarr's documented
+    v3 API - if collections don't load, or movies/counts look wrong,
+    the raw JSON from GET /api/v3/collection is the place to check.
+    """
+    url = config["url"].rstrip("/") + "/api/v3/collection"
+    headers = {"X-Api-Key": config["api_key"]}
+
+    try:
+        response = requests.get(url, headers=headers, timeout=15)
+        response.raise_for_status()
+    except requests.exceptions.RequestException:
+        return []
+
+    collections = []
+    for entry in response.json():
+        movies = [
+            {
+                "tmdb_id": m.get("tmdbId"),
+                "title": m.get("title", "(untitled)"),
+                "year": m.get("year", ""),
+                "owned": m.get("tmdbId") in owned_tmdb_ids,
+            }
+            for m in entry.get("movies", [])
+        ]
+        movies.sort(key=lambda m: m["year"] or 0)
+        owned_count = sum(1 for m in movies if m["owned"])
+
+        collections.append({
+            "collection_id": entry.get("id"),
+            "title": entry.get("title", "(untitled collection)"),
+            "quality_profile_id": entry.get("qualityProfileId"),
+            "root_folder_path": entry.get("rootFolderPath"),
+            "owned_count": owned_count,
+            "total_count": len(movies),
+            "movies": movies,
+        })
+
+    collections.sort(key=lambda c: c["title"].lower())
+    return collections
+
+
+@app.route("/api/collections/add-movie/<instance_name>", methods=["POST"])
+@login_required
+@permission_required("searching")
+def api_add_missing_collection_movie(instance_name):
+    """
+    Adds a movie Radarr doesn't know about yet (found via a
+    collection) and searches for it immediately. Uses the quality
+    profile and root folder already configured on that collection, so
+    it matches however you'd normally add movies from it in Radarr's
+    own UI.
+    """
+    config = APPS.get(instance_name)
+    if not config or config.get("library_kind") != "movie":
+        return jsonify({"ok": False, "error": "not a movie instance"}), 404
+
+    body = request.get_json(force=True)
+    payload = {
+        "title": body.get("title", ""),
+        "tmdbId": body.get("tmdb_id"),
+        "qualityProfileId": body.get("quality_profile_id"),
+        "rootFolderPath": body.get("root_folder_path"),
+        "monitored": True,
+        "minimumAvailability": "announced",
+        "addOptions": {"searchForMovie": True},
+    }
+
+    url = config["url"].rstrip("/") + "/api/v3/movie"
+    headers = {"X-Api-Key": config["api_key"]}
+
+    try:
+        response = requests.post(url, headers=headers, json=payload, timeout=15)
+        response.raise_for_status()
+    except requests.exceptions.HTTPError:
+        detail = response.text[:300] if response is not None else "no response body"
+        return jsonify({"ok": False, "error": f"HTTP {response.status_code}: {detail}"}), 502
+    except requests.exceptions.RequestException as err:
+        return jsonify({"ok": False, "error": str(err)}), 502
+
+    return jsonify({"ok": True})
+
+
 # ---------------------------------------------------------------------------
 # Detail views (opened by clicking a cover image)
 # ---------------------------------------------------------------------------
@@ -1539,6 +1627,12 @@ def index():
         history = fetch_history(name, config)
         library = fetch_library(name, config)
         seerr = fetch_seerr_requests(active_requester, effective_seerr_type)
+
+        collections = []
+        if config["library_kind"] == "movie":
+            owned_tmdb_ids = {item["tmdb_id"] for item in library["library_items"] if item.get("tmdb_id")}
+            collections = fetch_collections(config, owned_tmdb_ids)
+
         instances.append({
             "name": name,
             "logo_url": INSTANCE_ICONS.get(config["library_kind"], ""),
@@ -1553,6 +1647,7 @@ def index():
             "status_options": library["status_options"],
             "genre_options": library["genre_options"],
             "request_items": seerr["request_items"],
+            "collections": collections,
         })
     return render_template(
         "index.html", instances=instances,
