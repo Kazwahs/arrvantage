@@ -997,11 +997,17 @@
 
         function toggleLibraryViewMode(instance) {
             const mode = document.getElementById(`view-mode-${instance}`).value;
+            const isCollections = mode === 'collections';
+
             const grid = document.getElementById(`library-rows-${instance}`);
             const collections = document.getElementById(`collections-${instance}`);
+            const statusFilter = document.getElementById(`status-filter-${instance}`);
+            const genreFilter = document.getElementById(`genre-filter-${instance}`);
 
-            grid.style.display = mode === 'collections' ? 'none' : 'grid';
-            collections.style.display = mode === 'collections' ? 'grid' : 'none';
+            grid.style.display = isCollections ? 'none' : 'grid';
+            collections.style.display = isCollections ? 'grid' : 'none';
+            statusFilter.style.display = isCollections ? 'none' : '';
+            genreFilter.style.display = isCollections ? 'none' : '';
         }
 
         function openCollectionModal(instance, collectionId) {
