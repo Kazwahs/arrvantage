@@ -1020,17 +1020,24 @@
                 </div>
             `;
 
-            body.innerHTML = col.movies.map(m => `
-                <div class="item">
-                    <span>${m.title}${m.year ? ' (' + m.year + ')' : ''}</span>
-                    ${m.owned
-                        ? '<span class="col-muted">Owned</span>'
-                        : (CAN_SEARCH
-                            ? `<button class="mini-btn" onclick="addMissingCollectionMovie(this, '${instance}', ${m.tmdb_id}, '${m.title.replace(/'/g, "\\'")}', ${col.quality_profile_id}, '${col.root_folder_path}')">Add &amp; Search</button>`
-                            : '<span class="col-muted">Missing</span>')
-                    }
+            body.innerHTML = col.movies.length === 0 ? '<div class="modal-empty">No movies found in this collection</div>' : `<div class="library-grid">${col.movies.map(m => `
+                <div class="library-card">
+                    <div class="cover-wrap">
+                        ${m.cover_url
+                            ? `<img src="${m.cover_url}" alt="${m.title}" loading="lazy" onerror="this.style.display='none'; this.nextElementSibling.style.display='flex';">`
+                            : ''
+                        }
+                        <div class="cover-fallback" ${m.cover_url ? 'style="display:none;"' : ''}>${m.title}</div>
+                        <span class="status-badge status-${m.owned ? 'downloaded' : 'missing'}">${m.owned ? 'Owned' : 'Missing'}</span>
+                    </div>
+                    <div class="card-title">${m.title}${m.year ? ' (' + m.year + ')' : ''}</div>
+                    ${!m.owned && CAN_SEARCH ? `
+                    <div class="card-actions">
+                        <button class="mini-btn" onclick="addMissingCollectionMovie(this, '${instance}', ${m.tmdb_id}, '${m.title.replace(/'/g, "\\'")}', ${col.quality_profile_id}, '${col.root_folder_path}')">Add &amp; Search</button>
+                    </div>
+                    ` : ''}
                 </div>
-            `).join('') || '<div class="modal-empty">No movies found in this collection</div>';
+            `).join('')}</div>`;
 
             document.getElementById('modal-overlay').classList.add('open');
         }

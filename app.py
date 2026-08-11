@@ -603,6 +603,10 @@ def fetch_collections(config: dict, owned_tmdb_ids: set) -> list:
                 "title": m.get("title", "(untitled)"),
                 "year": m.get("year", ""),
                 "owned": m.get("tmdbId") in owned_tmdb_ids,
+                # Uncertain whether Radarr's collection movie entries
+                # always include full "images" data - falls back to no
+                # poster gracefully if not, same as everywhere else.
+                "cover_url": get_cover_url(m, config),
             }
             for m in entry.get("movies", [])
         ]
