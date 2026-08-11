@@ -729,7 +729,7 @@
                             <div class="empty">No collections found</div>
                         {% else %}
                             {% for col in instance.collections %}
-                            <div class="library-card">
+                            <div class="library-card" data-title="{{ col.title }}">
                                 <div class="cover-wrap" onclick="openCollectionModal('{{ instance.name }}', {{ col.collection_id }})">
                                     {% if col.cover_url %}
                                         <img src="{{ col.cover_url }}" alt="{{ col.title }}" loading="lazy"
@@ -1021,8 +1021,11 @@
             `;
 
             body.innerHTML = col.movies.length === 0 ? '<div class="modal-empty">No movies found in this collection</div>' : `<div class="library-grid">${col.movies.map(m => `
-                <div class="library-card">
-                    <div class="cover-wrap">
+                <div class="library-card" data-title="${m.title.replace(/"/g, '&quot;')}" data-cover="${m.cover_url}">
+                    <div class="cover-wrap" onclick="${m.owned
+                        ? `openDetails(this, '${instance}', ${m.item_id})`
+                        : `showMissingMovieInfo(this, ${m.tmdb_id}, '${m.title.replace(/'/g, "\\'")}', '${m.cover_url}')`
+                    }">
                         ${m.cover_url
                             ? `<img src="${m.cover_url}" alt="${m.title}" loading="lazy" onerror="this.style.display='none'; this.nextElementSibling.style.display='flex';">`
                             : ''
@@ -1033,13 +1036,53 @@
                     <div class="card-title">${m.title}${m.year ? ' (' + m.year + ')' : ''}</div>
                     ${!m.owned && CAN_SEARCH ? `
                     <div class="card-actions">
-                        <button class="mini-btn" onclick="addMissingCollectionMovie(this, '${instance}', ${m.tmdb_id}, '${m.title.replace(/'/g, "\\'")}', ${col.quality_profile_id}, '${col.root_folder_path}')">Add &amp; Search</button>
+                        <button class="mini-btn" onclick="event.stopPropagation(); addMissingCollectionMovie(this, '${instance}', ${m.tmdb_id}, '${m.title.replace(/'/g, "\\'")}', ${col.quality_profile_id}, '${col.root_folder_path}')">Add &amp; Search</button>
                     </div>
                     ` : ''}
                 </div>
             `).join('')}</div>`;
 
             document.getElementById('modal-overlay').classList.add('open');
+        }
+
+        async function showMissingMovieInfo(coverEl, tmdbId, title, coverUrl) {
+            const body = document.getElementById('modal-body');
+            savedModalBody = body.innerHTML; // reuses the same back-navigation as actor filmography
+
+            body.innerHTML = `
+                <button class="back-to-cast-btn" onclick="restoreCastView()">&larr; Back</button>
+                <div class="modal-header" style="margin-bottom: 1rem;">
+                    <div class="modal-cover">
+                        ${coverUrl
+                            ? `<img src="${coverUrl}" alt="${title}" onerror="this.style.display='none'; this.nextElementSibling.style.display='flex';">
+                               <div class="modal-cover-fallback" style="display:none;">${title}</div>`
+                            : `<div class="modal-cover-fallback">${title}</div>`
+                        }
+                    </div>
+                    <div class="modal-header-text">
+                        <div class="modal-title">${title}</div>
+                    </div>
+                </div>
+                <div class="modal-loading">Loading...</div>
+            `;
+
+            try {
+                const response = await fetch(`/api/tmdb-movie-info/${tmdbId}`);
+                const data = await response.json();
+                const loadingEl = body.querySelector('.modal-loading');
+
+                if (data.error) {
+                    loadingEl.outerHTML = `<div class="modal-empty">${data.error}</div>`;
+                    return;
+                }
+
+                loadingEl.outerHTML = `
+                    <div class="modal-rating">${data.rating}</div>
+                    <div class="modal-overview">${data.overview}</div>
+                `;
+            } catch (err) {
+                body.querySelector('.modal-loading').outerHTML = '<div class="modal-empty">Could not load info.</div>';
+            }
         }
 
         async function addMissingCollectionMovie(btn, instance, tmdbId, title, qualityProfileId, rootFolderPath) {
@@ -1095,7 +1138,14 @@
         // Only shown while the Library tab is active. ---
 
         function jumpToLetter(letter) {
-            const cards = document.querySelectorAll(`#library-rows-${currentInstance} .library-card`);
+            // Library has two sub-views (all movies vs collections) for
+            // movie-kind instances - jump within whichever is actually
+            // showing right now, not always the main movie grid.
+            const viewModeSelect = document.getElementById(`view-mode-${currentInstance}`);
+            const isCollectionsView = viewModeSelect && viewModeSelect.value === 'collections';
+            const containerId = isCollectionsView ? `collections-${currentInstance}` : `library-rows-${currentInstance}`;
+
+            const cards = document.querySelectorAll(`#${containerId} .library-card`);
             const matchesLetter = title => letter === '#'
                 ? /^[0-9]/.test(title)
                 : title.toUpperCase().startsWith(letter);

@@ -576,11 +576,15 @@ def fetch_library(name: str, config: dict) -> dict:
     }
 
 
-def fetch_collections(config: dict, owned_tmdb_ids: set) -> list:
+def fetch_collections(config: dict, owned_tmdb_lookup: dict) -> list:
     """
     Radarr-only: fetches Movie Collections (e.g. "The Dark Knight
     Collection") and marks which of each collection's movies are
     already in your library vs missing entirely.
+
+    owned_tmdb_lookup maps tmdb_id -> this instance's own item_id for
+    every owned movie, so an owned movie found here can open its real
+    detail view the same way a normal library card does.
 
     Field names here are my best inference from Radarr's documented
     v3 API - if collections don't load, or movies/counts look wrong,
@@ -602,7 +606,8 @@ def fetch_collections(config: dict, owned_tmdb_ids: set) -> list:
                 "tmdb_id": m.get("tmdbId"),
                 "title": m.get("title", "(untitled)"),
                 "year": m.get("year", ""),
-                "owned": m.get("tmdbId") in owned_tmdb_ids,
+                "owned": m.get("tmdbId") in owned_tmdb_lookup,
+                "item_id": owned_tmdb_lookup.get(m.get("tmdbId")),
                 # Uncertain whether Radarr's collection movie entries
                 # always include full "images" data - falls back to no
                 # poster gracefully if not, same as everywhere else.
@@ -1305,6 +1310,29 @@ def fetch_tv_tvdb_id(tmdb_tv_id) -> "int | None":
         return None
 
 
+@app.route("/api/tmdb-movie-info/<int:tmdb_id>")
+@login_required
+def api_tmdb_movie_info(tmdb_id):
+    """
+    For a movie that isn't in Radarr yet (found via a collection) -
+    pulls a quick overview/rating straight from TMDB, since we have
+    nothing from Radarr itself to show for something it doesn't own.
+    """
+    if not TMDB.get("api_key"):
+        return jsonify({"error": "TMDB API key isn't configured in Settings"}), 400
+
+    try:
+        data = tmdb_get(f"/movie/{tmdb_id}")
+    except requests.exceptions.RequestException as err:
+        return jsonify({"error": str(err)}), 502
+
+    rating = f"{data['vote_average']:.1f} / 10 (TMDB)" if data.get("vote_average") else "Not rated"
+    return jsonify({
+        "overview": data.get("overview") or "No description available.",
+        "rating": rating,
+    })
+
+
 @app.route("/api/actor-filmography/<instance_name>")
 @login_required
 def api_actor_filmography(instance_name):
@@ -1635,8 +1663,11 @@ def index():
 
         collections = []
         if config["library_kind"] == "movie":
-            owned_tmdb_ids = {item["tmdb_id"] for item in library["library_items"] if item.get("tmdb_id")}
-            collections = fetch_collections(config, owned_tmdb_ids)
+            owned_tmdb_lookup = {
+                item["tmdb_id"]: item["item_id"]
+                for item in library["library_items"] if item.get("tmdb_id")
+            }
+            collections = fetch_collections(config, owned_tmdb_lookup)
 
         instances.append({
             "name": name,
