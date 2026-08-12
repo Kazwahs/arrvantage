@@ -732,6 +732,9 @@ def fetch_movie_details(config: dict, movie_id: int) -> dict:
         "rating": get_rating_text(movie.get("ratings", {})),
         "cast": cast,
         "cast_available": cast_available,
+        # Only present when the movie currently has a downloaded file -
+        # the Replace button needs this to delete the right file.
+        "movie_file_id": (movie.get("movieFile") or {}).get("id"),
     }
 
 
@@ -939,6 +942,37 @@ def api_search_auto(instance_name, item_id):
         return jsonify({"ok": True})
     except requests.exceptions.RequestException as err:
         return jsonify({"ok": False, "error": str(err)}), 502
+
+
+@app.route("/api/movie/replace/<instance_name>/<int:item_id>", methods=["POST"])
+@login_required
+@permission_required("searching")
+def api_replace_movie(instance_name, item_id):
+    """Deletes the movie's current file, then searches for a
+    replacement - two steps, reported separately so a failure on
+    either one is unambiguous about what actually happened."""
+    config = APPS.get(instance_name)
+    if not config or config.get("library_kind") != "movie":
+        return jsonify({"ok": False, "error": "not a movie instance"}), 404
+
+    body = request.get_json(force=True)
+    movie_file_id = body.get("movie_file_id")
+    base = config["url"].rstrip("/")
+    headers = {"X-Api-Key": config["api_key"]}
+
+    if movie_file_id:
+        try:
+            response = requests.delete(f"{base}/api/v3/moviefile/{movie_file_id}", headers=headers, timeout=15)
+            response.raise_for_status()
+        except requests.exceptions.RequestException as err:
+            return jsonify({"ok": False, "error": f"Could not delete existing file: {err}"}), 502
+
+    try:
+        trigger_auto_search(config, item_id)
+    except requests.exceptions.RequestException as err:
+        return jsonify({"ok": False, "error": f"File deleted, but the new search failed to start: {err}"}), 502
+
+    return jsonify({"ok": True})
 
 
 def fetch_interactive_releases(config: dict, item_id: int) -> list:

@@ -386,6 +386,8 @@
 
         .card-actions { display: flex; gap: 0.35rem; margin-top: 0.5rem; }
 
+        #replace-btn { display: block; width: auto; margin: 0 0 1rem 0; }
+
         .mini-btn {
             flex: 1;
             background: var(--sidebar);
@@ -1221,7 +1223,7 @@
                 }
 
                 const kind = INSTANCE_KINDS[instance];
-                if (kind === 'movie') renderMovieModal(instance, data);
+                if (kind === 'movie') renderMovieModal(instance, itemId, data);
                 else if (kind === 'series') renderSeriesModal(instance, itemId, data);
                 else if (kind === 'artist') renderArtistModal(instance, data);
                 else if (kind === 'author') renderAuthorModal(data);
@@ -1236,14 +1238,46 @@
             document.getElementById('modal-overlay').classList.remove('open');
         }
 
-        function renderMovieModal(instance, data) {
+        function renderMovieModal(instance, itemId, data) {
             const content = document.getElementById('modal-body');
             content.innerHTML = `
                 <div class="modal-rating">${data.rating}</div>
+                ${data.movie_file_id && CAN_SEARCH ? `
+                <button class="mini-btn" id="replace-btn" onclick="replaceMovie(this, '${instance}', ${itemId}, ${data.movie_file_id})">Replace</button>
+                ` : ''}
                 <div class="modal-overview">${data.overview}</div>
                 <div class="modal-section-title">Cast</div>
                 ${renderCast(instance, data.cast, data.cast_available)}
             `;
+        }
+
+        async function replaceMovie(btn, instance, itemId, movieFileId) {
+            const confirmed = confirm('This permanently deletes the current file and searches for a replacement. This cannot be undone. Continue?');
+            if (!confirmed) return;
+
+            btn.disabled = true;
+            const original = btn.textContent;
+            btn.textContent = 'Replacing...';
+
+            try {
+                const response = await fetch(`/api/movie/replace/${instance}/${itemId}`, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ movie_file_id: movieFileId }),
+                });
+                const result = await response.json();
+
+                if (result.ok) {
+                    btn.textContent = 'Searching for replacement';
+                } else {
+                    btn.textContent = 'Failed';
+                    btn.title = result.error || 'Unknown error';
+                    btn.disabled = false;
+                }
+            } catch (err) {
+                btn.textContent = 'Failed';
+                btn.disabled = false;
+            }
         }
 
         function renderSeriesModal(instance, seriesId, data) {
