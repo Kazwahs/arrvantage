@@ -386,17 +386,16 @@
 
         .card-actions { display: flex; gap: 0.35rem; margin-top: 0.5rem; }
 
+        .replace-btn-row { text-align: right; margin-top: 1.25rem; }
+
         .replace-btn {
-            position: absolute;
-            bottom: 1rem;
-            right: 1rem;
             background: #ef4444;
             color: #000;
             border: none;
             border-radius: 6px;
-            font-size: 1.4rem;
+            font-size: 1.05rem;
             font-weight: 700;
-            padding: 0.6rem 1.2rem;
+            padding: 0.45rem 0.9rem;
             cursor: pointer;
         }
         .replace-btn:hover:not(:disabled) { background: #dc2626; }
@@ -1256,12 +1255,14 @@
             const content = document.getElementById('modal-body');
             content.innerHTML = `
                 <div class="modal-rating">${data.rating}</div>
-                ${data.movie_file_id && CAN_SEARCH ? `
-                <button class="replace-btn" onclick="replaceMovie(this, '${instance}', ${itemId}, ${data.movie_file_id})">Replace</button>
-                ` : ''}
                 <div class="modal-overview">${data.overview}</div>
                 <div class="modal-section-title">Cast</div>
                 ${renderCast(instance, data.cast, data.cast_available)}
+                ${data.movie_file_id && CAN_SEARCH ? `
+                <div class="replace-btn-row">
+                    <button class="replace-btn" onclick="replaceMovie(this, '${instance}', ${itemId}, ${data.movie_file_id})">Replace</button>
+                </div>
+                ` : ''}
             `;
         }
 
