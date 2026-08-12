@@ -386,7 +386,21 @@
 
         .card-actions { display: flex; gap: 0.35rem; margin-top: 0.5rem; }
 
-        #replace-btn { display: block; width: auto; margin: 0 0 1rem 0; }
+        .replace-btn {
+            position: absolute;
+            bottom: 1rem;
+            right: 1rem;
+            background: #ef4444;
+            color: #000;
+            border: none;
+            border-radius: 6px;
+            font-size: 1.4rem;
+            font-weight: 700;
+            padding: 0.6rem 1.2rem;
+            cursor: pointer;
+        }
+        .replace-btn:hover:not(:disabled) { background: #dc2626; }
+        .replace-btn:disabled { opacity: 0.6; cursor: default; }
 
         .mini-btn {
             flex: 1;
@@ -1243,7 +1257,7 @@
             content.innerHTML = `
                 <div class="modal-rating">${data.rating}</div>
                 ${data.movie_file_id && CAN_SEARCH ? `
-                <button class="mini-btn" id="replace-btn" onclick="replaceMovie(this, '${instance}', ${itemId}, ${data.movie_file_id})">Replace</button>
+                <button class="replace-btn" onclick="replaceMovie(this, '${instance}', ${itemId}, ${data.movie_file_id})">Replace</button>
                 ` : ''}
                 <div class="modal-overview">${data.overview}</div>
                 <div class="modal-section-title">Cast</div>
