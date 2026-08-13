@@ -54,6 +54,11 @@ INSTANCE_ICONS = {
     "author": "/static/icons/author.svg",
 }
 
+DOWNLOADER_ICONS = {
+    "qbittorrent": "/static/icons/qbittorrent.svg",
+    "sabnzbd": "/static/icons/sabnzbd.svg",
+}
+
 # Structural facts about each *kind* of arr app - which endpoints it uses,
 # what kind of library it holds, which Overseerr media type it maps to.
 # Any number of named instances can share one of these kinds.
@@ -103,6 +108,15 @@ REQUESTER_TYPES = {
     "overseerr": "Overseerr / Jellyseerr",
 }
 
+# Download client types. Separate from Instances entirely - not tied to
+# any single arr instance. Both use a plain API key, same as everything
+# else in this app (qBittorrent v5.2.0+ added stateless API key auth,
+# replacing the older username/password login flow).
+DOWNLOADER_TYPES = {
+    "qbittorrent": "qBittorrent",
+    "sabnzbd": "SABnzbd",
+}
+
 # In Docker, set CONFIG_DIR to a mounted volume path (e.g. /app/data) so
 # config.json - your instances, users, and API keys - survives image
 # rebuilds. Left unset, it defaults to sitting next to this file, same
@@ -112,7 +126,7 @@ os.makedirs(CONFIG_DIR, exist_ok=True)  # in case a fresh volume mount is still 
 CONFIG_PATH = os.path.join(CONFIG_DIR, "config.json")
 
 EMPTY_CONFIG = {
-    "instances": [], "media_servers": [], "requesters": [], "users": [],
+    "instances": [], "media_servers": [], "requesters": [], "downloaders": [], "users": [],
     "tmdb": {"api_key": ""}, "secret_key": "",
 }
 
@@ -183,6 +197,7 @@ APPS = build_apps(CONFIG)
 MEDIA_SERVERS = CONFIG.get("media_servers", [])
 REQUESTERS = CONFIG.get("requesters", [])
 TMDB = CONFIG.get("tmdb", {"api_key": ""})
+DOWNLOADERS = CONFIG.get("downloaders", [])
 USERS = CONFIG.get("users", [])
 
 # Flask needs a secret key to sign session cookies. Generate one on first
@@ -1494,6 +1509,164 @@ def api_actor_filmography(instance_name):
 
 
 # ---------------------------------------------------------------------------
+# Downloaders (qBittorrent / SABnzbd) - separate from the arr instances
+# entirely, since a download client is usually shared across all of them
+# rather than tied to just one.
+# ---------------------------------------------------------------------------
+
+
+def qbt_headers(downloader: dict) -> dict:
+    """
+    qBittorrent v5.2.0+ (Web API v2.14.1+) supports stateless API key
+    auth via a Bearer token - generated in qBittorrent's WebUI settings.
+    Simpler than the older username/password cookie-login flow, and
+    matches how every other service in this app authenticates.
+    """
+    return {"Authorization": f"Bearer {downloader.get('api_key', '')}"}
+
+
+def fetch_qbittorrent_torrents(downloader: dict) -> dict:
+    try:
+        response = requests.get(
+            f"{downloader['url'].rstrip('/')}/api/v2/torrents/info",
+            headers=qbt_headers(downloader), timeout=15,
+        )
+        response.raise_for_status()
+    except requests.exceptions.RequestException as err:
+        return {"error": str(err), "torrents": []}
+
+    torrents = [
+        {
+            "hash": t.get("hash"),
+            "name": t.get("name", "(unknown)"),
+            "state": t.get("state", "unknown"),
+            "progress_pct": round((t.get("progress") or 0) * 100, 1),
+            "dlspeed": t.get("dlspeed", 0),
+            "upspeed": t.get("upspeed", 0),
+            "eta": t.get("eta", 0),
+            "size": t.get("size", 0),
+            "ratio": round(t.get("ratio", 0), 2),
+            "category": t.get("category", ""),
+        }
+        for t in response.json()
+    ]
+    return {"error": None, "torrents": torrents}
+
+
+def qbt_torrent_action(downloader: dict, action: str, torrent_hash: str, delete_files: bool = False) -> None:
+    base = downloader["url"].rstrip("/")
+    headers = qbt_headers(downloader)
+
+    # Best-guess endpoint names, matching qBittorrent's long-documented
+    # v4.1-v4.6 API - if pause/resume don't work on your version, this
+    # is the first place to check (some newer versions renamed these).
+    if action == "pause":
+        response = requests.post(f"{base}/api/v2/torrents/pause", headers=headers, data={"hashes": torrent_hash}, timeout=10)
+    elif action == "resume":
+        response = requests.post(f"{base}/api/v2/torrents/resume", headers=headers, data={"hashes": torrent_hash}, timeout=10)
+    elif action == "delete":
+        response = requests.post(
+            f"{base}/api/v2/torrents/delete", headers=headers,
+            data={"hashes": torrent_hash, "deleteFiles": str(delete_files).lower()}, timeout=10,
+        )
+    else:
+        raise ValueError(f"unknown action: {action}")
+    response.raise_for_status()
+
+
+def fetch_sabnzbd_queue(downloader: dict) -> dict:
+    base = downloader["url"].rstrip("/")
+    try:
+        response = requests.get(
+            f"{base}/api",
+            params={"mode": "queue", "output": "json", "apikey": downloader.get("api_key", "")}, timeout=15,
+        )
+        response.raise_for_status()
+        data = response.json()
+    except requests.exceptions.RequestException as err:
+        return {"error": str(err), "items": []}
+
+    if "error" in data:
+        return {"error": data["error"], "items": []}
+
+    items = [
+        {
+            "nzo_id": slot.get("nzo_id"),
+            "name": slot.get("filename", "(unknown)"),
+            "status": slot.get("status", "unknown"),
+            "percentage": slot.get("percentage", "0"),
+            "size_mb": slot.get("mb", "0"),
+            "size_left_mb": slot.get("mbleft", "0"),
+            "time_left": slot.get("timeleft", ""),
+            "category": slot.get("cat", ""),
+        }
+        for slot in data.get("queue", {}).get("slots", [])
+    ]
+    return {"error": None, "items": items}
+
+
+def sabnzbd_action(downloader: dict, mode: str, nzo_id: str) -> None:
+    base = downloader["url"].rstrip("/")
+    params = {"output": "json", "apikey": downloader.get("api_key", "")}
+
+    if mode == "delete":
+        params.update({"mode": "queue", "name": "delete", "value": nzo_id})
+    else:
+        params.update({"mode": mode, "value": nzo_id})  # "pause" or "resume"
+
+    response = requests.get(f"{base}/api", params=params, timeout=15)
+    response.raise_for_status()
+
+
+def get_downloader(name: str):
+    return next((d for d in DOWNLOADERS if d["name"] == name), None)
+
+
+@app.route("/api/downloader/status/<name>")
+@login_required
+def api_downloader_status(name):
+    downloader = get_downloader(name)
+    if not downloader:
+        return jsonify({"error": "unknown downloader"}), 404
+
+    if downloader["type"] == "qbittorrent":
+        result = fetch_qbittorrent_torrents(downloader)
+        return jsonify({"type": "qbittorrent", "error": result["error"], "items": result["torrents"]})
+    elif downloader["type"] == "sabnzbd":
+        result = fetch_sabnzbd_queue(downloader)
+        return jsonify({"type": "sabnzbd", "error": result["error"], "items": result["items"]})
+    return jsonify({"error": "unknown downloader type"}), 400
+
+
+@app.route("/api/downloader/action/<name>", methods=["POST"])
+@login_required
+@permission_required("searching")
+def api_downloader_action(name):
+    """Reuses the 'searching' permission, since pausing/resuming/removing
+    downloads is the same class of action-taking as the search buttons
+    elsewhere - not a read-only view."""
+    downloader = get_downloader(name)
+    if not downloader:
+        return jsonify({"ok": False, "error": "unknown downloader"}), 404
+
+    body = request.get_json(force=True)
+    action = body.get("action")
+    item_id = body.get("item_id")
+
+    try:
+        if downloader["type"] == "qbittorrent":
+            qbt_torrent_action(downloader, action, item_id, delete_files=bool(body.get("delete_files")))
+        elif downloader["type"] == "sabnzbd":
+            sabnzbd_action(downloader, action, item_id)
+        else:
+            return jsonify({"ok": False, "error": "unknown downloader type"}), 400
+    except (requests.exceptions.RequestException, ValueError) as err:
+        return jsonify({"ok": False, "error": str(err)}), 502
+
+    return jsonify({"ok": True})
+
+
+# ---------------------------------------------------------------------------
 # Settings
 # ---------------------------------------------------------------------------
 
@@ -1516,7 +1689,7 @@ def api_settings_test():
             return jsonify({"ok": False, "error": "administrator access required"}), 403
 
     body = request.get_json(force=True)
-    category = body.get("category")       # "instance" | "media_server" | "requester" | "tmdb"
+    category = body.get("category")       # "instance" | "media_server" | "requester" | "tmdb" | "downloader"
     kind_or_type = body.get("kind_or_type")
     url = (body.get("url") or "").strip()
     credential = (body.get("credential") or "").strip()
@@ -1565,6 +1738,18 @@ def api_settings_test():
                 f"{url.rstrip('/')}/System/Info",
                 headers={"X-Emby-Token": credential}, timeout=8,
             )
+        elif category == "downloader" and kind_or_type == "qbittorrent":
+            response = requests.get(
+                f"{url.rstrip('/')}/api/v2/app/version",
+                headers={"Authorization": f"Bearer {credential}"}, timeout=8,
+            )
+        elif category == "downloader" and kind_or_type == "sabnzbd":
+            response = requests.get(
+                f"{url.rstrip('/')}/api",
+                params={"mode": "version", "output": "json", "apikey": credential}, timeout=8,
+            )
+            if response.ok and "error" in response.json():
+                return jsonify({"ok": False, "error": response.json()["error"]})
         else:
             return jsonify({"ok": False, "error": "unknown settings type"})
 
@@ -1676,7 +1861,7 @@ def parse_users(form, existing_users: list) -> list:
 @login_required
 @admin_required
 def settings():
-    global CONFIG, APPS, MEDIA_SERVERS, REQUESTERS, USERS, TMDB
+    global CONFIG, APPS, MEDIA_SERVERS, REQUESTERS, DOWNLOADERS, USERS, TMDB
 
     if request.method == "POST":
         new_config = {
@@ -1686,6 +1871,8 @@ def settings():
                 request.form, "mediaserver", ["type", "url", "credential", "enabled"])),
             "requesters": dedupe_names(parse_indexed_entries(
                 request.form, "requester", ["type", "url", "credential", "enabled"])),
+            "downloaders": dedupe_names(parse_indexed_entries(
+                request.form, "downloader", ["type", "url", "api_key", "color", "enabled"])),
             "users": parse_users(request.form, CONFIG.get("users", [])),
             "tmdb": {"api_key": request.form.get("tmdb_api_key", "").strip()},
             "secret_key": CONFIG["secret_key"],  # never edited via the form - carry it forward
@@ -1698,6 +1885,7 @@ def settings():
         APPS = build_apps(CONFIG)
         MEDIA_SERVERS = CONFIG["media_servers"]
         REQUESTERS = CONFIG["requesters"]
+        DOWNLOADERS = CONFIG["downloaders"]
         USERS = CONFIG["users"]
         TMDB = CONFIG["tmdb"]
 
@@ -1714,11 +1902,13 @@ def settings():
         instances=CONFIG.get("instances", []),
         media_servers=CONFIG.get("media_servers", []),
         requesters=CONFIG.get("requesters", []),
+        downloaders=CONFIG.get("downloaders", []),
         users=CONFIG.get("users", []),
         tmdb=CONFIG.get("tmdb", {"api_key": ""}),
         kind_options=KIND_META,
         media_server_type_options=MEDIA_SERVER_TYPES,
         requester_type_options=REQUESTER_TYPES,
+        downloader_type_options=DOWNLOADER_TYPES,
         saved=request.args.get("saved") == "1",
     )
 
@@ -1777,8 +1967,19 @@ def index():
             "request_items": seerr["request_items"],
             "collections": collections,
         })
+
+    downloaders_for_template = [
+        {
+            "name": d["name"],
+            "type": d["type"],
+            "color": d.get("color", "#5b8cff"),
+            "logo_url": DOWNLOADER_ICONS.get(d["type"], ""),
+        }
+        for d in DOWNLOADERS if d.get("enabled", True)
+    ]
+
     return render_template(
-        "index.html", instances=instances,
+        "index.html", instances=instances, downloaders=downloaders_for_template,
         username=user["username"], is_admin=is_admin,
         can_request=perms["requesting"], can_search=perms["searching"],
     )

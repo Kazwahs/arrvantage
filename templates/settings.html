@@ -302,6 +302,14 @@
             </details>
 
             <details class="group">
+                <summary>Downloaders</summary>
+                <div class="group-body">
+                    <div id="downloader-cards"></div>
+                    <button type="button" class="add-btn" onclick="addCard('downloader')">+ Add downloader</button>
+                </div>
+            </details>
+
+            <details class="group">
                 <summary>Movie/TV Metadata (TMDB)</summary>
                 <div class="group-body">
                     <div class="step-hint">Powers the "click a cast member's name" feature in movie/show detail views. Optional - skip this if you don't want that feature. Get a free API key from themoviedb.org under Settings &rarr; API.</div>
@@ -346,6 +354,8 @@
         const existingInstances = {{ instances | tojson }};
         const existingMediaServers = {{ media_servers | tojson }};
         const existingRequesters = {{ requesters | tojson }};
+        const existingDownloaders = {{ downloaders | tojson }};
+        const downloaderTypeOptions = {{ downloader_type_options | tojson }};
         const existingUsers = {{ users | tojson }};
 
         const kindOptions = {{ kind_options | tojson }};           // {kind: {label, ...}}
@@ -387,6 +397,19 @@
                 optionLabel: (opt) => opt,
                 testCategory: 'requester',
                 urlPlaceholder: 'http://192.168.1.X:PORT',
+            },
+            downloader: {
+                formPrefix: 'downloader',
+                credentialField: 'api_key',
+                credentialLabel: 'API Key',
+                kindField: 'type',
+                kindLabel: 'Type',
+                options: downloaderTypeOptions,
+                optionLabel: (opt) => opt,
+                testCategory: 'downloader',
+                urlPlaceholder: 'http://192.168.1.X:PORT',
+                hasColor: true,
+                reorderable: true,
             },
         };
 
@@ -675,6 +698,8 @@
         }
 
         existingUsers.forEach((entry, i) => addUserCard({ ...entry, __suffix: `existing-${i}` }));
+
+        existingDownloaders.forEach((entry, i) => addCard('downloader', { ...entry, __suffix: `existing-${i}` }));
 
         // --- TMDB (single field, no add/remove needed) ---
 

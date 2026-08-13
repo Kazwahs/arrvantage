@@ -669,9 +669,25 @@
             {{ instance.name }}
         </button>
         {% endfor %}
+
+        {% if downloaders|length > 0 %}
+        <hr class="sidebar-divider">
+        <div class="sidebar-title">Downloaders</div>
+        {% for dl in downloaders %}
+        <button class="instance-tab downloader-tab"
+                data-downloader="{{ dl.name }}"
+                data-downloader-type="{{ dl.type }}"
+                style="--tab-color: {{ dl.color }};"
+                onclick="selectDownloader('{{ dl.name }}')">
+            <img class="instance-logo" src="{{ dl.logo_url }}" alt="" onerror="this.style.display='none';">
+            {{ dl.name }}
+        </button>
+        {% endfor %}
+        {% endif %}
     </div>
 
     <div class="main">
+        <div id="instances-view">
         <div class="topbar">
             <div class="view-tabs">
                 <button class="view-tab active" data-view="library" onclick="selectView('library')">Library</button>
@@ -844,6 +860,25 @@
 
             {% endfor %}
         </div>
+        </div>
+
+        <div id="downloaders-view" style="display:none;">
+            <div class="topbar">
+                <div class="view-tabs">
+                    <span id="downloader-title-label" style="padding: 0.5rem 0.25rem; font-weight: 600;"></span>
+                </div>
+                <div class="topbar-right">
+                    <button class="test-btn" onclick="refreshCurrentDownloader()">Refresh</button>
+                </div>
+            </div>
+            <div class="content">
+                {% for dl in downloaders %}
+                <div class="downloader-panel" data-downloader="{{ dl.name }}" data-downloader-type="{{ dl.type }}" style="display:none;">
+                    <div id="downloader-list-{{ dl.name }}" class="modal-loading">Loading...</div>
+                </div>
+                {% endfor %}
+            </div>
+        </div>
     </div>
 
     <div class="alpha-index" id="alpha-index">
@@ -879,6 +914,8 @@
             document.querySelectorAll('.instance-tab').forEach(el => {
                 el.classList.toggle('active', el.dataset.instance === name);
             });
+            document.getElementById('downloaders-view').style.display = 'none';
+            document.getElementById('instances-view').style.display = 'block';
             updateQueueTabCount();
             updateRequestTabVisibility();
             render();
@@ -887,6 +924,139 @@
         function updateQueueTabCount() {
             const activeTab = document.querySelector(`.instance-tab[data-instance="${currentInstance}"]`);
             document.getElementById('queue-tab-count').textContent = activeTab ? activeTab.dataset.queueCount : '0';
+        }
+
+        // --- Downloaders (separate section from Instances entirely) ---
+
+        let currentDownloader = null;
+
+        function selectDownloader(name) {
+            currentDownloader = name;
+            document.querySelectorAll('.instance-tab').forEach(el => {
+                el.classList.toggle('active', el.dataset.downloader === name);
+            });
+
+            document.getElementById('instances-view').style.display = 'none';
+            document.getElementById('downloaders-view').style.display = 'block';
+
+            document.querySelectorAll('.downloader-panel').forEach(el => {
+                el.style.display = el.dataset.downloader === name ? 'block' : 'none';
+            });
+
+            const tab = document.querySelector(`.instance-tab[data-downloader="${name}"]`);
+            document.getElementById('downloader-title-label').textContent = tab ? `${name} — Active Downloads` : name;
+
+            loadDownloaderStatus(name);
+        }
+
+        function refreshCurrentDownloader() {
+            if (currentDownloader) loadDownloaderStatus(currentDownloader);
+        }
+
+        async function loadDownloaderStatus(name) {
+            const listEl = document.getElementById(`downloader-list-${name}`);
+            try {
+                const response = await fetch(`/api/downloader/status/${name}`);
+                const data = await response.json();
+
+                if (data.error) {
+                    listEl.innerHTML = `<div class="modal-empty">${data.error}</div>`;
+                    return;
+                }
+                if (!data.items.length) {
+                    listEl.innerHTML = '<div class="empty">Nothing active right now</div>';
+                    return;
+                }
+
+                listEl.innerHTML = data.type === 'qbittorrent'
+                    ? renderQbittorrentTorrents(name, data.items)
+                    : renderSabnzbdQueue(name, data.items);
+            } catch (err) {
+                listEl.innerHTML = '<div class="modal-empty">Could not load status.</div>';
+            }
+        }
+
+        function formatBytesPerSec(bytes) {
+            if (!bytes) return '0 KB/s';
+            const kb = bytes / 1024;
+            return kb > 1024 ? `${(kb / 1024).toFixed(1)} MB/s` : `${kb.toFixed(0)} KB/s`;
+        }
+
+        function formatEta(seconds) {
+            if (!seconds || seconds < 0 || seconds > 8640000) return '—';
+            const h = Math.floor(seconds / 3600);
+            const m = Math.floor((seconds % 3600) / 60);
+            return h > 0 ? `${h}h ${m}m` : `${m}m`;
+        }
+
+        function formatSizeGb(bytes) {
+            return (bytes / (1024 ** 3)).toFixed(2) + ' GB';
+        }
+
+        function renderQbittorrentTorrents(name, torrents) {
+            return torrents.map(t => `
+                <div class="request-row">
+                    <div class="request-info" style="flex: 1;">
+                        <div class="request-title">${t.name}</div>
+                        <div class="request-meta">
+                            ${t.state} &middot; ${t.progress_pct}% &middot; &darr;${formatBytesPerSec(t.dlspeed)} &middot; &uarr;${formatBytesPerSec(t.upspeed)}
+                            &middot; ETA ${formatEta(t.eta)} &middot; ${formatSizeGb(t.size)} &middot; Ratio ${t.ratio}
+                            ${t.category ? ' &middot; ' + t.category : ''}
+                        </div>
+                    </div>
+                    <div class="card-actions" style="margin-top: 0;">
+                        <button class="mini-btn" onclick="downloaderAction('${name}', 'pause', '${t.hash}', this)">Pause</button>
+                        <button class="mini-btn" onclick="downloaderAction('${name}', 'resume', '${t.hash}', this)">Resume</button>
+                        <button class="mini-btn" onclick="downloaderAction('${name}', 'delete', '${t.hash}', this)">Delete</button>
+                    </div>
+                </div>
+            `).join('');
+        }
+
+        function renderSabnzbdQueue(name, items) {
+            return items.map(item => `
+                <div class="request-row">
+                    <div class="request-info" style="flex: 1;">
+                        <div class="request-title">${item.name}</div>
+                        <div class="request-meta">
+                            ${item.status} &middot; ${item.percentage}% &middot; ${item.size_left_mb} MB left of ${item.size_mb} MB
+                            &middot; ${item.time_left || 'ETA unknown'}${item.category ? ' &middot; ' + item.category : ''}
+                        </div>
+                    </div>
+                    <div class="card-actions" style="margin-top: 0;">
+                        <button class="mini-btn" onclick="downloaderAction('${name}', 'pause', '${item.nzo_id}', this)">Pause</button>
+                        <button class="mini-btn" onclick="downloaderAction('${name}', 'resume', '${item.nzo_id}', this)">Resume</button>
+                        <button class="mini-btn" onclick="downloaderAction('${name}', 'delete', '${item.nzo_id}', this)">Delete</button>
+                    </div>
+                </div>
+            `).join('');
+        }
+
+        async function downloaderAction(name, action, itemId, btn) {
+            const row = btn.closest('.card-actions');
+            row.querySelectorAll('button').forEach(b => b.disabled = true);
+            const original = btn.textContent;
+            btn.textContent = '...';
+
+            try {
+                const response = await fetch(`/api/downloader/action/${name}`, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ action, item_id: itemId }),
+                });
+                const result = await response.json();
+
+                if (result.ok) {
+                    loadDownloaderStatus(name); // refresh the whole list to reflect the new state
+                } else {
+                    btn.textContent = 'Failed';
+                    btn.title = result.error || 'Unknown error';
+                    row.querySelectorAll('button').forEach(b => b.disabled = false);
+                }
+            } catch (err) {
+                btn.textContent = 'Failed';
+                row.querySelectorAll('button').forEach(b => b.disabled = false);
+            }
         }
 
         function selectView(view) {
