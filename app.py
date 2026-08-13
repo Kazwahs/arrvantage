@@ -582,6 +582,9 @@ def fetch_library(name: str, config: dict) -> dict:
     data = response.json()
     records = data.get("records", data) if isinstance(data, dict) else data
 
+    if config["library_kind"] == "artist" and records:
+        print(f"[lidarr images debug] raw 'images' field for first artist: {records[0].get('images')}")
+
     library_items = [get_library_item(record, config["library_kind"], config) for record in records]
 
     # Fanart.tv artist images came back blank in practice, so this is
