@@ -70,6 +70,15 @@
 
         .group-body { padding: 0 1.25rem 1.25rem 1.25rem; }
 
+        .metadata-service-label {
+            font-weight: 600;
+            font-size: 0.85rem;
+            margin-top: 1.25rem;
+            padding-top: 1.25rem;
+            border-top: 1px solid var(--border);
+        }
+        .metadata-service-label:first-of-type { margin-top: 0; padding-top: 0; border-top: none; }
+
         /* --- Per-entry card --- */
 
         .entry-card {
@@ -310,8 +319,9 @@
             </details>
 
             <details class="group">
-                <summary>Movie/TV Metadata (TMDB)</summary>
+                <summary>Metadata Services</summary>
                 <div class="group-body">
+                    <div class="metadata-service-label">Movie/TV Metadata (TMDB)</div>
                     <div class="step-hint">Powers the "click a cast member's name" feature in movie/show detail views. Optional - skip this if you don't want that feature. Get a free API key from themoviedb.org under Settings &rarr; API.</div>
                     <div class="entry-card" id="card-tmdb" data-original-credential="{{ tmdb.api_key }}">
                         <div class="field">
@@ -327,12 +337,8 @@
                             <span id="test-status-tmdb" class="test-status"></span>
                         </div>
                     </div>
-                </div>
-            </details>
 
-            <details class="group">
-                <summary>TV Cast Data (TVDB)</summary>
-                <div class="group-body">
+                    <div class="metadata-service-label">TV Cast Data (TVDB)</div>
                     <div class="step-hint">Powers the cast list on Sonarr shows specifically - Sonarr's own API doesn't expose this. Optional, and note TVDB's API requires an active $12/year TheTVDB subscription tied to your key. Get a key at thetvdb.com under Dashboard &rarr; API Keys.</div>
                     <div class="entry-card" id="card-tvdb" data-original-apikey="{{ tvdb.api_key }}" data-original-pin="{{ tvdb.pin }}">
                         <div class="field">
@@ -350,6 +356,23 @@
                         <div class="test-row">
                             <button type="button" class="test-btn" id="test-btn-tvdb" onclick="testTvdb(this)">Test</button>
                             <span id="test-status-tvdb" class="test-status"></span>
+                        </div>
+                    </div>
+
+                    <div class="metadata-service-label">Music Images (Fanart.tv)</div>
+                    <div class="step-hint">Better artist images for Lidarr than what Lidarr's own data reliably provides - applies to both the library grid and artist detail views. Optional. Get a free API key at fanart.tv under your account settings.</div>
+                    <div class="entry-card" id="card-fanart" data-original-credential="{{ fanart.api_key }}">
+                        <div class="field">
+                            <label for="fanart_api_key">API Key</label>
+                            <div class="key-row">
+                                <input type="password" id="fanart_api_key" name="fanart_api_key" value="{{ fanart.api_key }}" autocomplete="new-password"
+                                       oninput="markUntestedFanart()">
+                                <button type="button" class="toggle-btn" onclick="toggleField('fanart_api_key', this)">Show</button>
+                            </div>
+                        </div>
+                        <div class="test-row">
+                            <button type="button" class="test-btn" id="test-btn-fanart" onclick="testFanart(this)">Test</button>
+                            <span id="test-status-fanart" class="test-status"></span>
                         </div>
                     </div>
                 </div>
@@ -852,6 +875,67 @@
         }
 
         markUntestedTvdb();
+
+        function markUntestedFanart() {
+            const field = document.getElementById('fanart_api_key');
+            const card = document.getElementById('card-fanart');
+            const statusEl = document.getElementById('test-status-fanart');
+            const value = field.value.trim();
+
+            if (value === '') {
+                testedOk['fanart'] = true;
+                statusEl.textContent = 'Not configured';
+                statusEl.className = 'test-status test-empty';
+            } else if (value === card.dataset.originalCredential) {
+                testedOk['fanart'] = true;
+                statusEl.textContent = 'Saved';
+                statusEl.className = 'test-status test-empty';
+            } else {
+                testedOk['fanart'] = false;
+                statusEl.textContent = 'Needs testing';
+                statusEl.className = 'test-status test-empty';
+            }
+            updateSaveButtonState();
+        }
+
+        async function testFanart(btn) {
+            const statusEl = document.getElementById('test-status-fanart');
+            btn.disabled = true;
+            const originalLabel = btn.textContent;
+            btn.textContent = 'Testing...';
+
+            try {
+                const response = await fetch('/api/settings/test', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({
+                        category: 'fanart',
+                        credential: document.getElementById('fanart_api_key').value.trim(),
+                    }),
+                });
+                const result = await response.json();
+
+                if (result.ok) {
+                    testedOk['fanart'] = true;
+                    statusEl.textContent = 'Connected';
+                    statusEl.className = 'test-status test-ok';
+                } else {
+                    testedOk['fanart'] = false;
+                    statusEl.textContent = result.error || 'Failed';
+                    statusEl.className = 'test-status test-fail';
+                }
+            } catch (err) {
+                testedOk['fanart'] = false;
+                statusEl.textContent = 'Request failed';
+                statusEl.className = 'test-status test-fail';
+            }
+
+            btn.disabled = false;
+            btn.textContent = originalLabel;
+            updateSaveButtonState();
+        }
+
+        markUntestedFanart();
     </script>
 </body>
 </html>

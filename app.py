@@ -127,7 +127,8 @@ CONFIG_PATH = os.path.join(CONFIG_DIR, "config.json")
 
 EMPTY_CONFIG = {
     "instances": [], "media_servers": [], "requesters": [], "downloaders": [], "users": [],
-    "tmdb": {"api_key": ""}, "tvdb": {"api_key": "", "pin": ""}, "secret_key": "",
+    "tmdb": {"api_key": ""}, "tvdb": {"api_key": "", "pin": ""},
+    "fanart": {"api_key": ""}, "secret_key": "",
 }
 
 
@@ -198,6 +199,7 @@ MEDIA_SERVERS = CONFIG.get("media_servers", [])
 REQUESTERS = CONFIG.get("requesters", [])
 TMDB = CONFIG.get("tmdb", {"api_key": ""})
 TVDB = CONFIG.get("tvdb", {"api_key": "", "pin": ""})
+FANART = CONFIG.get("fanart", {"api_key": ""})
 DOWNLOADERS = CONFIG.get("downloaders", [])
 USERS = CONFIG.get("users", [])
 
@@ -544,6 +546,11 @@ def get_library_item(record: dict, kind: str, config: dict) -> dict:
         title = record.get("artistName", "(unknown)")
         stats = record.get("statistics", {})
         detail = f"{stats.get('trackFileCount', 0)}/{stats.get('trackCount', 0)} tracks"
+        # Lidarr's own artist images are often missing/broken - Fanart.tv
+        # tends to have better coverage, looked up by MusicBrainz ID.
+        fanart_url = fetch_fanart_artist_image(record.get("foreignArtistId"))
+        if fanart_url:
+            cover_url = fanart_url
     elif kind == "author":
         title = record.get("authorName", "(unknown)")
         stats = record.get("statistics", {})
@@ -1585,6 +1592,42 @@ def fetch_series_cast(tvdb_series_id) -> dict:
 
 
 # ---------------------------------------------------------------------------
+# Fanart.tv - better artist images for Lidarr than what Lidarr's own
+# "images" data reliably provides. Looks up by MusicBrainz ID, which
+# Lidarr already carries on every artist record (Lidarr is itself
+# MusicBrainz-based under the hood).
+# ---------------------------------------------------------------------------
+
+
+def fetch_fanart_artist_image(mbid) -> str:
+    """
+    Best-guess field names: Lidarr's MusicBrainz ID field on an artist
+    record is assumed to be "foreignArtistId", and the image list key
+    in Fanart.tv's response is assumed to be "artistthumb" - check the
+    raw JSON here first if images don't show up.
+    """
+    if not mbid or not FANART.get("api_key"):
+        return ""
+
+    try:
+        response = requests.get(
+            f"https://webservice.fanart.tv/v3/music/{mbid}",
+            params={"api_key": FANART["api_key"]}, timeout=6,
+        )
+        if not response.ok:
+            return ""
+        data = response.json()
+    except requests.exceptions.RequestException:
+        return ""
+
+    thumbs = data.get("artistthumb") or []
+    if not thumbs:
+        return ""
+    thumbs.sort(key=lambda t: int(t.get("likes") or 0), reverse=True)
+    return thumbs[0].get("url", "")
+
+
+# ---------------------------------------------------------------------------
 # Downloaders (qBittorrent / SABnzbd) - separate from the arr instances
 # entirely, since a download client is usually shared across all of them
 # rather than tied to just one.
@@ -1804,6 +1847,22 @@ def api_settings_test():
             return jsonify({"ok": False, "error": str(err)})
         return jsonify({"ok": True})
 
+    if category == "fanart":
+        # Fanart.tv has no dedicated "check my key" endpoint, so this
+        # probes with a deliberately-invalid MusicBrainz ID: a bad key
+        # gets 401/403, while a valid key just returns 404 (not found)
+        # for a made-up ID - either way, that confirms the key works.
+        try:
+            response = requests.get(
+                "https://webservice.fanart.tv/v3/music/00000000-0000-0000-0000-000000000000",
+                params={"api_key": credential}, timeout=8,
+            )
+            if response.status_code in (401, 403):
+                return jsonify({"ok": False, "error": "Invalid API key"})
+        except requests.exceptions.RequestException as err:
+            return jsonify({"ok": False, "error": str(err)})
+        return jsonify({"ok": True})
+
     if not url:
         return jsonify({"ok": False, "error": "URL is required"})
 
@@ -1956,7 +2015,7 @@ def parse_users(form, existing_users: list) -> list:
 @login_required
 @admin_required
 def settings():
-    global CONFIG, APPS, MEDIA_SERVERS, REQUESTERS, DOWNLOADERS, USERS, TMDB, TVDB
+    global CONFIG, APPS, MEDIA_SERVERS, REQUESTERS, DOWNLOADERS, USERS, TMDB, TVDB, FANART
 
     if request.method == "POST":
         new_config = {
@@ -1974,6 +2033,7 @@ def settings():
                 "api_key": request.form.get("tvdb_api_key", "").strip(),
                 "pin": request.form.get("tvdb_pin", "").strip(),
             },
+            "fanart": {"api_key": request.form.get("fanart_api_key", "").strip()},
             "secret_key": CONFIG["secret_key"],  # never edited via the form - carry it forward
         }
         save_config(new_config)
@@ -1988,6 +2048,7 @@ def settings():
         USERS = CONFIG["users"]
         TMDB = CONFIG["tmdb"]
         TVDB = CONFIG["tvdb"]
+        FANART = CONFIG["fanart"]
 
         # Only the admin can reach this route, so keep their session
         # pointed at their account even if they just renamed themselves.
@@ -2006,6 +2067,7 @@ def settings():
         users=CONFIG.get("users", []),
         tmdb=CONFIG.get("tmdb", {"api_key": ""}),
         tvdb=CONFIG.get("tvdb", {"api_key": "", "pin": ""}),
+        fanart=CONFIG.get("fanart", {"api_key": ""}),
         kind_options=KIND_META,
         media_server_type_options=MEDIA_SERVER_TYPES,
         requester_type_options=REQUESTER_TYPES,
