@@ -488,18 +488,22 @@ def get_genre(record: dict) -> str:
 def get_cover_url(record: dict, config: dict) -> str:
     """
     Pull the poster image URL out of the record's "images" list.
-    Prefer "remoteUrl" (points straight at the original source, like
-    TMDB - loads with no auth needed) and fall back to the arr
-    instance's own copy, with the API key appended as a query param
-    since <img> tags can't send custom headers.
+    Prefer "remoteUrl" when it's an actual absolute URL (points
+    straight at the original source, like TMDB - loads with no auth
+    needed). Some instances (confirmed on Lidarr) put an internal
+    container path in "remoteUrl" instead of a real external link, so
+    this checks for a real http(s) URL before trusting it, and falls
+    back to the arr instance's own copy - with the API key appended as
+    a query param, since <img> tags can't send custom headers.
     """
     images = record.get("images") or []
     poster = next((img for img in images if img.get("coverType") == "poster"), None)
     if not poster:
         return ""
 
-    if poster.get("remoteUrl"):
-        return poster["remoteUrl"]
+    remote_url = poster.get("remoteUrl", "")
+    if remote_url.startswith("http://") or remote_url.startswith("https://"):
+        return remote_url
 
     path = poster.get("url", "")
     if not path:
@@ -581,9 +585,6 @@ def fetch_library(name: str, config: dict) -> dict:
 
     data = response.json()
     records = data.get("records", data) if isinstance(data, dict) else data
-
-    if config["library_kind"] == "artist" and records:
-        print(f"[lidarr images debug] raw 'images' field for first artist: {records[0].get('images')}")
 
     library_items = [get_library_item(record, config["library_kind"], config) for record in records]
 
