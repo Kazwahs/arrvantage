@@ -34,4 +34,8 @@ EXPOSE 5000
 # gunicorn imports the `app` object from app.py directly - this never
 # runs app.py's own `if __name__ == "__main__"` block, so the Flask
 # dev server (and its debug mode) is never used in the container.
-CMD ["gunicorn", "--bind", "0.0.0.0:5000", "--workers", "2", "app:app"]
+# --timeout raised from gunicorn's 30s default: page loads that fan out
+# to external metadata APIs (TMDB/TVDB/Fanart.tv) for many library
+# items at once can genuinely take a while for a large library, even
+# running those lookups in parallel.
+CMD ["gunicorn", "--bind", "0.0.0.0:5000", "--workers", "2", "--timeout", "90", "app:app"]

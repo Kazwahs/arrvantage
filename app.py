@@ -23,6 +23,7 @@ import os
 import re
 import secrets
 import requests
+import concurrent.futures
 
 app = Flask(__name__)
 
@@ -546,11 +547,6 @@ def get_library_item(record: dict, kind: str, config: dict) -> dict:
         title = record.get("artistName", "(unknown)")
         stats = record.get("statistics", {})
         detail = f"{stats.get('trackFileCount', 0)}/{stats.get('trackCount', 0)} tracks"
-        # Lidarr's own artist images are often missing/broken - Fanart.tv
-        # tends to have better coverage, looked up by MusicBrainz ID.
-        fanart_url = fetch_fanart_artist_image(record.get("foreignArtistId"))
-        if fanart_url:
-            cover_url = fanart_url
     elif kind == "author":
         title = record.get("authorName", "(unknown)")
         stats = record.get("statistics", {})
@@ -562,7 +558,8 @@ def get_library_item(record: dict, kind: str, config: dict) -> dict:
     return {"title": title, "detail": detail, "status": status, "genre": genre,
             "cover_url": cover_url, "item_id": record.get("id"),
             "tmdb_id": record.get("tmdbId") if kind == "movie" else None,
-            "tvdb_id": record.get("tvdbId") if kind == "series" else None}
+            "tvdb_id": record.get("tvdbId") if kind == "series" else None,
+            "foreign_artist_id": record.get("foreignArtistId") if kind == "artist" else None}
 
 
 def fetch_library(name: str, config: dict) -> dict:
@@ -586,6 +583,10 @@ def fetch_library(name: str, config: dict) -> dict:
     records = data.get("records", data) if isinstance(data, dict) else data
 
     library_items = [get_library_item(record, config["library_kind"], config) for record in records]
+
+    if config["library_kind"] == "artist" and FANART.get("api_key"):
+        enrich_artist_covers_with_fanart(library_items)
+
     library_items.sort(key=lambda item: item["title"].lower())
 
     status_options = sorted({item["status"] for item in library_items})
@@ -1625,6 +1626,34 @@ def fetch_fanart_artist_image(mbid) -> str:
         return ""
     thumbs.sort(key=lambda t: int(t.get("likes") or 0), reverse=True)
     return thumbs[0].get("url", "")
+
+
+def enrich_artist_covers_with_fanart(library_items: list) -> None:
+    """
+    Fills in Fanart.tv images for artists Lidarr has no cover for at
+    all - only for those (not as a blanket override), and fired in
+    parallel rather than one-by-one. Doing this sequentially inside
+    get_library_item was pushing whole page loads for larger libraries
+    past gunicorn's worker timeout, since it's one live external call
+    per artist. Mutates library_items in place.
+    """
+    targets = [item for item in library_items if not item["cover_url"] and item.get("foreign_artist_id")]
+    if not targets:
+        return
+
+    with concurrent.futures.ThreadPoolExecutor(max_workers=8) as executor:
+        future_to_item = {
+            executor.submit(fetch_fanart_artist_image, item["foreign_artist_id"]): item
+            for item in targets
+        }
+        for future in concurrent.futures.as_completed(future_to_item):
+            item = future_to_item[future]
+            try:
+                url = future.result()
+                if url:
+                    item["cover_url"] = url
+            except Exception:
+                pass  # leave that one artist without a cover rather than fail the whole page
 
 
 # ---------------------------------------------------------------------------
