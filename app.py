@@ -584,9 +584,11 @@ def fetch_library(name: str, config: dict) -> dict:
 
     library_items = [get_library_item(record, config["library_kind"], config) for record in records]
 
-    if config["library_kind"] == "artist" and FANART.get("api_key"):
-        enrich_artist_covers_with_fanart(library_items)
-
+    # Fanart.tv artist images came back blank in practice, so this is
+    # disabled for now - back to using Lidarr's own images only. The
+    # Fanart.tv integration itself (settings, key, test button,
+    # enrich_artist_covers_with_fanart below) is left in place in case
+    # it's useful for something else later.
     library_items.sort(key=lambda item: item["title"].lower())
 
     status_options = sorted({item["status"] for item in library_items})
