@@ -127,7 +127,7 @@ CONFIG_PATH = os.path.join(CONFIG_DIR, "config.json")
 
 EMPTY_CONFIG = {
     "instances": [], "media_servers": [], "requesters": [], "downloaders": [], "users": [],
-    "tmdb": {"api_key": ""}, "secret_key": "",
+    "tmdb": {"api_key": ""}, "tvdb": {"api_key": "", "pin": ""}, "secret_key": "",
 }
 
 
@@ -197,6 +197,7 @@ APPS = build_apps(CONFIG)
 MEDIA_SERVERS = CONFIG.get("media_servers", [])
 REQUESTERS = CONFIG.get("requesters", [])
 TMDB = CONFIG.get("tmdb", {"api_key": ""})
+TVDB = CONFIG.get("tvdb", {"api_key": "", "pin": ""})
 DOWNLOADERS = CONFIG.get("downloaders", [])
 USERS = CONFIG.get("users", [])
 
@@ -772,12 +773,16 @@ def fetch_series_details(config: dict, series_id: int) -> dict:
 
     # Sonarr doesn't expose a cast/credit endpoint the way Radarr does
     # (its metadata pipeline is TVDB-based, not TMDB-based) - confirmed
-    # via a 404 on /api/v3/credit, so this isn't attempted at all.
+    # via a 404 on /api/v3/credit. Pull cast from TVDB directly instead,
+    # using the series' own tvdbId.
+    cast_result = fetch_series_cast(series.get("tvdbId"))
 
     return {
         "overview": series.get("overview", "No description available."),
         "rating": get_rating_text(series.get("ratings", {})),
         "seasons": seasons,
+        "cast": cast_result["cast"],
+        "cast_available": cast_result["cast_available"],
     }
 
 
@@ -1509,6 +1514,77 @@ def api_actor_filmography(instance_name):
 
 
 # ---------------------------------------------------------------------------
+# TVDB (TheTVDB) - Sonarr cast lists. Sonarr's own API doesn't expose
+# cast/credit data (confirmed via a 404 earlier), so this pulls it
+# directly from TheTVDB instead, using the series' own tvdbId.
+# ---------------------------------------------------------------------------
+
+
+def tvdb_login():
+    """
+    TVDB uses a login-for-a-token flow rather than a simple query-string
+    key - exchange the API key (+ optional subscriber PIN) for a bearer
+    token, valid for about a month. Logged in fresh each time here for
+    simplicity, rather than caching/tracking token expiry.
+    """
+    if not TVDB.get("api_key"):
+        return None
+
+    payload = {"apikey": TVDB["api_key"]}
+    if TVDB.get("pin"):
+        payload["pin"] = TVDB["pin"]
+
+    try:
+        response = requests.post("https://api4.thetvdb.com/v4/login", json=payload, timeout=10)
+        response.raise_for_status()
+        return response.json().get("data", {}).get("token")
+    except requests.exceptions.RequestException:
+        return None
+
+
+def fetch_series_cast(tvdb_series_id) -> dict:
+    """
+    TVDB's cast/character data lives on a series' "extended" record.
+    Field names for each character entry are a best guess (personName,
+    name-as-character-role, image) - if cast looks wrong or empty, the
+    raw JSON from this endpoint is the place to check.
+    """
+    if not tvdb_series_id:
+        return {"cast": [], "cast_available": False}
+
+    token = tvdb_login()
+    if not token:
+        return {"cast": [], "cast_available": False}
+
+    try:
+        response = requests.get(
+            f"https://api4.thetvdb.com/v4/series/{tvdb_series_id}/extended",
+            headers={"Authorization": f"Bearer {token}"}, timeout=15,
+        )
+        response.raise_for_status()
+        data = response.json().get("data", {})
+    except requests.exceptions.RequestException:
+        return {"cast": [], "cast_available": False}
+
+    characters = data.get("characters") or []
+    cast = [
+        {
+            "name": c.get("personName", "?"),
+            "role": c.get("name", ""),
+            # TVDB people aren't cross-referenced with TMDB's person IDs,
+            # so these names aren't clickable for the filmography feature
+            # the way movie cast is - that's TMDB-specific.
+            "person_tmdb_id": None,
+            "image_url": c.get("image") or "",
+        }
+        for c in characters
+        if not c.get("peopleType") or c.get("peopleType") == "Actor"
+    ][:20]
+
+    return {"cast": cast, "cast_available": True}
+
+
+# ---------------------------------------------------------------------------
 # Downloaders (qBittorrent / SABnzbd) - separate from the arr instances
 # entirely, since a download client is usually shared across all of them
 # rather than tied to just one.
@@ -1709,6 +1785,25 @@ def api_settings_test():
             return jsonify({"ok": False, "error": str(err)})
         return jsonify({"ok": True})
 
+    if category == "tvdb":
+        # TVDB uses a login-for-a-token flow, not a simple query-string
+        # key - "testing" it means actually attempting that login.
+        pin = (body.get("pin") or "").strip()
+        payload = {"apikey": credential}
+        if pin:
+            payload["pin"] = pin
+        try:
+            response = requests.post("https://api4.thetvdb.com/v4/login", json=payload, timeout=8)
+            response.raise_for_status()
+            if not response.json().get("data", {}).get("token"):
+                return jsonify({"ok": False, "error": "Login succeeded but no token was returned"})
+        except requests.exceptions.HTTPError:
+            detail = response.text[:200] if response is not None else "no response body"
+            return jsonify({"ok": False, "error": f"HTTP {response.status_code}: {detail}"})
+        except requests.exceptions.RequestException as err:
+            return jsonify({"ok": False, "error": str(err)})
+        return jsonify({"ok": True})
+
     if not url:
         return jsonify({"ok": False, "error": "URL is required"})
 
@@ -1861,7 +1956,7 @@ def parse_users(form, existing_users: list) -> list:
 @login_required
 @admin_required
 def settings():
-    global CONFIG, APPS, MEDIA_SERVERS, REQUESTERS, DOWNLOADERS, USERS, TMDB
+    global CONFIG, APPS, MEDIA_SERVERS, REQUESTERS, DOWNLOADERS, USERS, TMDB, TVDB
 
     if request.method == "POST":
         new_config = {
@@ -1875,6 +1970,10 @@ def settings():
                 request.form, "downloader", ["type", "url", "api_key", "color", "enabled"])),
             "users": parse_users(request.form, CONFIG.get("users", [])),
             "tmdb": {"api_key": request.form.get("tmdb_api_key", "").strip()},
+            "tvdb": {
+                "api_key": request.form.get("tvdb_api_key", "").strip(),
+                "pin": request.form.get("tvdb_pin", "").strip(),
+            },
             "secret_key": CONFIG["secret_key"],  # never edited via the form - carry it forward
         }
         save_config(new_config)
@@ -1888,6 +1987,7 @@ def settings():
         DOWNLOADERS = CONFIG["downloaders"]
         USERS = CONFIG["users"]
         TMDB = CONFIG["tmdb"]
+        TVDB = CONFIG["tvdb"]
 
         # Only the admin can reach this route, so keep their session
         # pointed at their account even if they just renamed themselves.
@@ -1905,6 +2005,7 @@ def settings():
         downloaders=CONFIG.get("downloaders", []),
         users=CONFIG.get("users", []),
         tmdb=CONFIG.get("tmdb", {"api_key": ""}),
+        tvdb=CONFIG.get("tvdb", {"api_key": "", "pin": ""}),
         kind_options=KIND_META,
         media_server_type_options=MEDIA_SERVER_TYPES,
         requester_type_options=REQUESTER_TYPES,

@@ -1480,6 +1480,8 @@
                 <div class="modal-overview">${data.overview}</div>
                 <div class="modal-section-title">Seasons</div>
                 ${seasonRows || '<div class="modal-empty">No seasons found</div>'}
+                <div class="modal-section-title">Cast</div>
+                ${renderCast(instance, data.cast, data.cast_available)}
             `;
         }
 

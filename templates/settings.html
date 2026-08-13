@@ -331,6 +331,31 @@
             </details>
 
             <details class="group">
+                <summary>TV Cast Data (TVDB)</summary>
+                <div class="group-body">
+                    <div class="step-hint">Powers the cast list on Sonarr shows specifically - Sonarr's own API doesn't expose this. Optional, and note TVDB's API requires an active $12/year TheTVDB subscription tied to your key. Get a key at thetvdb.com under Dashboard &rarr; API Keys.</div>
+                    <div class="entry-card" id="card-tvdb" data-original-apikey="{{ tvdb.api_key }}" data-original-pin="{{ tvdb.pin }}">
+                        <div class="field">
+                            <label for="tvdb_api_key">API Key</label>
+                            <div class="key-row">
+                                <input type="password" id="tvdb_api_key" name="tvdb_api_key" value="{{ tvdb.api_key }}" autocomplete="new-password"
+                                       oninput="markUntestedTvdb()">
+                                <button type="button" class="toggle-btn" onclick="toggleField('tvdb_api_key', this)">Show</button>
+                            </div>
+                        </div>
+                        <div class="field">
+                            <label for="tvdb_pin">Subscriber PIN (only if your key requires one)</label>
+                            <input type="text" id="tvdb_pin" name="tvdb_pin" value="{{ tvdb.pin }}" oninput="markUntestedTvdb()">
+                        </div>
+                        <div class="test-row">
+                            <button type="button" class="test-btn" id="test-btn-tvdb" onclick="testTvdb(this)">Test</button>
+                            <span id="test-status-tvdb" class="test-status"></span>
+                        </div>
+                    </div>
+                </div>
+            </details>
+
+            <details class="group">
                 <summary>Users</summary>
                 <div class="group-body">
                     <div id="user-cards"></div>
@@ -763,6 +788,70 @@
         }
 
         markUntestedTmdb();
+
+        function markUntestedTvdb() {
+            const apiKeyField = document.getElementById('tvdb_api_key');
+            const pinField = document.getElementById('tvdb_pin');
+            const card = document.getElementById('card-tvdb');
+            const statusEl = document.getElementById('test-status-tvdb');
+            const apiKey = apiKeyField.value.trim();
+            const pin = pinField.value.trim();
+
+            if (apiKey === '') {
+                testedOk['tvdb'] = true;
+                statusEl.textContent = 'Not configured';
+                statusEl.className = 'test-status test-empty';
+            } else if (apiKey === card.dataset.originalApikey && pin === card.dataset.originalPin) {
+                testedOk['tvdb'] = true;
+                statusEl.textContent = 'Saved';
+                statusEl.className = 'test-status test-empty';
+            } else {
+                testedOk['tvdb'] = false;
+                statusEl.textContent = 'Needs testing';
+                statusEl.className = 'test-status test-empty';
+            }
+            updateSaveButtonState();
+        }
+
+        async function testTvdb(btn) {
+            const statusEl = document.getElementById('test-status-tvdb');
+            btn.disabled = true;
+            const originalLabel = btn.textContent;
+            btn.textContent = 'Testing...';
+
+            try {
+                const response = await fetch('/api/settings/test', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({
+                        category: 'tvdb',
+                        credential: document.getElementById('tvdb_api_key').value.trim(),
+                        pin: document.getElementById('tvdb_pin').value.trim(),
+                    }),
+                });
+                const result = await response.json();
+
+                if (result.ok) {
+                    testedOk['tvdb'] = true;
+                    statusEl.textContent = 'Connected';
+                    statusEl.className = 'test-status test-ok';
+                } else {
+                    testedOk['tvdb'] = false;
+                    statusEl.textContent = result.error || 'Failed';
+                    statusEl.className = 'test-status test-fail';
+                }
+            } catch (err) {
+                testedOk['tvdb'] = false;
+                statusEl.textContent = 'Request failed';
+                statusEl.className = 'test-status test-fail';
+            }
+
+            btn.disabled = false;
+            btn.textContent = originalLabel;
+            updateSaveButtonState();
+        }
+
+        markUntestedTvdb();
     </script>
 </body>
 </html>
