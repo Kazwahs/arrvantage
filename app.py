@@ -1741,10 +1741,9 @@ def fetch_audiodb_artist_bio(mbid) -> str:
     Lidarr/MusicBrainz has no artist biography data at all - it's a
     structured metadata database, not a source of bio text. TheAudioDB
     does have one, looked up by the same MusicBrainz ID already used
-    for Fanart.tv. Best-guess field name: "strBiographyEN".
+    for Fanart.tv.
     """
     if not mbid or not THEAUDIODB.get("api_key"):
-        print(f"[audiodb bio debug] skipped - mbid={mbid!r}, api_key configured={bool(THEAUDIODB.get('api_key'))}")
         return ""
 
     try:
@@ -1752,17 +1751,17 @@ def fetch_audiodb_artist_bio(mbid) -> str:
             f"https://www.theaudiodb.com/api/v1/json/{THEAUDIODB['api_key']}/artist-mb.php",
             params={"i": mbid}, timeout=8,
         )
-        print(f"[audiodb bio debug] mbid={mbid!r} status={response.status_code} body={response.text[:500]}")
         if not response.ok:
             return ""
         artists = response.json().get("artists") or []
-    except requests.exceptions.RequestException as err:
-        print(f"[audiodb bio debug] request failed for mbid={mbid!r}: {err}")
+    except requests.exceptions.RequestException:
         return ""
 
     if not artists:
         return ""
-    return artists[0].get("strBiographyEN") or ""
+    # "strBiographyEN" doesn't appear to exist on real responses - the
+    # actual field, confirmed against live data, is "strBiography".
+    return artists[0].get("strBiography") or ""
 
 
 # ---------------------------------------------------------------------------
