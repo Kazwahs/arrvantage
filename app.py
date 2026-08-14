@@ -129,7 +129,7 @@ CONFIG_PATH = os.path.join(CONFIG_DIR, "config.json")
 EMPTY_CONFIG = {
     "instances": [], "media_servers": [], "requesters": [], "downloaders": [], "users": [],
     "tmdb": {"api_key": ""}, "tvdb": {"api_key": "", "pin": ""},
-    "fanart": {"api_key": ""}, "secret_key": "",
+    "fanart": {"api_key": ""}, "theaudiodb": {"api_key": "123"}, "secret_key": "",
 }
 
 
@@ -201,6 +201,7 @@ REQUESTERS = CONFIG.get("requesters", [])
 TMDB = CONFIG.get("tmdb", {"api_key": ""})
 TVDB = CONFIG.get("tvdb", {"api_key": "", "pin": ""})
 FANART = CONFIG.get("fanart", {"api_key": ""})
+THEAUDIODB = CONFIG.get("theaudiodb", {"api_key": "123"})
 DOWNLOADERS = CONFIG.get("downloaders", [])
 USERS = CONFIG.get("users", [])
 
@@ -830,6 +831,9 @@ def fetch_artist_albums(config: dict, artist_id: int) -> dict:
     artist_response.raise_for_status()
     artist = artist_response.json()
 
+    audiodb_bio = fetch_audiodb_artist_bio(artist.get("foreignArtistId"))
+    overview = audiodb_bio or artist.get("overview") or "No description available."
+
     response = requests.get(
         f"{base}/api/v1/album", headers=headers,
         params={"artistId": artist_id}, timeout=10,
@@ -837,7 +841,7 @@ def fetch_artist_albums(config: dict, artist_id: int) -> dict:
     response.raise_for_status()
     albums = sorted(response.json(), key=lambda a: a.get("releaseDate", "") or "")
     return {
-        "overview": artist.get("overview") or "No description available.",
+        "overview": overview,
         "albums": [
             {
                 "album_id": a.get("id"),
@@ -1732,6 +1736,32 @@ def enrich_artist_covers_with_fanart(library_items: list) -> None:
                 pass  # leave that one artist without a cover rather than fail the whole page
 
 
+def fetch_audiodb_artist_bio(mbid) -> str:
+    """
+    Lidarr/MusicBrainz has no artist biography data at all - it's a
+    structured metadata database, not a source of bio text. TheAudioDB
+    does have one, looked up by the same MusicBrainz ID already used
+    for Fanart.tv. Best-guess field name: "strBiographyEN".
+    """
+    if not mbid or not THEAUDIODB.get("api_key"):
+        return ""
+
+    try:
+        response = requests.get(
+            f"https://www.theaudiodb.com/api/v1/json/{THEAUDIODB['api_key']}/artist-mb.php",
+            params={"i": mbid}, timeout=8,
+        )
+        if not response.ok:
+            return ""
+        artists = response.json().get("artists") or []
+    except requests.exceptions.RequestException:
+        return ""
+
+    if not artists:
+        return ""
+    return artists[0].get("strBiographyEN") or ""
+
+
 # ---------------------------------------------------------------------------
 # Downloaders (qBittorrent / SABnzbd) - separate from the arr instances
 # entirely, since a download client is usually shared across all of them
@@ -1968,6 +1998,21 @@ def api_settings_test():
             return jsonify({"ok": False, "error": str(err)})
         return jsonify({"ok": True})
 
+    if category == "theaudiodb":
+        # No dedicated key-check endpoint either - search for a
+        # well-known artist and confirm real results come back.
+        try:
+            response = requests.get(
+                f"https://www.theaudiodb.com/api/v1/json/{credential}/search.php",
+                params={"s": "Coldplay"}, timeout=8,
+            )
+            response.raise_for_status()
+            if not response.json().get("artists"):
+                return jsonify({"ok": False, "error": "Key didn't return any results - it may be invalid"})
+        except requests.exceptions.RequestException as err:
+            return jsonify({"ok": False, "error": str(err)})
+        return jsonify({"ok": True})
+
     if not url:
         return jsonify({"ok": False, "error": "URL is required"})
 
@@ -2120,7 +2165,7 @@ def parse_users(form, existing_users: list) -> list:
 @login_required
 @admin_required
 def settings():
-    global CONFIG, APPS, MEDIA_SERVERS, REQUESTERS, DOWNLOADERS, USERS, TMDB, TVDB, FANART
+    global CONFIG, APPS, MEDIA_SERVERS, REQUESTERS, DOWNLOADERS, USERS, TMDB, TVDB, FANART, THEAUDIODB
 
     if request.method == "POST":
         new_config = {
@@ -2139,6 +2184,7 @@ def settings():
                 "pin": request.form.get("tvdb_pin", "").strip(),
             },
             "fanart": {"api_key": request.form.get("fanart_api_key", "").strip()},
+            "theaudiodb": {"api_key": request.form.get("theaudiodb_api_key", "123").strip() or "123"},
             "secret_key": CONFIG["secret_key"],  # never edited via the form - carry it forward
         }
         save_config(new_config)
@@ -2154,6 +2200,7 @@ def settings():
         TMDB = CONFIG["tmdb"]
         TVDB = CONFIG["tvdb"]
         FANART = CONFIG["fanart"]
+        THEAUDIODB = CONFIG["theaudiodb"]
 
         # Only the admin can reach this route, so keep their session
         # pointed at their account even if they just renamed themselves.
@@ -2173,6 +2220,7 @@ def settings():
         tmdb=CONFIG.get("tmdb", {"api_key": ""}),
         tvdb=CONFIG.get("tvdb", {"api_key": "", "pin": ""}),
         fanart=CONFIG.get("fanart", {"api_key": ""}),
+        theaudiodb=CONFIG.get("theaudiodb", {"api_key": "123"}),
         kind_options=KIND_META,
         media_server_type_options=MEDIA_SERVER_TYPES,
         requester_type_options=REQUESTER_TYPES,

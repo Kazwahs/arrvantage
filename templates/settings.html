@@ -375,6 +375,23 @@
                             <span id="test-status-fanart" class="test-status"></span>
                         </div>
                     </div>
+
+                    <div class="metadata-service-label">Artist Bios (TheAudioDB)</div>
+                    <div class="step-hint">Lidarr/MusicBrainz has no artist biography data at all, so this fills that gap. Works out of the box with the shared public test key (already filled in below) - only change this if you have your own TheAudioDB key.</div>
+                    <div class="entry-card" id="card-theaudiodb" data-original-credential="{{ theaudiodb.api_key }}">
+                        <div class="field">
+                            <label for="theaudiodb_api_key">API Key</label>
+                            <div class="key-row">
+                                <input type="password" id="theaudiodb_api_key" name="theaudiodb_api_key" value="{{ theaudiodb.api_key }}" autocomplete="new-password"
+                                       oninput="markUntestedTheaudiodb()">
+                                <button type="button" class="toggle-btn" onclick="toggleField('theaudiodb_api_key', this)">Show</button>
+                            </div>
+                        </div>
+                        <div class="test-row">
+                            <button type="button" class="test-btn" id="test-btn-theaudiodb" onclick="testTheaudiodb(this)">Test</button>
+                            <span id="test-status-theaudiodb" class="test-status"></span>
+                        </div>
+                    </div>
                 </div>
             </details>
 
@@ -936,6 +953,67 @@
         }
 
         markUntestedFanart();
+
+        function markUntestedTheaudiodb() {
+            const field = document.getElementById('theaudiodb_api_key');
+            const card = document.getElementById('card-theaudiodb');
+            const statusEl = document.getElementById('test-status-theaudiodb');
+            const value = field.value.trim();
+
+            if (value === '') {
+                testedOk['theaudiodb'] = true;
+                statusEl.textContent = 'Not configured';
+                statusEl.className = 'test-status test-empty';
+            } else if (value === card.dataset.originalCredential) {
+                testedOk['theaudiodb'] = true;
+                statusEl.textContent = 'Saved';
+                statusEl.className = 'test-status test-empty';
+            } else {
+                testedOk['theaudiodb'] = false;
+                statusEl.textContent = 'Needs testing';
+                statusEl.className = 'test-status test-empty';
+            }
+            updateSaveButtonState();
+        }
+
+        async function testTheaudiodb(btn) {
+            const statusEl = document.getElementById('test-status-theaudiodb');
+            btn.disabled = true;
+            const originalLabel = btn.textContent;
+            btn.textContent = 'Testing...';
+
+            try {
+                const response = await fetch('/api/settings/test', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({
+                        category: 'theaudiodb',
+                        credential: document.getElementById('theaudiodb_api_key').value.trim(),
+                    }),
+                });
+                const result = await response.json();
+
+                if (result.ok) {
+                    testedOk['theaudiodb'] = true;
+                    statusEl.textContent = 'Connected';
+                    statusEl.className = 'test-status test-ok';
+                } else {
+                    testedOk['theaudiodb'] = false;
+                    statusEl.textContent = result.error || 'Failed';
+                    statusEl.className = 'test-status test-fail';
+                }
+            } catch (err) {
+                testedOk['theaudiodb'] = false;
+                statusEl.textContent = 'Request failed';
+                statusEl.className = 'test-status test-fail';
+            }
+
+            btn.disabled = false;
+            btn.textContent = originalLabel;
+            updateSaveButtonState();
+        }
+
+        markUntestedTheaudiodb();
     </script>
 </body>
 </html>
