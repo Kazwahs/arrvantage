@@ -1532,6 +1532,7 @@
             `).join('');
 
             content.innerHTML = `
+                <div class="modal-overview">${data.overview}</div>
                 <div class="modal-section-title">Albums</div>
                 ${albumRows || '<div class="modal-empty">No albums found</div>'}
             `;
@@ -1553,12 +1554,83 @@
             try {
                 const response = await fetch(`/api/details/lidarr-tracks/${instance}/${albumId}`);
                 const tracks = await response.json();
-                subList.innerHTML = tracks.map(t => `
-                    <div class="item"><span>${t.track_number}. ${t.title}</span></div>
+
+                const trackRows = tracks.map(t => `
+                    <div class="item">
+                        <span>${t.track_number}. ${t.title}</span>
+                        <span class="col-muted">${t.has_file ? 'Downloaded' : 'Missing'}</span>
+                    </div>
                 `).join('') || '<div class="modal-empty">No tracks found</div>';
+
+                // Lidarr has no per-track search - albums are released
+                // as a whole, so these buttons search the whole album,
+                // shown once whenever anything in it is still missing.
+                const hasMissing = tracks.some(t => !t.has_file);
+                const searchButtons = (hasMissing && CAN_SEARCH) ? `
+                    <div class="card-actions" style="margin-top: 0.5rem;">
+                        <button class="mini-btn" onclick="triggerAlbumAutoSearch(this, '${instance}', ${albumId})">Auto Search Album</button>
+                        <button class="mini-btn" onclick="openAlbumInteractiveSearch('${instance}', ${albumId})">Find Releases</button>
+                    </div>
+                ` : '';
+
+                subList.innerHTML = trackRows + searchButtons;
                 subList.dataset.loaded = 'true';
             } catch (err) {
                 subList.innerHTML = '<div class="modal-empty">Could not load tracks</div>';
+            }
+        }
+
+        async function triggerAlbumAutoSearch(btn, instance, albumId) {
+            btn.disabled = true;
+            const original = btn.textContent;
+            btn.textContent = 'Searching...';
+
+            try {
+                const response = await fetch(`/api/search/album-auto/${instance}/${albumId}`, { method: 'POST' });
+                const result = await response.json();
+                btn.textContent = result.ok ? 'Triggered' : 'Failed';
+            } catch (err) {
+                btn.textContent = 'Failed';
+            }
+
+            setTimeout(() => { btn.disabled = false; btn.textContent = original; }, 3000);
+        }
+
+        async function openAlbumInteractiveSearch(instance, albumId) {
+            const body = document.getElementById('modal-body');
+            savedModalBody = body.innerHTML; // same back-navigation pattern used elsewhere in the modal
+
+            body.innerHTML = `
+                <button class="back-to-cast-btn" onclick="restoreCastView()">&larr; Back</button>
+                <div class="modal-section-title">Find releases for this album</div>
+                <div class="modal-loading">Searching indexers...</div>
+            `;
+
+            try {
+                const response = await fetch(`/api/search/album-interactive/${instance}/${albumId}`);
+                const releases = await response.json();
+                const loadingEl = body.querySelector('.modal-loading');
+
+                if (releases.error) {
+                    loadingEl.outerHTML = `<div class="modal-loading">Search failed: ${releases.error}</div>`;
+                    return;
+                }
+                if (!releases.length) {
+                    loadingEl.outerHTML = '<div class="modal-empty">No releases found.</div>';
+                    return;
+                }
+
+                loadingEl.outerHTML = releases.map(r => `
+                    <div class="release-row ${r.rejected ? 'release-rejected' : ''}">
+                        <div class="release-info">
+                            <div class="release-title">${r.title}</div>
+                            <div class="release-meta">${r.indexer} &middot; ${r.quality} &middot; ${r.size_gb} GB${r.seeders !== null && r.seeders !== undefined ? ' &middot; ' + r.seeders + ' seeders' : ''}</div>
+                        </div>
+                        <button class="request-btn" onclick="grabRelease(this, '${instance}', '${r.guid}', ${r.indexer_id})">Grab</button>
+                    </div>
+                `).join('');
+            } catch (err) {
+                body.querySelector('.modal-loading').outerHTML = '<div class="modal-loading">Search failed.</div>';
             }
         }
 

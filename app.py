@@ -825,6 +825,11 @@ def fetch_sonarr_episodes(config: dict, series_id: int, season_number: int) -> l
 def fetch_artist_albums(config: dict, artist_id: int) -> dict:
     base = config["url"].rstrip("/")
     headers = {"X-Api-Key": config["api_key"]}
+
+    artist_response = requests.get(f"{base}/api/v1/artist/{artist_id}", headers=headers, timeout=10)
+    artist_response.raise_for_status()
+    artist = artist_response.json()
+
     response = requests.get(
         f"{base}/api/v1/album", headers=headers,
         params={"artistId": artist_id}, timeout=10,
@@ -832,6 +837,7 @@ def fetch_artist_albums(config: dict, artist_id: int) -> dict:
     response.raise_for_status()
     albums = sorted(response.json(), key=lambda a: a.get("releaseDate", "") or "")
     return {
+        "overview": artist.get("overview") or "No description available.",
         "albums": [
             {
                 "album_id": a.get("id"),
@@ -853,7 +859,11 @@ def fetch_lidarr_tracks(config: dict, album_id: int) -> list:
     response.raise_for_status()
     tracks = sorted(response.json(), key=lambda t: t.get("trackNumber", 0))
     return [
-        {"track_number": t.get("trackNumber"), "title": t.get("title", "(untitled)")}
+        {
+            "track_number": t.get("trackNumber"),
+            "title": t.get("title", "(untitled)"),
+            "has_file": t.get("hasFile", False),
+        }
         for t in tracks
     ]
 
@@ -1124,6 +1134,66 @@ def api_search_episode_interactive(instance_name, episode_id):
         return jsonify({"error": "not a series instance"}), 404
     try:
         return jsonify(fetch_episode_releases(config, episode_id))
+    except requests.exceptions.RequestException as err:
+        return jsonify({"error": str(err)}), 502
+
+
+def trigger_album_auto_search(config: dict, album_id: int) -> None:
+    """
+    Lidarr has no per-track search command (music is released as whole
+    albums, not individual tracks) - AlbumSearch is the finest
+    granularity available, same one used for "search this album" from
+    Lidarr's own UI.
+    """
+    url = f"{config['url'].rstrip('/')}/api/v1/command"
+    headers = {"X-Api-Key": config["api_key"]}
+    response = requests.post(url, headers=headers, json={"name": "AlbumSearch", "albumIds": [album_id]}, timeout=15)
+    response.raise_for_status()
+
+
+@app.route("/api/search/album-auto/<instance_name>/<int:album_id>", methods=["POST"])
+@login_required
+@permission_required("searching")
+def api_search_album_auto(instance_name, album_id):
+    config = APPS.get(instance_name)
+    if not config or config.get("library_kind") != "artist":
+        return jsonify({"ok": False, "error": "not a Lidarr instance"}), 404
+    try:
+        trigger_album_auto_search(config, album_id)
+        return jsonify({"ok": True})
+    except requests.exceptions.RequestException as err:
+        return jsonify({"ok": False, "error": str(err)}), 502
+
+
+def fetch_album_releases(config: dict, album_id: int) -> list:
+    url = f"{config['url'].rstrip('/')}/api/v1/release"
+    headers = {"X-Api-Key": config["api_key"]}
+    response = requests.get(url, headers=headers, params={"albumId": album_id}, timeout=30)
+    response.raise_for_status()
+    return [
+        {
+            "guid": r.get("guid"),
+            "indexer_id": r.get("indexerId"),
+            "title": r.get("title", "(untitled release)"),
+            "indexer": r.get("indexer", "?"),
+            "size_gb": round((r.get("size") or 0) / (1024 ** 3), 2),
+            "seeders": r.get("seeders"),
+            "quality": ((r.get("quality") or {}).get("quality") or {}).get("name", "?"),
+            "rejected": bool(r.get("rejected", False)),
+        }
+        for r in response.json()
+    ]
+
+
+@app.route("/api/search/album-interactive/<instance_name>/<int:album_id>")
+@login_required
+@permission_required("searching")
+def api_search_album_interactive(instance_name, album_id):
+    config = APPS.get(instance_name)
+    if not config or config.get("library_kind") != "artist":
+        return jsonify({"error": "not a Lidarr instance"}), 404
+    try:
+        return jsonify(fetch_album_releases(config, album_id))
     except requests.exceptions.RequestException as err:
         return jsonify({"error": str(err)}), 502
 
