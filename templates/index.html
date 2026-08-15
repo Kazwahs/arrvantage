@@ -1256,7 +1256,7 @@
                     listEl.innerHTML = `<div class="library-grid">${data.items.map(item => `
                         <div class="library-card" data-title="${item.title.replace(/"/g, '&quot;')}" data-cover="${item.poster_url}">
                             <div class="cover-wrap" ${mediaCardOnclick(item)}>
-                                ${item.poster_url ? `<img src="${item.poster_url}" alt="${item.title}" loading="lazy" onerror="this.style.display='none'; this.nextElementSibling.style.display='flex';">` : ''}
+                                ${item.poster_url ? `<img src="${item.poster_url}" alt="${item.title}" onerror="this.style.display='none'; this.nextElementSibling.style.display='flex';">` : ''}
                                 <div class="cover-fallback" ${item.poster_url ? 'style="display:none;"' : ''}>${item.title}</div>
                                 <span class="status-badge status-downloaded">${item.progress_pct}%${item.state ? ' &middot; ' + item.state : ''}</span>
                             </div>
@@ -1268,7 +1268,7 @@
                     listEl.innerHTML = `<div class="library-grid">${data.items.map(item => `
                         <div class="library-card" data-title="${item.title.replace(/"/g, '&quot;')}" data-cover="${item.poster_url || ''}">
                             <div class="cover-wrap" ${mediaCardOnclick(item)}>
-                                ${item.poster_url ? `<img src="${item.poster_url}" alt="${item.title}" loading="lazy" onerror="this.style.display='none'; this.nextElementSibling.style.display='flex';">` : ''}
+                                ${item.poster_url ? `<img src="${item.poster_url}" alt="${item.title}" onerror="this.style.display='none'; this.nextElementSibling.style.display='flex';">` : ''}
                                 <div class="cover-fallback" ${item.poster_url ? 'style="display:none;"' : ''}>${item.title}</div>
                             </div>
                             <div class="card-title">${item.title}</div>
@@ -1279,7 +1279,7 @@
                     listEl.innerHTML = `<div class="library-grid">${data.items.map(item => `
                         <div class="library-card" data-title="${item.title.replace(/"/g, '&quot;')}" data-cover="${item.poster_url || ''}">
                             <div class="cover-wrap" ${mediaCardOnclick(item)}>
-                                ${item.poster_url ? `<img src="${item.poster_url}" alt="${item.title}" loading="lazy" onerror="this.style.display='none'; this.nextElementSibling.style.display='flex';">` : ''}
+                                ${item.poster_url ? `<img src="${item.poster_url}" alt="${item.title}" onerror="this.style.display='none'; this.nextElementSibling.style.display='flex';">` : ''}
                                 <div class="cover-fallback" ${item.poster_url ? 'style="display:none;"' : ''}>${item.title}</div>
                             </div>
                             <div class="card-title">${item.title}</div>
