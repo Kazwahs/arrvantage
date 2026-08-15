@@ -2427,9 +2427,6 @@ def fetch_tracearr_now_playing(server_name: str) -> dict:
     except requests.exceptions.RequestException as err:
         return {"error": str(err), "items": []}
 
-    if data.get("data"):
-        print(f"[tracearr poster debug] raw poster_url from first stream: {data['data'][0].get('poster_url')!r}")
-
     items = []
     for s in data.get("data") or []:
         if (s.get("server_name") or "").lower() != server_name.lower():
@@ -2439,9 +2436,11 @@ def fetch_tracearr_now_playing(server_name: str) -> dict:
             title = f"{s['show_title']} - {title}"
         duration = s.get("duration_ms") or 0
         progress = s.get("progress_ms") or 0
+        wrapped_poster = f"/api/mediaserver/poster-proxy?url={quote(s['poster_url'], safe='')}" if s.get("poster_url") else ""
+        print(f"[tracearr poster debug] server={server_name!r} raw={s.get('poster_url')!r} wrapped={wrapped_poster!r}")
         items.append({
             "title": title,
-            "poster_url": f"/api/mediaserver/poster-proxy?url={quote(s['poster_url'], safe='')}" if s.get("poster_url") else "",
+            "poster_url": wrapped_poster,
             "user": s.get("username") or "Unknown",
             "device": s.get("device") or s.get("player", ""),
             "progress_pct": round((progress / duration) * 100, 1) if duration else 0,
