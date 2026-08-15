@@ -741,7 +741,9 @@
                         </select>
                         <select id="sort-{{ instance.name }}" onchange="sortLibrary('{{ instance.name }}')">
                             <option value="title">Sort: Alphabetical</option>
+                            {% if instance.library_kind in ("movie", "series") %}
                             <option value="release">Sort: Release Date</option>
+                            {% endif %}
                             <option value="added">Sort: Date Added</option>
                         </select>
                         <button type="button" class="sort-dir-btn" id="sort-dir-{{ instance.name }}" data-direction="asc"
