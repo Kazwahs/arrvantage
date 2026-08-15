@@ -400,6 +400,50 @@
                             <span id="test-status-theaudiodb" class="test-status"></span>
                         </div>
                     </div>
+
+                    <div class="metadata-service-label">Activity Data (Tautulli)</div>
+                    <div class="step-hint">Improves the Plex tab's Now Playing, Watch History, and Users views by pulling from Tautulli's own tracked data instead of Plex's own limited endpoints - most notably, this can see shared/"friend" users that Plex's local API can't. Optional; only affects Plex, not Jellyfin/Emby. Get the API key from Tautulli's own Settings &rarr; Web Interface.</div>
+                    <div class="entry-card" id="card-tautulli" data-original-url="{{ tautulli.url }}" data-original-apikey="{{ tautulli.api_key }}">
+                        <div class="field">
+                            <label for="tautulli_url">Server URL</label>
+                            <input type="text" id="tautulli_url" name="tautulli_url" value="{{ tautulli.url }}" placeholder="http://192.168.1.X:PORT"
+                                   oninput="markUntestedTautulli()">
+                        </div>
+                        <div class="field">
+                            <label for="tautulli_api_key">API Key</label>
+                            <div class="key-row">
+                                <input type="password" id="tautulli_api_key" name="tautulli_api_key" value="{{ tautulli.api_key }}" autocomplete="new-password"
+                                       oninput="markUntestedTautulli()">
+                                <button type="button" class="toggle-btn" onclick="toggleField('tautulli_api_key', this)">Show</button>
+                            </div>
+                        </div>
+                        <div class="test-row">
+                            <button type="button" class="test-btn" id="test-btn-tautulli" onclick="testTautulli(this)">Test</button>
+                            <span id="test-status-tautulli" class="test-status"></span>
+                        </div>
+                    </div>
+
+                    <div class="metadata-service-label">Activity Data (Tracearr)</div>
+                    <div class="step-hint">A multi-platform alternative to Tautulli/native APIs, covering Plex, Jellyfin, and Emby from one place. If configured, this takes priority over Tautulli for Now Playing, Watch History, and Users, and covers Recently Added too. Matches activity to each media server by comparing its name here to the server name in Tracearr, so keep those names consistent. Generate the API key in Tracearr under Settings &rarr; General.</div>
+                    <div class="entry-card" id="card-tracearr" data-original-url="{{ tracearr.url }}" data-original-apikey="{{ tracearr.api_key }}">
+                        <div class="field">
+                            <label for="tracearr_url">Server URL</label>
+                            <input type="text" id="tracearr_url" name="tracearr_url" value="{{ tracearr.url }}" placeholder="http://192.168.1.X:PORT"
+                                   oninput="markUntestedTracearr()">
+                        </div>
+                        <div class="field">
+                            <label for="tracearr_api_key">API Key</label>
+                            <div class="key-row">
+                                <input type="password" id="tracearr_api_key" name="tracearr_api_key" value="{{ tracearr.api_key }}" autocomplete="new-password"
+                                       oninput="markUntestedTracearr()">
+                                <button type="button" class="toggle-btn" onclick="toggleField('tracearr_api_key', this)">Show</button>
+                            </div>
+                        </div>
+                        <div class="test-row">
+                            <button type="button" class="test-btn" id="test-btn-tracearr" onclick="testTracearr(this)">Test</button>
+                            <span id="test-status-tracearr" class="test-status"></span>
+                        </div>
+                    </div>
                 </div>
             </details>
 
@@ -1041,6 +1085,134 @@
         }
 
         markUntestedTheaudiodb();
+
+        function markUntestedTautulli() {
+            const urlField = document.getElementById('tautulli_url');
+            const keyField = document.getElementById('tautulli_api_key');
+            const card = document.getElementById('card-tautulli');
+            const statusEl = document.getElementById('test-status-tautulli');
+            const url = urlField.value.trim();
+            const apiKey = keyField.value.trim();
+
+            if (url === '' && apiKey === '') {
+                testedOk['tautulli'] = true;
+                statusEl.textContent = 'Not configured';
+                statusEl.className = 'test-status test-empty';
+            } else if (url === card.dataset.originalUrl && apiKey === card.dataset.originalApikey) {
+                testedOk['tautulli'] = true;
+                statusEl.textContent = 'Saved';
+                statusEl.className = 'test-status test-empty';
+            } else {
+                testedOk['tautulli'] = false;
+                statusEl.textContent = 'Needs testing';
+                statusEl.className = 'test-status test-empty';
+            }
+            updateSaveButtonState();
+        }
+
+        async function testTautulli(btn) {
+            const statusEl = document.getElementById('test-status-tautulli');
+            btn.disabled = true;
+            const originalLabel = btn.textContent;
+            btn.textContent = 'Testing...';
+
+            try {
+                const response = await fetch('/api/settings/test', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({
+                        category: 'tautulli',
+                        url: document.getElementById('tautulli_url').value.trim(),
+                        credential: document.getElementById('tautulli_api_key').value.trim(),
+                    }),
+                });
+                const result = await response.json();
+
+                if (result.ok) {
+                    testedOk['tautulli'] = true;
+                    statusEl.textContent = 'Connected';
+                    statusEl.className = 'test-status test-ok';
+                } else {
+                    testedOk['tautulli'] = false;
+                    statusEl.textContent = result.error || 'Failed';
+                    statusEl.className = 'test-status test-fail';
+                }
+            } catch (err) {
+                testedOk['tautulli'] = false;
+                statusEl.textContent = 'Request failed';
+                statusEl.className = 'test-status test-fail';
+            }
+
+            btn.disabled = false;
+            btn.textContent = originalLabel;
+            updateSaveButtonState();
+        }
+
+        markUntestedTautulli();
+
+        function markUntestedTracearr() {
+            const urlField = document.getElementById('tracearr_url');
+            const keyField = document.getElementById('tracearr_api_key');
+            const card = document.getElementById('card-tracearr');
+            const statusEl = document.getElementById('test-status-tracearr');
+            const url = urlField.value.trim();
+            const apiKey = keyField.value.trim();
+
+            if (url === '' && apiKey === '') {
+                testedOk['tracearr'] = true;
+                statusEl.textContent = 'Not configured';
+                statusEl.className = 'test-status test-empty';
+            } else if (url === card.dataset.originalUrl && apiKey === card.dataset.originalApikey) {
+                testedOk['tracearr'] = true;
+                statusEl.textContent = 'Saved';
+                statusEl.className = 'test-status test-empty';
+            } else {
+                testedOk['tracearr'] = false;
+                statusEl.textContent = 'Needs testing';
+                statusEl.className = 'test-status test-empty';
+            }
+            updateSaveButtonState();
+        }
+
+        async function testTracearr(btn) {
+            const statusEl = document.getElementById('test-status-tracearr');
+            btn.disabled = true;
+            const originalLabel = btn.textContent;
+            btn.textContent = 'Testing...';
+
+            try {
+                const response = await fetch('/api/settings/test', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({
+                        category: 'tracearr',
+                        url: document.getElementById('tracearr_url').value.trim(),
+                        credential: document.getElementById('tracearr_api_key').value.trim(),
+                    }),
+                });
+                const result = await response.json();
+
+                if (result.ok) {
+                    testedOk['tracearr'] = true;
+                    statusEl.textContent = 'Connected';
+                    statusEl.className = 'test-status test-ok';
+                } else {
+                    testedOk['tracearr'] = false;
+                    statusEl.textContent = result.error || 'Failed';
+                    statusEl.className = 'test-status test-fail';
+                }
+            } catch (err) {
+                testedOk['tracearr'] = false;
+                statusEl.textContent = 'Request failed';
+                statusEl.className = 'test-status test-fail';
+            }
+
+            btn.disabled = false;
+            btn.textContent = originalLabel;
+            updateSaveButtonState();
+        }
+
+        markUntestedTracearr();
     </script>
 </body>
 </html>

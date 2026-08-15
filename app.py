@@ -145,7 +145,8 @@ CONFIG_PATH = os.path.join(CONFIG_DIR, "config.json")
 EMPTY_CONFIG = {
     "instances": [], "media_servers": [], "requesters": [], "downloaders": [], "indexers": [], "users": [],
     "tmdb": {"api_key": ""}, "tvdb": {"api_key": "", "pin": ""},
-    "fanart": {"api_key": ""}, "theaudiodb": {"api_key": "123"}, "secret_key": "",
+    "fanart": {"api_key": ""}, "theaudiodb": {"api_key": "123"},
+    "tautulli": {"url": "", "api_key": ""}, "tracearr": {"url": "", "api_key": ""}, "secret_key": "",
 }
 
 
@@ -218,6 +219,8 @@ TMDB = CONFIG.get("tmdb", {"api_key": ""})
 TVDB = CONFIG.get("tvdb", {"api_key": "", "pin": ""})
 FANART = CONFIG.get("fanart", {"api_key": ""})
 THEAUDIODB = CONFIG.get("theaudiodb", {"api_key": "123"})
+TAUTULLI = CONFIG.get("tautulli", {"url": "", "api_key": ""})
+TRACEARR = CONFIG.get("tracearr", {"url": "", "api_key": ""})
 DOWNLOADERS = CONFIG.get("downloaders", [])
 INDEXERS = CONFIG.get("indexers", [])
 USERS = CONFIG.get("users", [])
@@ -2259,6 +2262,166 @@ def fetch_jellyfin_users(server: dict) -> dict:
     return {"error": None, "items": items}
 
 
+def tautulli_configured() -> bool:
+    return bool(TAUTULLI.get("url") and TAUTULLI.get("api_key"))
+
+
+def tautulli_request(cmd: str, params: dict = None) -> dict:
+    params = dict(params or {})
+    params["apikey"] = TAUTULLI["api_key"]
+    params["cmd"] = cmd
+    response = requests.get(f"{TAUTULLI['url'].rstrip('/')}/api/v2", params=params, timeout=10)
+    response.raise_for_status()
+    return response.json().get("response", {}).get("data", {}) or {}
+
+
+def fetch_tautulli_now_playing() -> dict:
+    """
+    Same item shape as fetch_plex_now_playing, so the frontend needs no
+    changes at all - only where the data comes from. Best-guess field
+    names throughout - check the raw JSON here first if something
+    looks off.
+    """
+    try:
+        data = tautulli_request("get_activity")
+    except requests.exceptions.RequestException as err:
+        return {"error": str(err), "items": []}
+
+    items = [
+        {
+            "title": s.get("full_title") or s.get("title", "(unknown)"),
+            "user": s.get("friendly_name", "Unknown"),
+            "device": s.get("player", ""),
+            "progress_pct": round(float(s.get("progress_percent") or 0), 1),
+            "state": s.get("state", ""),
+        }
+        for s in (data.get("sessions") or [])
+    ]
+    return {"error": None, "items": items}
+
+
+def fetch_tautulli_watch_history() -> dict:
+    """Pulls from Tautulli's own persistent history database, rather
+    than Plex's own limited session-history endpoint."""
+    try:
+        data = tautulli_request("get_history", {"length": 30})
+    except requests.exceptions.RequestException as err:
+        return {"error": str(err), "items": []}
+
+    items = [
+        {"title": e.get("full_title") or e.get("title", "(unknown)"), "user": e.get("friendly_name", "")}
+        for e in (data.get("data") or [])
+    ]
+    return {"error": None, "items": items}
+
+
+def fetch_tautulli_users() -> dict:
+    """
+    Tracks users from observed playback activity server-side, so this
+    should include shared/'friend' users too - unlike the direct Plex
+    /accounts endpoint, which only sees locally-managed accounts.
+    """
+    try:
+        data = tautulli_request("get_users_table", {"length": 100})
+    except requests.exceptions.RequestException as err:
+        return {"error": str(err), "items": []}
+
+    items = [{"name": u.get("friendly_name", "(unknown)")} for u in (data.get("data") or [])]
+    return {"error": None, "items": items}
+
+
+def tracearr_configured() -> bool:
+    return bool(TRACEARR.get("url") and TRACEARR.get("api_key"))
+
+
+def tracearr_request(path: str, params: dict = None) -> dict:
+    headers = {"Authorization": f"Bearer {TRACEARR['api_key']}"}
+    response = requests.get(
+        f"{TRACEARR['url'].rstrip('/')}/api/v2{path}",
+        headers=headers, params=params or {}, timeout=10,
+    )
+    response.raise_for_status()
+    return response.json()
+
+
+def fetch_tracearr_now_playing(server_name: str) -> dict:
+    """
+    Tracearr covers Plex, Jellyfin, and Emby from one unified API, so
+    (unlike Tautulli) this applies to every media server type. Filtered
+    to the specific server clicked in the sidebar by matching
+    server_name, since Tracearr's own data spans all your servers at
+    once. Field names here are confirmed against a real response.
+    """
+    try:
+        data = tracearr_request("/streams")
+    except requests.exceptions.RequestException as err:
+        return {"error": str(err), "items": []}
+
+    items = []
+    for s in data.get("data") or []:
+        if (s.get("server_name") or "").lower() != server_name.lower():
+            continue
+        title = s.get("media_title", "(unknown)")
+        if s.get("show_title"):
+            title = f"{s['show_title']} - {title}"
+        duration = s.get("duration_ms") or 0
+        progress = s.get("progress_ms") or 0
+        items.append({
+            "title": title,
+            "user": s.get("username") or "Unknown",
+            "device": s.get("device") or s.get("player", ""),
+            "progress_pct": round((progress / duration) * 100, 1) if duration else 0,
+            "state": s.get("state", ""),
+        })
+    return {"error": None, "items": items}
+
+
+def fetch_tracearr_watch_history(server_name: str) -> dict:
+    try:
+        data = tracearr_request("/history", {"pageSize": 30})
+    except requests.exceptions.RequestException as err:
+        return {"error": str(err), "items": []}
+
+    items = []
+    for e in data.get("data") or []:
+        if (e.get("server_name") or "").lower() != server_name.lower():
+            continue
+        title = e.get("media_title", "(unknown)")
+        if e.get("show_title"):
+            title = f"{e['show_title']} - {title}"
+        user = e.get("user") or {}
+        items.append({"title": title, "user": user.get("username") or ""})
+    return {"error": None, "items": items}
+
+
+def fetch_tracearr_users() -> dict:
+    """
+    Not filtered per-server - a watcher's account list spans every
+    server they use, and Tracearr's schema doesn't carry a matchable
+    server_name for this one the way streams/history do.
+    """
+    try:
+        data = tracearr_request("/watchers", {"pageSize": 100})
+    except requests.exceptions.RequestException as err:
+        return {"error": str(err), "items": []}
+
+    items = [{"name": u.get("username", "(unknown)")} for u in (data.get("data") or [])]
+    return {"error": None, "items": items}
+
+
+def fetch_tracearr_recently_added() -> dict:
+    """Not filtered per-server either - a title's availability can span
+    multiple servers at once in Tracearr's unified library view."""
+    try:
+        data = tracearr_request("/recently-added", {"pageSize": 30})
+    except requests.exceptions.RequestException as err:
+        return {"error": str(err), "items": []}
+
+    items = [{"title": e.get("title", "(unknown)"), "type": e.get("media_type", "")} for e in (data.get("data") or [])]
+    return {"error": None, "items": items}
+
+
+
 def _dispatch_media_server_fetch(name, plex_fn, jellyfin_fn):
     server = get_media_server(name)
     if not server:
@@ -2270,24 +2433,50 @@ def _dispatch_media_server_fetch(name, plex_fn, jellyfin_fn):
 @app.route("/api/mediaserver/now-playing/<name>")
 @login_required
 def api_mediaserver_now_playing(name):
+    server = get_media_server(name)
+    if not server:
+        return jsonify({"error": "unknown media server"}), 404
+    if tracearr_configured():
+        return jsonify(fetch_tracearr_now_playing(name))
+    if server["type"] == "plex" and tautulli_configured():
+        return jsonify(fetch_tautulli_now_playing())
     return _dispatch_media_server_fetch(name, fetch_plex_now_playing, fetch_jellyfin_now_playing)
 
 
 @app.route("/api/mediaserver/recently-added/<name>")
 @login_required
 def api_mediaserver_recently_added(name):
+    server = get_media_server(name)
+    if not server:
+        return jsonify({"error": "unknown media server"}), 404
+    if tracearr_configured():
+        return jsonify(fetch_tracearr_recently_added())
     return _dispatch_media_server_fetch(name, fetch_plex_recently_added, fetch_jellyfin_recently_added)
 
 
 @app.route("/api/mediaserver/watch-history/<name>")
 @login_required
 def api_mediaserver_watch_history(name):
+    server = get_media_server(name)
+    if not server:
+        return jsonify({"error": "unknown media server"}), 404
+    if tracearr_configured():
+        return jsonify(fetch_tracearr_watch_history(name))
+    if server["type"] == "plex" and tautulli_configured():
+        return jsonify(fetch_tautulli_watch_history())
     return _dispatch_media_server_fetch(name, fetch_plex_watch_history, fetch_jellyfin_watch_history)
 
 
 @app.route("/api/mediaserver/users/<name>")
 @login_required
 def api_mediaserver_users(name):
+    server = get_media_server(name)
+    if not server:
+        return jsonify({"error": "unknown media server"}), 404
+    if tracearr_configured():
+        return jsonify(fetch_tracearr_users())
+    if server["type"] == "plex" and tautulli_configured():
+        return jsonify(fetch_tautulli_users())
     return _dispatch_media_server_fetch(name, fetch_plex_users, fetch_jellyfin_users)
 
 
@@ -2380,6 +2569,35 @@ def api_settings_test():
             response.raise_for_status()
             if not response.json().get("artists"):
                 return jsonify({"ok": False, "error": "Key didn't return any results - it may be invalid"})
+        except requests.exceptions.RequestException as err:
+            return jsonify({"ok": False, "error": str(err)})
+        return jsonify({"ok": True})
+
+    if category == "tautulli":
+        if not url:
+            return jsonify({"ok": False, "error": "URL is required"})
+        try:
+            response = requests.get(
+                f"{url.rstrip('/')}/api/v2",
+                params={"apikey": credential, "cmd": "get_activity"}, timeout=8,
+            )
+            response.raise_for_status()
+            if response.json().get("response", {}).get("result") != "success":
+                return jsonify({"ok": False, "error": "Tautulli didn't confirm success - check the API key"})
+        except requests.exceptions.RequestException as err:
+            return jsonify({"ok": False, "error": str(err)})
+        return jsonify({"ok": True})
+
+    if category == "tracearr":
+        if not url:
+            return jsonify({"ok": False, "error": "URL is required"})
+        try:
+            response = requests.get(
+                f"{url.rstrip('/')}/api/v2/watchers",
+                headers={"Authorization": f"Bearer {credential}"},
+                params={"pageSize": 1}, timeout=8,
+            )
+            response.raise_for_status()
         except requests.exceptions.RequestException as err:
             return jsonify({"ok": False, "error": str(err)})
         return jsonify({"ok": True})
@@ -2541,7 +2759,7 @@ def parse_users(form, existing_users: list) -> list:
 @login_required
 @admin_required
 def settings():
-    global CONFIG, APPS, MEDIA_SERVERS, REQUESTERS, DOWNLOADERS, INDEXERS, USERS, TMDB, TVDB, FANART, THEAUDIODB
+    global CONFIG, APPS, MEDIA_SERVERS, REQUESTERS, DOWNLOADERS, INDEXERS, USERS, TMDB, TVDB, FANART, THEAUDIODB, TAUTULLI, TRACEARR
 
     if request.method == "POST":
         new_config = {
@@ -2563,6 +2781,14 @@ def settings():
             },
             "fanart": {"api_key": request.form.get("fanart_api_key", "").strip()},
             "theaudiodb": {"api_key": request.form.get("theaudiodb_api_key", "123").strip() or "123"},
+            "tautulli": {
+                "url": request.form.get("tautulli_url", "").strip(),
+                "api_key": request.form.get("tautulli_api_key", "").strip(),
+            },
+            "tracearr": {
+                "url": request.form.get("tracearr_url", "").strip(),
+                "api_key": request.form.get("tracearr_api_key", "").strip(),
+            },
             "secret_key": CONFIG["secret_key"],  # never edited via the form - carry it forward
         }
         save_config(new_config)
@@ -2580,6 +2806,8 @@ def settings():
         TVDB = CONFIG["tvdb"]
         FANART = CONFIG["fanart"]
         THEAUDIODB = CONFIG["theaudiodb"]
+        TAUTULLI = CONFIG["tautulli"]
+        TRACEARR = CONFIG["tracearr"]
 
         # Only the admin can reach this route, so keep their session
         # pointed at their account even if they just renamed themselves.
@@ -2601,6 +2829,8 @@ def settings():
         tvdb=CONFIG.get("tvdb", {"api_key": "", "pin": ""}),
         fanart=CONFIG.get("fanart", {"api_key": ""}),
         theaudiodb=CONFIG.get("theaudiodb", {"api_key": "123"}),
+        tautulli=CONFIG.get("tautulli", {"url": "", "api_key": ""}),
+        tracearr=CONFIG.get("tracearr", {"url": "", "api_key": ""}),
         kind_options=KIND_META,
         media_server_type_options=MEDIA_SERVER_TYPES,
         requester_type_options=REQUESTER_TYPES,
