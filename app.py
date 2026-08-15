@@ -1969,28 +1969,61 @@ def fetch_prowlarr_indexers(service: dict) -> dict:
     except requests.exceptions.RequestException as err:
         return {"error": str(err), "indexers": []}
 
-    unhealthy_ids = {s.get("indexerId") for s in status_resp.json()}
+    # Map indexerId -> full status entry (not just membership), so we
+    # can surface *why* something is unhealthy, not just that it is.
+    status_by_id = {s.get("indexerId"): s for s in status_resp.json()}
 
-    indexers = [
-        {
+    indexers = []
+    for i in indexers_resp.json():
+        status = status_by_id.get(i.get("id"))
+        reason = ""
+        if status:
+            # Best-guess fields - Prowlarr's IndexerStatus doesn't
+            # appear to carry a free-text message, just failure info,
+            # so this surfaces whatever's there. Check the raw JSON
+            # here if this comes back empty for a known-bad indexer.
+            reason = (
+                status.get("mostRecentFailureMessage")
+                or status.get("mostRecentFailure")
+                or (f"Disabled until {status.get('disabledTill')}" if status.get("disabledTill") else "")
+                or "Recent failures detected"
+            )
+        indexers.append({
             "id": i.get("id"),
             "name": i.get("name", "(unknown)"),
             "enabled": i.get("enable", True),
             "protocol": i.get("protocol", ""),
-            "healthy": i.get("id") not in unhealthy_ids,
-        }
-        for i in indexers_resp.json()
-    ]
+            "healthy": status is None,
+            "unhealthy_reason": reason,
+        })
     indexers.sort(key=lambda i: i["name"].lower())
     return {"error": None, "indexers": indexers}
 
 
-def test_prowlarr_indexer(service: dict, indexer_id: int) -> None:
-    """Best-guess endpoint path - check here first if testing fails."""
+def test_prowlarr_indexer(service: dict, indexer_id: int) -> str:
+    """
+    Returns an empty string on success, or a best-effort error detail
+    on failure. Best-guess endpoint path and response shape - check
+    here first if testing fails or the message isn't useful.
+    """
     base = service["url"].rstrip("/")
     headers = {"X-Api-Key": service["api_key"]}
     response = requests.post(f"{base}/api/v1/indexer/test/{indexer_id}", headers=headers, timeout=30)
-    response.raise_for_status()
+
+    if response.ok:
+        return ""
+
+    try:
+        body = response.json()
+        if isinstance(body, list) and body:
+            # Sonarr/Radarr/Prowlarr-family validation failures are
+            # typically a list of {"propertyName", "errorMessage"}.
+            return "; ".join(item.get("errorMessage", str(item)) for item in body)
+        if isinstance(body, dict) and body.get("message"):
+            return body["message"]
+        return str(body)[:300]
+    except ValueError:
+        return response.text[:300] or f"HTTP {response.status_code}"
 
 
 def get_indexer_service(name: str):
@@ -2014,7 +2047,9 @@ def api_indexers_test(name, indexer_id):
     if not service:
         return jsonify({"ok": False, "error": "unknown indexer service"}), 404
     try:
-        test_prowlarr_indexer(service, indexer_id)
+        error_detail = test_prowlarr_indexer(service, indexer_id)
+        if error_detail:
+            return jsonify({"ok": False, "error": error_detail})
         return jsonify({"ok": True})
     except requests.exceptions.RequestException as err:
         return jsonify({"ok": False, "error": str(err)}), 502
