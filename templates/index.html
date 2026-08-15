@@ -283,6 +283,17 @@
             font-size: 0.85rem;
         }
 
+        .sort-dir-btn {
+            background: var(--panel);
+            border: 1px solid var(--border);
+            border-radius: 6px;
+            padding: 0.4rem 0.7rem;
+            color: var(--text);
+            font-size: 0.9rem;
+            cursor: pointer;
+        }
+        .sort-dir-btn:hover { color: var(--accent); border-color: var(--accent); }
+
         .library-grid {
             display: grid;
             grid-template-columns: repeat(auto-fill, minmax(140px, 1fr));
@@ -733,6 +744,8 @@
                             <option value="release">Sort: Release Date</option>
                             <option value="added">Sort: Date Added</option>
                         </select>
+                        <button type="button" class="sort-dir-btn" id="sort-dir-{{ instance.name }}" data-direction="asc"
+                                onclick="toggleSortDirection('{{ instance.name }}')" title="Toggle ascending/descending">&uarr;</button>
                         {% if instance.library_kind == "movie" %}
                         <select id="view-mode-{{ instance.name }}" onchange="toggleLibraryViewMode('{{ instance.name }}')">
                             <option value="movies">All Movies</option>
@@ -1199,35 +1212,49 @@
             const statusFilter = document.getElementById(`status-filter-${instance}`);
             const genreFilter = document.getElementById(`genre-filter-${instance}`);
             const sortSelect = document.getElementById(`sort-${instance}`);
+            const sortDirBtn = document.getElementById(`sort-dir-${instance}`);
 
             grid.style.display = isCollections ? 'none' : 'grid';
             collections.style.display = isCollections ? 'grid' : 'none';
             statusFilter.style.display = isCollections ? 'none' : '';
             genreFilter.style.display = isCollections ? 'none' : '';
             sortSelect.style.display = isCollections ? 'none' : '';
+            sortDirBtn.style.display = isCollections ? 'none' : '';
             updateAlphaIndexVisibility();
+        }
+
+        function toggleSortDirection(instance) {
+            const btn = document.getElementById(`sort-dir-${instance}`);
+            const newDirection = btn.dataset.direction === 'asc' ? 'desc' : 'asc';
+            btn.dataset.direction = newDirection;
+            btn.innerHTML = newDirection === 'asc' ? '&uarr;' : '&darr;';
+            sortLibrary(instance);
         }
 
         function sortLibrary(instance) {
             const sortMode = document.getElementById(`sort-${instance}`).value;
+            const dirBtn = document.getElementById(`sort-dir-${instance}`);
+            const ascending = !dirBtn || dirBtn.dataset.direction === 'asc';
             const container = document.getElementById(`library-rows-${instance}`);
             const cards = Array.from(container.querySelectorAll('.library-card'));
 
             cards.sort((a, b) => {
                 if (sortMode === 'title') {
-                    return a.dataset.title.toLowerCase().localeCompare(b.dataset.title.toLowerCase());
-                } else if (sortMode === 'release') {
-                    // Newest first - empty dates (kinds with no clean
-                    // release-date concept, like artists/authors) sort last.
-                    if (!a.dataset.releaseDate) return 1;
-                    if (!b.dataset.releaseDate) return -1;
-                    return b.dataset.releaseDate.localeCompare(a.dataset.releaseDate);
-                } else if (sortMode === 'added') {
-                    if (!a.dataset.dateAdded) return 1;
-                    if (!b.dataset.dateAdded) return -1;
-                    return b.dataset.dateAdded.localeCompare(a.dataset.dateAdded);
+                    const result = a.dataset.title.toLowerCase().localeCompare(b.dataset.title.toLowerCase());
+                    return ascending ? result : -result;
                 }
-                return 0;
+
+                // Items with no value for this field (e.g. artists/authors
+                // under Release Date) always sort last, regardless of
+                // ascending/descending - only populated values flip.
+                const field = sortMode === 'release' ? 'releaseDate' : 'dateAdded';
+                const aVal = a.dataset[field];
+                const bVal = b.dataset[field];
+                if (!aVal && !bVal) return 0;
+                if (!aVal) return 1;
+                if (!bVal) return -1;
+                const result = aVal.localeCompare(bVal);
+                return ascending ? result : -result;
             });
 
             cards.forEach(card => container.appendChild(card));
