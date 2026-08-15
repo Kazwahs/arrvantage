@@ -2105,8 +2105,10 @@ def fetch_plex_now_playing(server: dict) -> dict:
         title = s.get("title", "(unknown)")
         if s.get("grandparentTitle"):
             title = f"{s['grandparentTitle']} - {title}"
+        thumb = s.get("thumb") or s.get("grandparentThumb") or ""
         items.append({
             "title": title,
+            "poster_url": f"{server['url'].rstrip('/')}{thumb}?X-Plex-Token={server['credential']}" if thumb else "",
             "user": (s.get("User") or {}).get("title", "Unknown"),
             "device": (s.get("Player") or {}).get("title", ""),
             "progress_pct": round((offset / duration) * 100, 1) if duration else 0,
@@ -2134,8 +2136,13 @@ def fetch_jellyfin_now_playing(server: dict) -> dict:
         play_state = s.get("PlayState") or {}
         position = play_state.get("PositionTicks") or 0
         runtime = now_playing.get("RunTimeTicks") or 0
+        title = now_playing.get("Name", "(unknown)")
+        if now_playing.get("SeriesName"):
+            title = f"{now_playing['SeriesName']} - {title}"
+        item_id = now_playing.get("Id")
         items.append({
-            "title": now_playing.get("Name", "(unknown)"),
+            "title": title,
+            "poster_url": f"{server['url'].rstrip('/')}/Items/{item_id}/Images/Primary?api_key={server['credential']}" if item_id else "",
             "user": s.get("UserName", "Unknown"),
             "device": s.get("DeviceName", ""),
             "progress_pct": round((position / runtime) * 100, 1) if runtime else 0,
@@ -2161,7 +2168,12 @@ def fetch_plex_recently_added(server: dict) -> dict:
         title = e.get("title", "(unknown)")
         if e.get("grandparentTitle"):
             title = f"{e['grandparentTitle']} - {title}"
-        items.append({"title": title, "type": e.get("type", "")})
+        thumb = e.get("thumb") or e.get("grandparentThumb") or ""
+        items.append({
+            "title": title,
+            "type": e.get("type", ""),
+            "poster_url": f"{server['url'].rstrip('/')}{thumb}?X-Plex-Token={server['credential']}" if thumb else "",
+        })
     return {"error": None, "items": items}
 
 
@@ -2180,7 +2192,17 @@ def fetch_jellyfin_recently_added(server: dict) -> dict:
     except requests.exceptions.RequestException as err:
         return {"error": str(err), "items": []}
 
-    items = [{"title": e.get("Name", "(unknown)"), "type": e.get("Type", "")} for e in entries]
+    items = []
+    for e in entries:
+        title = e.get("Name", "(unknown)")
+        if e.get("SeriesName"):
+            title = f"{e['SeriesName']} - {title}"
+        item_id = e.get("Id")
+        items.append({
+            "title": title,
+            "type": e.get("Type", ""),
+            "poster_url": f"{server['url'].rstrip('/')}/Items/{item_id}/Images/Primary?api_key={server['credential']}" if item_id else "",
+        })
     return {"error": None, "items": items}
 
 
@@ -2202,9 +2224,11 @@ def fetch_plex_watch_history(server: dict) -> dict:
         if e.get("grandparentTitle"):
             title = f"{e['grandparentTitle']} - {title}"
         user = e.get("User")
+        thumb = e.get("thumb") or e.get("grandparentThumb") or ""
         items.append({
             "title": title,
             "user": user.get("title", "") if isinstance(user, dict) else "",
+            "poster_url": f"{server['url'].rstrip('/')}{thumb}?X-Plex-Token={server['credential']}" if thumb else "",
         })
     return {"error": None, "items": items}
 
@@ -2223,7 +2247,7 @@ def fetch_jellyfin_watch_history(server: dict) -> dict:
         return {"error": str(err), "items": []}
 
     items = [
-        {"title": e.get("Name", "(unknown)"), "user": e.get("UserId", "")}
+        {"title": e.get("Name", "(unknown)"), "user": e.get("UserId", ""), "poster_url": ""}
         for e in entries
         if "play" in (e.get("Type") or "").lower() or "play" in (e.get("Name") or "").lower()
     ]
@@ -2280,23 +2304,27 @@ def fetch_tautulli_now_playing() -> dict:
     Same item shape as fetch_plex_now_playing, so the frontend needs no
     changes at all - only where the data comes from. Best-guess field
     names throughout - check the raw JSON here first if something
-    looks off.
+    looks off. Poster path uses Tautulli's own image proxy convention.
     """
     try:
         data = tautulli_request("get_activity")
     except requests.exceptions.RequestException as err:
         return {"error": str(err), "items": []}
 
-    items = [
-        {
-            "title": s.get("full_title") or s.get("title", "(unknown)"),
+    items = []
+    for s in (data.get("sessions") or []):
+        title = s.get("title", "(unknown)")
+        if s.get("grandparent_title"):
+            title = f"{s['grandparent_title']} - {title}"
+        thumb = s.get("thumb") or s.get("grandparent_thumb") or ""
+        items.append({
+            "title": title,
+            "poster_url": f"{TAUTULLI['url'].rstrip('/')}/pms_image_proxy?img={thumb}&apikey={TAUTULLI['api_key']}" if thumb else "",
             "user": s.get("friendly_name", "Unknown"),
             "device": s.get("player", ""),
             "progress_pct": round(float(s.get("progress_percent") or 0), 1),
             "state": s.get("state", ""),
-        }
-        for s in (data.get("sessions") or [])
-    ]
+        })
     return {"error": None, "items": items}
 
 
@@ -2308,10 +2336,17 @@ def fetch_tautulli_watch_history() -> dict:
     except requests.exceptions.RequestException as err:
         return {"error": str(err), "items": []}
 
-    items = [
-        {"title": e.get("full_title") or e.get("title", "(unknown)"), "user": e.get("friendly_name", "")}
-        for e in (data.get("data") or [])
-    ]
+    items = []
+    for e in (data.get("data") or []):
+        title = e.get("title", "(unknown)")
+        if e.get("grandparent_title"):
+            title = f"{e['grandparent_title']} - {title}"
+        thumb = e.get("thumb") or e.get("grandparent_thumb") or ""
+        items.append({
+            "title": title,
+            "user": e.get("friendly_name", ""),
+            "poster_url": f"{TAUTULLI['url'].rstrip('/')}/pms_image_proxy?img={thumb}&apikey={TAUTULLI['api_key']}" if thumb else "",
+        })
     return {"error": None, "items": items}
 
 
@@ -2368,6 +2403,7 @@ def fetch_tracearr_now_playing(server_name: str) -> dict:
         progress = s.get("progress_ms") or 0
         items.append({
             "title": title,
+            "poster_url": s.get("poster_url") or "",
             "user": s.get("username") or "Unknown",
             "device": s.get("device") or s.get("player", ""),
             "progress_pct": round((progress / duration) * 100, 1) if duration else 0,
@@ -2390,7 +2426,11 @@ def fetch_tracearr_watch_history(server_name: str) -> dict:
         if e.get("show_title"):
             title = f"{e['show_title']} - {title}"
         user = e.get("user") or {}
-        items.append({"title": title, "user": user.get("username") or ""})
+        items.append({
+            "title": title,
+            "user": user.get("username") or "",
+            "poster_url": e.get("poster_url") or "",
+        })
     return {"error": None, "items": items}
 
 

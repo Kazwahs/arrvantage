@@ -1225,40 +1225,48 @@
                 }
 
                 if (tab === 'now-playing') {
-                    listEl.innerHTML = data.items.map(item => `
-                        <div class="request-row">
-                            <div class="request-info" style="flex: 1;">
-                                <div class="request-title">${item.title}</div>
-                                <div class="request-meta">${item.user}${item.device ? ' &middot; ' + item.device : ''} &middot; ${item.progress_pct}% &middot; ${item.state || ''}</div>
+                    listEl.innerHTML = `<div class="library-grid">${data.items.map(item => `
+                        <div class="library-card">
+                            <div class="cover-wrap">
+                                ${item.poster_url ? `<img src="${item.poster_url}" alt="${item.title}" loading="lazy" onerror="this.style.display='none'; this.nextElementSibling.style.display='flex';">` : ''}
+                                <div class="cover-fallback" ${item.poster_url ? 'style="display:none;"' : ''}>${item.title}</div>
+                                <span class="status-badge status-downloaded">${item.progress_pct}%${item.state ? ' &middot; ' + item.state : ''}</span>
                             </div>
+                            <div class="card-title">${item.title}</div>
+                            <div class="card-genre">${item.user}${item.device ? ' &middot; ' + item.device : ''}</div>
                         </div>
-                    `).join('');
+                    `).join('')}</div>`;
                 } else if (tab === 'recently-added') {
-                    listEl.innerHTML = data.items.map(item => `
-                        <div class="request-row">
-                            <div class="request-info" style="flex: 1;">
-                                <div class="request-title">${item.title}</div>
-                                <div class="request-meta">${item.type || ''}</div>
+                    listEl.innerHTML = `<div class="library-grid">${data.items.map(item => `
+                        <div class="library-card">
+                            <div class="cover-wrap">
+                                ${item.poster_url ? `<img src="${item.poster_url}" alt="${item.title}" loading="lazy" onerror="this.style.display='none'; this.nextElementSibling.style.display='flex';">` : ''}
+                                <div class="cover-fallback" ${item.poster_url ? 'style="display:none;"' : ''}>${item.title}</div>
                             </div>
+                            <div class="card-title">${item.title}</div>
+                            <div class="card-genre">${item.type || ''}</div>
                         </div>
-                    `).join('');
+                    `).join('')}</div>`;
                 } else if (tab === 'watch-history') {
-                    listEl.innerHTML = data.items.map(item => `
-                        <div class="request-row">
-                            <div class="request-info" style="flex: 1;">
-                                <div class="request-title">${item.title}</div>
-                                <div class="request-meta">${item.user || ''}</div>
+                    listEl.innerHTML = `<div class="library-grid">${data.items.map(item => `
+                        <div class="library-card">
+                            <div class="cover-wrap">
+                                ${item.poster_url ? `<img src="${item.poster_url}" alt="${item.title}" loading="lazy" onerror="this.style.display='none'; this.nextElementSibling.style.display='flex';">` : ''}
+                                <div class="cover-fallback" ${item.poster_url ? 'style="display:none;"' : ''}>${item.title}</div>
                             </div>
+                            <div class="card-title">${item.title}</div>
+                            <div class="card-genre">${item.user || ''}</div>
                         </div>
-                    `).join('');
+                    `).join('')}</div>`;
                 } else if (tab === 'users') {
-                    listEl.innerHTML = data.items.map(item => `
-                        <div class="request-row">
-                            <div class="request-info" style="flex: 1;">
-                                <div class="request-title">${item.name}</div>
+                    listEl.innerHTML = `<div class="library-grid">${data.items.map(item => `
+                        <div class="library-card">
+                            <div class="cover-wrap">
+                                <div class="cover-fallback">${item.name}</div>
                             </div>
+                            <div class="card-title">${item.name}</div>
                         </div>
-                    `).join('');
+                    `).join('')}</div>`;
                 }
 
                 loadedMediaServerTabs.add(key);
