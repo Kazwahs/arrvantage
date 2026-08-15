@@ -2576,6 +2576,7 @@ def api_mediaserver_now_playing(name):
     server = get_media_server(name)
     if not server:
         return jsonify({"error": "unknown media server"}), 404
+    print(f"[mediaserver source debug] name={name!r} tracearr_configured={tracearr_configured()} tautulli_configured={tautulli_configured()} server_type={server['type']!r}")
     if tracearr_configured():
         return jsonify(fetch_tracearr_now_playing(name))
     if server["type"] == "plex" and tautulli_configured():
