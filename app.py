@@ -544,27 +544,36 @@ def get_library_item(record: dict, kind: str, config: dict) -> dict:
         year = record.get("year", "")
         detail = ""
         title = f"{title} ({year})" if year else title
+        release_date = record.get("inCinemas") or record.get("physicalRelease") or str(year)
     elif kind == "series":
         title = record.get("title", "(unknown)")
         stats = record.get("statistics", {})
         detail = f"{stats.get('episodeFileCount', 0)}/{stats.get('episodeCount', 0)} episodes"
+        release_date = record.get("firstAired", "")
     elif kind == "artist":
         title = record.get("artistName", "(unknown)")
         stats = record.get("statistics", {})
         detail = f"{stats.get('trackFileCount', 0)}/{stats.get('trackCount', 0)} tracks"
+        # No clean single "release date" concept for an artist as a
+        # whole - Release Date sort won't distinguish artists well.
+        release_date = ""
     elif kind == "author":
         title = record.get("authorName", "(unknown)")
         stats = record.get("statistics", {})
         detail = f"{stats.get('bookFileCount', 0)}/{stats.get('bookCount', 0)} books"
+        # Same limitation as artists - no single release date for an author.
+        release_date = ""
     else:
         title = record.get("title", "(unknown)")
         detail = ""
+        release_date = ""
 
     return {"title": title, "detail": detail, "status": status, "genre": genre,
             "cover_url": cover_url, "item_id": record.get("id"),
             "tmdb_id": record.get("tmdbId") if kind == "movie" else None,
             "tvdb_id": record.get("tvdbId") if kind == "series" else None,
-            "foreign_artist_id": record.get("foreignArtistId") if kind == "artist" else None}
+            "foreign_artist_id": record.get("foreignArtistId") if kind == "artist" else None,
+            "release_date": release_date or "", "date_added": record.get("added", "") or ""}
 
 
 def fetch_library(name: str, config: dict) -> dict:

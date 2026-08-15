@@ -728,6 +728,11 @@
                             <option value="all">All genres</option>
                             {% for g in instance.genre_options %}<option value="{{ g }}">{{ g }}</option>{% endfor %}
                         </select>
+                        <select id="sort-{{ instance.name }}" onchange="sortLibrary('{{ instance.name }}')">
+                            <option value="title">Sort: Alphabetical</option>
+                            <option value="release">Sort: Release Date</option>
+                            <option value="added">Sort: Date Added</option>
+                        </select>
                         {% if instance.library_kind == "movie" %}
                         <select id="view-mode-{{ instance.name }}" onchange="toggleLibraryViewMode('{{ instance.name }}')">
                             <option value="movies">All Movies</option>
@@ -742,7 +747,9 @@
                              data-status="{{ item.status }}"
                              data-genre="{{ item.genre }}"
                              data-title="{{ item.title }}"
-                             data-cover="{{ item.cover_url }}">
+                             data-cover="{{ item.cover_url }}"
+                             data-release-date="{{ item.release_date }}"
+                             data-date-added="{{ item.date_added }}">
                             <div class="cover-wrap" onclick="openDetails(this, '{{ instance.name }}', {{ item.item_id }})">
                                 {% if item.cover_url %}
                                     <img src="{{ item.cover_url }}" alt="{{ item.title }}" loading="lazy"
@@ -918,6 +925,7 @@
             document.getElementById('instances-view').style.display = 'block';
             updateQueueTabCount();
             updateRequestTabVisibility();
+            updateAlphaIndexVisibility();
             render();
         }
 
@@ -1064,7 +1072,7 @@
             document.querySelectorAll('.view-tab').forEach(el => {
                 el.classList.toggle('active', el.dataset.view === view);
             });
-            document.getElementById('alpha-index').classList.toggle('hidden', view !== 'library');
+            updateAlphaIndexVisibility();
             render();
         }
 
@@ -1162,6 +1170,7 @@
 
         updateQueueTabCount();
         updateRequestTabVisibility();
+        updateAlphaIndexVisibility();
         render();
 
         function filterLibrary(instance) {
@@ -1189,11 +1198,46 @@
             const collections = document.getElementById(`collections-${instance}`);
             const statusFilter = document.getElementById(`status-filter-${instance}`);
             const genreFilter = document.getElementById(`genre-filter-${instance}`);
+            const sortSelect = document.getElementById(`sort-${instance}`);
 
             grid.style.display = isCollections ? 'none' : 'grid';
             collections.style.display = isCollections ? 'grid' : 'none';
             statusFilter.style.display = isCollections ? 'none' : '';
             genreFilter.style.display = isCollections ? 'none' : '';
+            sortSelect.style.display = isCollections ? 'none' : '';
+            updateAlphaIndexVisibility();
+        }
+
+        function sortLibrary(instance) {
+            const sortMode = document.getElementById(`sort-${instance}`).value;
+            const container = document.getElementById(`library-rows-${instance}`);
+            const cards = Array.from(container.querySelectorAll('.library-card'));
+
+            cards.sort((a, b) => {
+                if (sortMode === 'title') {
+                    return a.dataset.title.toLowerCase().localeCompare(b.dataset.title.toLowerCase());
+                } else if (sortMode === 'release') {
+                    // Newest first - empty dates (kinds with no clean
+                    // release-date concept, like artists/authors) sort last.
+                    if (!a.dataset.releaseDate) return 1;
+                    if (!b.dataset.releaseDate) return -1;
+                    return b.dataset.releaseDate.localeCompare(a.dataset.releaseDate);
+                } else if (sortMode === 'added') {
+                    if (!a.dataset.dateAdded) return 1;
+                    if (!b.dataset.dateAdded) return -1;
+                    return b.dataset.dateAdded.localeCompare(a.dataset.dateAdded);
+                }
+                return 0;
+            });
+
+            cards.forEach(card => container.appendChild(card));
+            updateAlphaIndexVisibility();
+        }
+
+        function updateAlphaIndexVisibility() {
+            const sortSelect = document.getElementById(`sort-${currentInstance}`);
+            const isAlphabetical = !sortSelect || sortSelect.value === 'title';
+            document.getElementById('alpha-index').classList.toggle('hidden', currentView !== 'library' || !isAlphabetical);
         }
 
         function openCollectionModal(instance, collectionId) {
