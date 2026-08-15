@@ -2392,6 +2392,12 @@ def api_mediaserver_poster_proxy():
     target_url = request.args.get("url", "")
     if not target_url or not tracearr_configured():
         return "", 404
+
+    # poster_url might be a relative path rather than a full URL -
+    # resolve it against the configured Tracearr base if so.
+    if not target_url.startswith("http://") and not target_url.startswith("https://"):
+        target_url = f"{TRACEARR['url'].rstrip('/')}/{target_url.lstrip('/')}"
+
     if not target_url.startswith(TRACEARR["url"].rstrip("/")):
         return "", 403  # only ever proxy our own configured Tracearr instance
 
@@ -2399,8 +2405,10 @@ def api_mediaserver_poster_proxy():
         response = requests.get(
             target_url, headers={"Authorization": f"Bearer {TRACEARR['api_key']}"}, timeout=10,
         )
+        print(f"[tracearr poster proxy debug] fetched {target_url} -> status {response.status_code}, content-type {response.headers.get('Content-Type')}, bytes {len(response.content)}")
         response.raise_for_status()
-    except requests.exceptions.RequestException:
+    except requests.exceptions.RequestException as err:
+        print(f"[tracearr poster proxy debug] request failed for {target_url}: {err}")
         return "", 502
 
     return Response(response.content, mimetype=response.headers.get("Content-Type", "image/jpeg"))
@@ -2418,6 +2426,9 @@ def fetch_tracearr_now_playing(server_name: str) -> dict:
         data = tracearr_request("/streams")
     except requests.exceptions.RequestException as err:
         return {"error": str(err), "items": []}
+
+    if data.get("data"):
+        print(f"[tracearr poster debug] raw poster_url from first stream: {data['data'][0].get('poster_url')!r}")
 
     items = []
     for s in data.get("data") or []:
