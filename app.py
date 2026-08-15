@@ -64,6 +64,12 @@ INDEXER_ICONS = {
     "prowlarr": "/static/icons/prowlarr.svg",
 }
 
+MEDIA_SERVER_ICONS = {
+    "plex": "/static/icons/mediaserver.svg",
+    "jellyfin": "/static/icons/mediaserver.svg",
+    "emby": "/static/icons/mediaserver.svg",
+}
+
 # Structural facts about each *kind* of arr app - which endpoints it uses,
 # what kind of library it holds, which Overseerr media type it maps to.
 # Any number of named instances can share one of these kinds.
@@ -2056,6 +2062,236 @@ def api_indexers_test(name, indexer_id):
 
 
 # ---------------------------------------------------------------------------
+# Media Server activity views (Now Playing / Recently Added / Watch
+# History / Users) - separate from the arr instances entirely, same
+# reasoning as Downloaders and Indexers.
+#
+# Plex and Jellyfin/Emby have meaningfully different APIs, so each tab
+# has one function per dialect (Jellyfin and Emby share the same one).
+# Two honest limitations, flagged up front:
+# - Plex "Users" only shows locally-managed accounts via this local
+#   server API - shared/"friend" users live on plex.tv's cloud API,
+#   a different credential surface than the server token stored here,
+#   so this will likely undercount who actually has access.
+# - Jellyfin/Emby have no clean built-in watch-history endpoint the
+#   way Plex does - this approximates it via the admin Activity Log,
+#   filtered to playback-looking entries, and is less complete.
+# ---------------------------------------------------------------------------
+
+
+def get_media_server(name: str):
+    return next((s for s in MEDIA_SERVERS if s["name"] == name), None)
+
+
+def fetch_plex_now_playing(server: dict) -> dict:
+    try:
+        response = requests.get(
+            f"{server['url'].rstrip('/')}/status/sessions",
+            headers={"Accept": "application/json"},
+            params={"X-Plex-Token": server["credential"]}, timeout=10,
+        )
+        response.raise_for_status()
+        sessions = response.json().get("MediaContainer", {}).get("Metadata", []) or []
+    except requests.exceptions.RequestException as err:
+        return {"error": str(err), "items": []}
+
+    items = []
+    for s in sessions:
+        duration = s.get("duration") or 0
+        offset = s.get("viewOffset") or 0
+        title = s.get("title", "(unknown)")
+        if s.get("grandparentTitle"):
+            title = f"{s['grandparentTitle']} - {title}"
+        items.append({
+            "title": title,
+            "user": (s.get("User") or {}).get("title", "Unknown"),
+            "device": (s.get("Player") or {}).get("title", ""),
+            "progress_pct": round((offset / duration) * 100, 1) if duration else 0,
+            "state": (s.get("Player") or {}).get("state", ""),
+        })
+    return {"error": None, "items": items}
+
+
+def fetch_jellyfin_now_playing(server: dict) -> dict:
+    try:
+        response = requests.get(
+            f"{server['url'].rstrip('/')}/Sessions",
+            headers={"X-Emby-Token": server["credential"]}, timeout=10,
+        )
+        response.raise_for_status()
+        sessions = response.json() or []
+    except requests.exceptions.RequestException as err:
+        return {"error": str(err), "items": []}
+
+    items = []
+    for s in sessions:
+        now_playing = s.get("NowPlayingItem")
+        if not now_playing:
+            continue
+        play_state = s.get("PlayState") or {}
+        position = play_state.get("PositionTicks") or 0
+        runtime = now_playing.get("RunTimeTicks") or 0
+        items.append({
+            "title": now_playing.get("Name", "(unknown)"),
+            "user": s.get("UserName", "Unknown"),
+            "device": s.get("DeviceName", ""),
+            "progress_pct": round((position / runtime) * 100, 1) if runtime else 0,
+            "state": "paused" if play_state.get("IsPaused") else "playing",
+        })
+    return {"error": None, "items": items}
+
+
+def fetch_plex_recently_added(server: dict) -> dict:
+    try:
+        response = requests.get(
+            f"{server['url'].rstrip('/')}/library/recentlyAdded",
+            headers={"Accept": "application/json"},
+            params={"X-Plex-Token": server["credential"]}, timeout=10,
+        )
+        response.raise_for_status()
+        entries = response.json().get("MediaContainer", {}).get("Metadata", []) or []
+    except requests.exceptions.RequestException as err:
+        return {"error": str(err), "items": []}
+
+    items = []
+    for e in entries[:30]:
+        title = e.get("title", "(unknown)")
+        if e.get("grandparentTitle"):
+            title = f"{e['grandparentTitle']} - {title}"
+        items.append({"title": title, "type": e.get("type", "")})
+    return {"error": None, "items": items}
+
+
+def fetch_jellyfin_recently_added(server: dict) -> dict:
+    try:
+        response = requests.get(
+            f"{server['url'].rstrip('/')}/Items",
+            headers={"X-Emby-Token": server["credential"]},
+            params={
+                "SortBy": "DateCreated", "SortOrder": "Descending", "Recursive": "true", "Limit": 30,
+                "IncludeItemTypes": "Movie,Series,Episode,Audio,MusicAlbum",
+            }, timeout=10,
+        )
+        response.raise_for_status()
+        entries = response.json().get("Items", []) or []
+    except requests.exceptions.RequestException as err:
+        return {"error": str(err), "items": []}
+
+    items = [{"title": e.get("Name", "(unknown)"), "type": e.get("Type", "")} for e in entries]
+    return {"error": None, "items": items}
+
+
+def fetch_plex_watch_history(server: dict) -> dict:
+    try:
+        response = requests.get(
+            f"{server['url'].rstrip('/')}/status/sessions/history/all",
+            headers={"Accept": "application/json"},
+            params={"X-Plex-Token": server["credential"], "sort": "viewedAt:desc"}, timeout=10,
+        )
+        response.raise_for_status()
+        entries = response.json().get("MediaContainer", {}).get("Metadata", []) or []
+    except requests.exceptions.RequestException as err:
+        return {"error": str(err), "items": []}
+
+    items = []
+    for e in entries[:30]:
+        title = e.get("title", "(unknown)")
+        if e.get("grandparentTitle"):
+            title = f"{e['grandparentTitle']} - {title}"
+        user = e.get("User")
+        items.append({
+            "title": title,
+            "user": user.get("title", "") if isinstance(user, dict) else "",
+        })
+    return {"error": None, "items": items}
+
+
+def fetch_jellyfin_watch_history(server: dict) -> dict:
+    """Approximated via the admin Activity Log - see module note above."""
+    try:
+        response = requests.get(
+            f"{server['url'].rstrip('/')}/System/ActivityLog/Entries",
+            headers={"X-Emby-Token": server["credential"]},
+            params={"Limit": 50}, timeout=10,
+        )
+        response.raise_for_status()
+        entries = response.json().get("Items", []) or []
+    except requests.exceptions.RequestException as err:
+        return {"error": str(err), "items": []}
+
+    items = [
+        {"title": e.get("Name", "(unknown)"), "user": e.get("UserId", "")}
+        for e in entries
+        if "play" in (e.get("Type") or "").lower() or "play" in (e.get("Name") or "").lower()
+    ]
+    return {"error": None, "items": items[:30]}
+
+
+def fetch_plex_users(server: dict) -> dict:
+    """Local-server accounts only - see module note above about shared users."""
+    try:
+        response = requests.get(
+            f"{server['url'].rstrip('/')}/accounts",
+            headers={"Accept": "application/json"},
+            params={"X-Plex-Token": server["credential"]}, timeout=10,
+        )
+        response.raise_for_status()
+        accounts = response.json().get("MediaContainer", {}).get("Account", []) or []
+    except requests.exceptions.RequestException as err:
+        return {"error": str(err), "items": []}
+
+    items = [{"name": a.get("name") or a.get("title", "(unknown)")} for a in accounts]
+    return {"error": None, "items": items}
+
+
+def fetch_jellyfin_users(server: dict) -> dict:
+    try:
+        response = requests.get(
+            f"{server['url'].rstrip('/')}/Users",
+            headers={"X-Emby-Token": server["credential"]}, timeout=10,
+        )
+        response.raise_for_status()
+        users = response.json() or []
+    except requests.exceptions.RequestException as err:
+        return {"error": str(err), "items": []}
+
+    items = [{"name": u.get("Name", "(unknown)")} for u in users]
+    return {"error": None, "items": items}
+
+
+def _dispatch_media_server_fetch(name, plex_fn, jellyfin_fn):
+    server = get_media_server(name)
+    if not server:
+        return jsonify({"error": "unknown media server"}), 404
+    result = plex_fn(server) if server["type"] == "plex" else jellyfin_fn(server)
+    return jsonify(result)
+
+
+@app.route("/api/mediaserver/now-playing/<name>")
+@login_required
+def api_mediaserver_now_playing(name):
+    return _dispatch_media_server_fetch(name, fetch_plex_now_playing, fetch_jellyfin_now_playing)
+
+
+@app.route("/api/mediaserver/recently-added/<name>")
+@login_required
+def api_mediaserver_recently_added(name):
+    return _dispatch_media_server_fetch(name, fetch_plex_recently_added, fetch_jellyfin_recently_added)
+
+
+@app.route("/api/mediaserver/watch-history/<name>")
+@login_required
+def api_mediaserver_watch_history(name):
+    return _dispatch_media_server_fetch(name, fetch_plex_watch_history, fetch_jellyfin_watch_history)
+
+
+@app.route("/api/mediaserver/users/<name>")
+@login_required
+def api_mediaserver_users(name):
+    return _dispatch_media_server_fetch(name, fetch_plex_users, fetch_jellyfin_users)
+
+
+# ---------------------------------------------------------------------------
 # Settings
 # ---------------------------------------------------------------------------
 
@@ -2312,7 +2548,7 @@ def settings():
             "instances": dedupe_names(parse_indexed_entries(
                 request.form, "instance", ["kind", "url", "api_key", "color", "enabled"])),
             "media_servers": dedupe_names(parse_indexed_entries(
-                request.form, "mediaserver", ["type", "url", "credential", "enabled"])),
+                request.form, "mediaserver", ["type", "url", "credential", "color", "enabled"])),
             "requesters": dedupe_names(parse_indexed_entries(
                 request.form, "requester", ["type", "url", "credential", "enabled"])),
             "downloaders": dedupe_names(parse_indexed_entries(
@@ -2449,9 +2685,19 @@ def index():
         for i in INDEXERS if i.get("enabled", True)
     ]
 
+    media_servers_for_template = [
+        {
+            "name": s["name"],
+            "type": s["type"],
+            "color": s.get("color", "#5b8cff"),
+            "logo_url": MEDIA_SERVER_ICONS.get(s["type"], ""),
+        }
+        for s in MEDIA_SERVERS if s.get("enabled", True)
+    ]
+
     return render_template(
         "index.html", instances=instances, downloaders=downloaders_for_template,
-        indexer_services=indexers_for_template,
+        indexer_services=indexers_for_template, media_server_list=media_servers_for_template,
         username=user["username"], is_admin=is_admin,
         can_request=perms["requesting"], can_search=perms["searching"],
     )

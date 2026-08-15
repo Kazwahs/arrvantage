@@ -699,6 +699,21 @@
         {% endfor %}
         {% endif %}
 
+        {% if media_server_list|length > 0 %}
+        <hr class="sidebar-divider">
+        <div class="sidebar-title">Media Servers</div>
+        {% for ms in media_server_list %}
+        <button class="instance-tab mediaserver-tab"
+                data-mediaserver="{{ ms.name }}"
+                data-mediaserver-type="{{ ms.type }}"
+                style="--tab-color: {{ ms.color }};"
+                onclick="selectMediaServer('{{ ms.name }}')">
+            <img class="instance-logo" src="{{ ms.logo_url }}" alt="" onerror="this.style.display='none';">
+            {{ ms.name }}
+        </button>
+        {% endfor %}
+        {% endif %}
+
         {% if indexer_services|length > 0 %}
         <hr class="sidebar-divider">
         <div class="sidebar-title">Indexers</div>
@@ -937,6 +952,31 @@
                 {% endfor %}
             </div>
         </div>
+
+        <div id="mediaservers-view" style="display:none;">
+            <div class="topbar">
+                <div class="view-tabs">
+                    <button class="view-tab mediaserver-subtab active" data-mstab="now-playing" onclick="selectMediaServerTab('now-playing')">Now Playing</button>
+                    <button class="view-tab mediaserver-subtab" data-mstab="recently-added" onclick="selectMediaServerTab('recently-added')">Recently Added</button>
+                    <button class="view-tab mediaserver-subtab" data-mstab="watch-history" onclick="selectMediaServerTab('watch-history')">Watch History</button>
+                    <button class="view-tab mediaserver-subtab" data-mstab="users" onclick="selectMediaServerTab('users')">Users</button>
+                </div>
+                <div class="topbar-right">
+                    <button class="test-btn" onclick="refreshCurrentMediaServerTab()">Refresh</button>
+                </div>
+            </div>
+            <div class="content">
+                {% for ms in media_server_list %}
+                <div class="mediaserver-panel" data-mediaserver="{{ ms.name }}" style="display:none;">
+                    {% for tab in ["now-playing", "recently-added", "watch-history", "users"] %}
+                    <div class="mediaserver-subpanel" data-mstab="{{ tab }}" style="display:{{ 'block' if tab == 'now-playing' else 'none' }};">
+                        <div id="mediaserver-{{ tab }}-{{ ms.name }}" class="modal-loading">Loading...</div>
+                    </div>
+                    {% endfor %}
+                </div>
+                {% endfor %}
+            </div>
+        </div>
     </div>
 
     <div class="alpha-index" id="alpha-index">
@@ -974,6 +1014,7 @@
             });
             document.getElementById('downloaders-view').style.display = 'none';
             document.getElementById('indexers-view').style.display = 'none';
+            document.getElementById('mediaservers-view').style.display = 'none';
             document.getElementById('instances-view').style.display = 'block';
             updateQueueTabCount();
             updateRequestTabVisibility();
@@ -998,6 +1039,7 @@
 
             document.getElementById('instances-view').style.display = 'none';
             document.getElementById('indexers-view').style.display = 'none';
+            document.getElementById('mediaservers-view').style.display = 'none';
             document.getElementById('downloaders-view').style.display = 'block';
 
             document.querySelectorAll('.downloader-panel').forEach(el => {
@@ -1026,6 +1068,7 @@
 
             document.getElementById('instances-view').style.display = 'none';
             document.getElementById('downloaders-view').style.display = 'none';
+            document.getElementById('mediaservers-view').style.display = 'none';
             document.getElementById('indexers-view').style.display = 'block';
 
             document.querySelectorAll('.indexer-service-panel').forEach(el => {
@@ -1108,6 +1151,119 @@
                     resultEl.textContent = 'Request failed';
                     resultEl.className = 'test-status test-fail';
                 }
+            }
+        }
+
+        // --- Media Servers (Plex / Jellyfin / Emby activity views) ---
+
+        let currentMediaServer = null;
+        let currentMediaServerTab = 'now-playing';
+        const loadedMediaServerTabs = new Set(); // "serverName:tab" - avoid re-fetching on every sub-tab click
+
+        function selectMediaServer(name) {
+            currentMediaServer = name;
+            document.querySelectorAll('.instance-tab').forEach(el => {
+                el.classList.toggle('active', el.dataset.mediaserver === name);
+            });
+
+            document.getElementById('instances-view').style.display = 'none';
+            document.getElementById('downloaders-view').style.display = 'none';
+            document.getElementById('indexers-view').style.display = 'none';
+            document.getElementById('mediaservers-view').style.display = 'block';
+
+            document.querySelectorAll('.mediaserver-panel').forEach(el => {
+                el.style.display = el.dataset.mediaserver === name ? 'block' : 'none';
+            });
+
+            loadMediaServerTabData(name, currentMediaServerTab);
+        }
+
+        function selectMediaServerTab(tab) {
+            currentMediaServerTab = tab;
+            document.querySelectorAll('.mediaserver-subtab').forEach(el => {
+                el.classList.toggle('active', el.dataset.mstab === tab);
+            });
+
+            const panel = document.querySelector(`.mediaserver-panel[data-mediaserver="${currentMediaServer}"]`);
+            if (panel) {
+                panel.querySelectorAll('.mediaserver-subpanel').forEach(el => {
+                    el.style.display = el.dataset.mstab === tab ? 'block' : 'none';
+                });
+            }
+
+            if (currentMediaServer) loadMediaServerTabData(currentMediaServer, tab);
+        }
+
+        function refreshCurrentMediaServerTab() {
+            if (currentMediaServer) loadMediaServerTabData(currentMediaServer, currentMediaServerTab, true);
+        }
+
+        async function loadMediaServerTabData(name, tab, forceReload) {
+            const key = `${name}:${tab}`;
+            if (loadedMediaServerTabs.has(key) && !forceReload) return;
+
+            const listEl = document.getElementById(`mediaserver-${tab}-${name}`);
+            listEl.innerHTML = '<div class="modal-loading">Loading...</div>';
+
+            const endpoints = {
+                'now-playing': 'now-playing', 'recently-added': 'recently-added',
+                'watch-history': 'watch-history', 'users': 'users',
+            };
+
+            try {
+                const response = await fetch(`/api/mediaserver/${endpoints[tab]}/${name}`);
+                const data = await response.json();
+
+                if (data.error) {
+                    listEl.innerHTML = `<div class="modal-empty">${data.error}</div>`;
+                    return;
+                }
+                if (!data.items.length) {
+                    listEl.innerHTML = '<div class="empty">Nothing to show here right now</div>';
+                    loadedMediaServerTabs.add(key);
+                    return;
+                }
+
+                if (tab === 'now-playing') {
+                    listEl.innerHTML = data.items.map(item => `
+                        <div class="request-row">
+                            <div class="request-info" style="flex: 1;">
+                                <div class="request-title">${item.title}</div>
+                                <div class="request-meta">${item.user}${item.device ? ' &middot; ' + item.device : ''} &middot; ${item.progress_pct}% &middot; ${item.state || ''}</div>
+                            </div>
+                        </div>
+                    `).join('');
+                } else if (tab === 'recently-added') {
+                    listEl.innerHTML = data.items.map(item => `
+                        <div class="request-row">
+                            <div class="request-info" style="flex: 1;">
+                                <div class="request-title">${item.title}</div>
+                                <div class="request-meta">${item.type || ''}</div>
+                            </div>
+                        </div>
+                    `).join('');
+                } else if (tab === 'watch-history') {
+                    listEl.innerHTML = data.items.map(item => `
+                        <div class="request-row">
+                            <div class="request-info" style="flex: 1;">
+                                <div class="request-title">${item.title}</div>
+                                <div class="request-meta">${item.user || ''}</div>
+                            </div>
+                        </div>
+                    `).join('');
+                } else if (tab === 'users') {
+                    listEl.innerHTML = data.items.map(item => `
+                        <div class="request-row">
+                            <div class="request-info" style="flex: 1;">
+                                <div class="request-title">${item.name}</div>
+                            </div>
+                        </div>
+                    `).join('');
+                }
+
+                loadedMediaServerTabs.add(key);
+            } catch (err) {
+                listEl.innerHTML = '<div class="modal-empty">Could not load this data.</div>';
             }
         }
 
