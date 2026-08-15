@@ -60,6 +60,10 @@ DOWNLOADER_ICONS = {
     "sabnzbd": "/static/icons/sabnzbd.svg",
 }
 
+INDEXER_ICONS = {
+    "prowlarr": "/static/icons/prowlarr.svg",
+}
+
 # Structural facts about each *kind* of arr app - which endpoints it uses,
 # what kind of library it holds, which Overseerr media type it maps to.
 # Any number of named instances can share one of these kinds.
@@ -118,6 +122,12 @@ DOWNLOADER_TYPES = {
     "sabnzbd": "SABnzbd",
 }
 
+# Indexer manager types. Only Prowlarr is supported today, but kept as
+# a dict (matching DOWNLOADER_TYPES's shape) in case that ever changes.
+INDEXER_SERVICE_TYPES = {
+    "prowlarr": "Prowlarr",
+}
+
 # In Docker, set CONFIG_DIR to a mounted volume path (e.g. /app/data) so
 # config.json - your instances, users, and API keys - survives image
 # rebuilds. Left unset, it defaults to sitting next to this file, same
@@ -127,7 +137,7 @@ os.makedirs(CONFIG_DIR, exist_ok=True)  # in case a fresh volume mount is still 
 CONFIG_PATH = os.path.join(CONFIG_DIR, "config.json")
 
 EMPTY_CONFIG = {
-    "instances": [], "media_servers": [], "requesters": [], "downloaders": [], "users": [],
+    "instances": [], "media_servers": [], "requesters": [], "downloaders": [], "indexers": [], "users": [],
     "tmdb": {"api_key": ""}, "tvdb": {"api_key": "", "pin": ""},
     "fanart": {"api_key": ""}, "theaudiodb": {"api_key": "123"}, "secret_key": "",
 }
@@ -203,6 +213,7 @@ TVDB = CONFIG.get("tvdb", {"api_key": "", "pin": ""})
 FANART = CONFIG.get("fanart", {"api_key": ""})
 THEAUDIODB = CONFIG.get("theaudiodb", {"api_key": "123"})
 DOWNLOADERS = CONFIG.get("downloaders", [])
+INDEXERS = CONFIG.get("indexers", [])
 USERS = CONFIG.get("users", [])
 
 # Flask needs a secret key to sign session cookies. Generate one on first
@@ -1932,6 +1943,84 @@ def api_downloader_action(name):
 
 
 # ---------------------------------------------------------------------------
+# Indexers (Prowlarr) - separate from the arr instances entirely, same
+# reasoning as Downloaders: Prowlarr is usually one shared service, not
+# tied to any single Radarr/Sonarr/Lidarr instance.
+# ---------------------------------------------------------------------------
+
+
+def fetch_prowlarr_indexers(service: dict) -> dict:
+    """
+    Best-guess structure: GET /api/v1/indexer for the base indexer
+    list, cross-referenced against GET /api/v1/indexerstatus for
+    health - Prowlarr tracks failing indexers separately, only listing
+    ones currently having issues there, so absence from that list
+    means healthy. Check raw JSON from both endpoints first if health
+    looks wrong.
+    """
+    base = service["url"].rstrip("/")
+    headers = {"X-Api-Key": service["api_key"]}
+
+    try:
+        indexers_resp = requests.get(f"{base}/api/v1/indexer", headers=headers, timeout=15)
+        indexers_resp.raise_for_status()
+        status_resp = requests.get(f"{base}/api/v1/indexerstatus", headers=headers, timeout=15)
+        status_resp.raise_for_status()
+    except requests.exceptions.RequestException as err:
+        return {"error": str(err), "indexers": []}
+
+    unhealthy_ids = {s.get("indexerId") for s in status_resp.json()}
+
+    indexers = [
+        {
+            "id": i.get("id"),
+            "name": i.get("name", "(unknown)"),
+            "enabled": i.get("enable", True),
+            "protocol": i.get("protocol", ""),
+            "healthy": i.get("id") not in unhealthy_ids,
+        }
+        for i in indexers_resp.json()
+    ]
+    indexers.sort(key=lambda i: i["name"].lower())
+    return {"error": None, "indexers": indexers}
+
+
+def test_prowlarr_indexer(service: dict, indexer_id: int) -> None:
+    """Best-guess endpoint path - check here first if testing fails."""
+    base = service["url"].rstrip("/")
+    headers = {"X-Api-Key": service["api_key"]}
+    response = requests.post(f"{base}/api/v1/indexer/test/{indexer_id}", headers=headers, timeout=30)
+    response.raise_for_status()
+
+
+def get_indexer_service(name: str):
+    return next((s for s in INDEXERS if s["name"] == name), None)
+
+
+@app.route("/api/indexers/status/<name>")
+@login_required
+def api_indexers_status(name):
+    service = get_indexer_service(name)
+    if not service:
+        return jsonify({"error": "unknown indexer service"}), 404
+    return jsonify(fetch_prowlarr_indexers(service))
+
+
+@app.route("/api/indexers/test/<name>/<int:indexer_id>", methods=["POST"])
+@login_required
+@permission_required("searching")
+def api_indexers_test(name, indexer_id):
+    service = get_indexer_service(name)
+    if not service:
+        return jsonify({"ok": False, "error": "unknown indexer service"}), 404
+    try:
+        test_prowlarr_indexer(service, indexer_id)
+        return jsonify({"ok": True})
+    except requests.exceptions.RequestException as err:
+        return jsonify({"ok": False, "error": str(err)}), 502
+
+
+# ---------------------------------------------------------------------------
 # Settings
 # ---------------------------------------------------------------------------
 
@@ -2065,6 +2154,11 @@ def api_settings_test():
             )
             if response.ok and "error" in response.json():
                 return jsonify({"ok": False, "error": response.json()["error"]})
+        elif category == "indexerserver" and kind_or_type == "prowlarr":
+            response = requests.get(
+                f"{url.rstrip('/')}/api/v1/system/status",
+                headers={"X-Api-Key": credential}, timeout=8,
+            )
         else:
             return jsonify({"ok": False, "error": "unknown settings type"})
 
@@ -2176,7 +2270,7 @@ def parse_users(form, existing_users: list) -> list:
 @login_required
 @admin_required
 def settings():
-    global CONFIG, APPS, MEDIA_SERVERS, REQUESTERS, DOWNLOADERS, USERS, TMDB, TVDB, FANART, THEAUDIODB
+    global CONFIG, APPS, MEDIA_SERVERS, REQUESTERS, DOWNLOADERS, INDEXERS, USERS, TMDB, TVDB, FANART, THEAUDIODB
 
     if request.method == "POST":
         new_config = {
@@ -2188,6 +2282,8 @@ def settings():
                 request.form, "requester", ["type", "url", "credential", "enabled"])),
             "downloaders": dedupe_names(parse_indexed_entries(
                 request.form, "downloader", ["type", "url", "api_key", "color", "enabled"])),
+            "indexers": dedupe_names(parse_indexed_entries(
+                request.form, "indexerserver", ["type", "url", "api_key", "color", "enabled"])),
             "users": parse_users(request.form, CONFIG.get("users", [])),
             "tmdb": {"api_key": request.form.get("tmdb_api_key", "").strip()},
             "tvdb": {
@@ -2207,6 +2303,7 @@ def settings():
         MEDIA_SERVERS = CONFIG["media_servers"]
         REQUESTERS = CONFIG["requesters"]
         DOWNLOADERS = CONFIG["downloaders"]
+        INDEXERS = CONFIG["indexers"]
         USERS = CONFIG["users"]
         TMDB = CONFIG["tmdb"]
         TVDB = CONFIG["tvdb"]
@@ -2227,6 +2324,7 @@ def settings():
         media_servers=CONFIG.get("media_servers", []),
         requesters=CONFIG.get("requesters", []),
         downloaders=CONFIG.get("downloaders", []),
+        indexers=CONFIG.get("indexers", []),
         users=CONFIG.get("users", []),
         tmdb=CONFIG.get("tmdb", {"api_key": ""}),
         tvdb=CONFIG.get("tvdb", {"api_key": "", "pin": ""}),
@@ -2236,6 +2334,7 @@ def settings():
         media_server_type_options=MEDIA_SERVER_TYPES,
         requester_type_options=REQUESTER_TYPES,
         downloader_type_options=DOWNLOADER_TYPES,
+        indexer_type_options=INDEXER_SERVICE_TYPES,
         saved=request.args.get("saved") == "1",
     )
 
@@ -2305,8 +2404,19 @@ def index():
         for d in DOWNLOADERS if d.get("enabled", True)
     ]
 
+    indexers_for_template = [
+        {
+            "name": i["name"],
+            "type": i["type"],
+            "color": i.get("color", "#5b8cff"),
+            "logo_url": INDEXER_ICONS.get(i["type"], ""),
+        }
+        for i in INDEXERS if i.get("enabled", True)
+    ]
+
     return render_template(
         "index.html", instances=instances, downloaders=downloaders_for_template,
+        indexer_services=indexers_for_template,
         username=user["username"], is_admin=is_admin,
         can_request=perms["requesting"], can_search=perms["searching"],
     )

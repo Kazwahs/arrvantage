@@ -260,6 +260,8 @@
         .request-info { min-width: 0; }
         .request-title { font-size: 0.88rem; }
         .request-meta { font-size: 0.78rem; color: var(--muted); margin-top: 0.15rem; }
+        .test-ok { color: var(--success); }
+        .test-fail { color: var(--error); }
 
         .section-label {
             font-size: 0.75rem;
@@ -695,6 +697,21 @@
         </button>
         {% endfor %}
         {% endif %}
+
+        {% if indexer_services|length > 0 %}
+        <hr class="sidebar-divider">
+        <div class="sidebar-title">Indexers</div>
+        {% for idx in indexer_services %}
+        <button class="instance-tab indexer-tab"
+                data-indexer-service="{{ idx.name }}"
+                data-indexer-type="{{ idx.type }}"
+                style="--tab-color: {{ idx.color }};"
+                onclick="selectIndexerService('{{ idx.name }}')">
+            <img class="instance-logo" src="{{ idx.logo_url }}" alt="" onerror="this.style.display='none';">
+            {{ idx.name }}
+        </button>
+        {% endfor %}
+        {% endif %}
     </div>
 
     <div class="main">
@@ -901,6 +918,24 @@
                 {% endfor %}
             </div>
         </div>
+
+        <div id="indexers-view" style="display:none;">
+            <div class="topbar">
+                <div class="view-tabs">
+                    <span id="indexer-service-title-label" style="padding: 0.5rem 0.25rem; font-weight: 600;"></span>
+                </div>
+                <div class="topbar-right">
+                    <button class="test-btn" onclick="refreshCurrentIndexerService()">Refresh</button>
+                </div>
+            </div>
+            <div class="content">
+                {% for idx in indexer_services %}
+                <div class="indexer-service-panel" data-indexer-service="{{ idx.name }}" style="display:none;">
+                    <div id="indexer-list-{{ idx.name }}" class="modal-loading">Loading...</div>
+                </div>
+                {% endfor %}
+            </div>
+        </div>
     </div>
 
     <div class="alpha-index" id="alpha-index">
@@ -937,6 +972,7 @@
                 el.classList.toggle('active', el.dataset.instance === name);
             });
             document.getElementById('downloaders-view').style.display = 'none';
+            document.getElementById('indexers-view').style.display = 'none';
             document.getElementById('instances-view').style.display = 'block';
             updateQueueTabCount();
             updateRequestTabVisibility();
@@ -960,6 +996,7 @@
             });
 
             document.getElementById('instances-view').style.display = 'none';
+            document.getElementById('indexers-view').style.display = 'none';
             document.getElementById('downloaders-view').style.display = 'block';
 
             document.querySelectorAll('.downloader-panel').forEach(el => {
@@ -974,6 +1011,92 @@
 
         function refreshCurrentDownloader() {
             if (currentDownloader) loadDownloaderStatus(currentDownloader);
+        }
+
+        // --- Indexers (Prowlarr) ---
+
+        let currentIndexerService = null;
+
+        function selectIndexerService(name) {
+            currentIndexerService = name;
+            document.querySelectorAll('.instance-tab').forEach(el => {
+                el.classList.toggle('active', el.dataset.indexerService === name);
+            });
+
+            document.getElementById('instances-view').style.display = 'none';
+            document.getElementById('downloaders-view').style.display = 'none';
+            document.getElementById('indexers-view').style.display = 'block';
+
+            document.querySelectorAll('.indexer-service-panel').forEach(el => {
+                el.style.display = el.dataset.indexerService === name ? 'block' : 'none';
+            });
+
+            const tab = document.querySelector(`.instance-tab[data-indexer-service="${name}"]`);
+            document.getElementById('indexer-service-title-label').textContent = tab ? `${name} — Indexer Health` : name;
+
+            loadIndexerServiceStatus(name);
+        }
+
+        function refreshCurrentIndexerService() {
+            if (currentIndexerService) loadIndexerServiceStatus(currentIndexerService);
+        }
+
+        async function loadIndexerServiceStatus(name) {
+            const listEl = document.getElementById(`indexer-list-${name}`);
+            try {
+                const response = await fetch(`/api/indexers/status/${name}`);
+                const data = await response.json();
+
+                if (data.error) {
+                    listEl.innerHTML = `<div class="modal-empty">${data.error}</div>`;
+                    return;
+                }
+                if (!data.indexers.length) {
+                    listEl.innerHTML = '<div class="empty">No indexers configured in Prowlarr</div>';
+                    return;
+                }
+
+                listEl.innerHTML = data.indexers.map(idx => `
+                    <div class="request-row">
+                        <div class="request-info" style="flex: 1;">
+                            <div class="request-title">${idx.name}</div>
+                            <div class="request-meta">
+                                ${idx.protocol || ''}${idx.enabled ? '' : ' &middot; Disabled'}
+                                &middot; <span class="${idx.healthy ? 'test-ok' : 'test-fail'}">${idx.healthy ? 'Healthy' : 'Unhealthy'}</span>
+                            </div>
+                        </div>
+                        ${!idx.healthy ? `
+                        <div class="card-actions" style="margin-top: 0;">
+                            <button class="mini-btn" onclick="testIndexer('${name}', ${idx.id}, this)">Test</button>
+                        </div>
+                        ` : ''}
+                    </div>
+                `).join('');
+            } catch (err) {
+                listEl.innerHTML = '<div class="modal-empty">Could not load indexer status.</div>';
+            }
+        }
+
+        async function testIndexer(name, indexerId, btn) {
+            btn.disabled = true;
+            const original = btn.textContent;
+            btn.textContent = 'Testing...';
+
+            try {
+                const response = await fetch(`/api/indexers/test/${name}/${indexerId}`, { method: 'POST' });
+                const result = await response.json();
+
+                if (result.ok) {
+                    loadIndexerServiceStatus(name); // refresh to reflect the new health state
+                } else {
+                    btn.textContent = 'Failed';
+                    btn.title = result.error || 'Unknown error';
+                    btn.disabled = false;
+                }
+            } catch (err) {
+                btn.textContent = 'Failed';
+                btn.disabled = false;
+            }
         }
 
         async function loadDownloaderStatus(name) {
