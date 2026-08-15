@@ -13,7 +13,7 @@ though only the first enabled requester is used for the Request tab
 at a time.
 """
 
-from flask import Flask, render_template, request, jsonify, redirect, url_for, session
+from flask import Flask, render_template, request, jsonify, redirect, url_for, session, Response
 from urllib.parse import quote
 from functools import wraps
 from werkzeug.security import generate_password_hash, check_password_hash
@@ -2379,6 +2379,33 @@ def tracearr_request(path: str, params: dict = None) -> dict:
     return response.json()
 
 
+@app.route("/api/mediaserver/poster-proxy")
+@login_required
+def api_mediaserver_poster_proxy():
+    """
+    Tracearr's poster_url is documented as a 'proxied' URL, which
+    likely means it requires the same Bearer auth as the rest of its
+    API - <img> tags can't send custom headers, so this fetches the
+    image server-side (where we can attach the token) and streams the
+    bytes back instead.
+    """
+    target_url = request.args.get("url", "")
+    if not target_url or not tracearr_configured():
+        return "", 404
+    if not target_url.startswith(TRACEARR["url"].rstrip("/")):
+        return "", 403  # only ever proxy our own configured Tracearr instance
+
+    try:
+        response = requests.get(
+            target_url, headers={"Authorization": f"Bearer {TRACEARR['api_key']}"}, timeout=10,
+        )
+        response.raise_for_status()
+    except requests.exceptions.RequestException:
+        return "", 502
+
+    return Response(response.content, mimetype=response.headers.get("Content-Type", "image/jpeg"))
+
+
 def fetch_tracearr_now_playing(server_name: str) -> dict:
     """
     Tracearr covers Plex, Jellyfin, and Emby from one unified API, so
@@ -2403,11 +2430,15 @@ def fetch_tracearr_now_playing(server_name: str) -> dict:
         progress = s.get("progress_ms") or 0
         items.append({
             "title": title,
-            "poster_url": s.get("poster_url") or "",
+            "poster_url": f"/api/mediaserver/poster-proxy?url={quote(s['poster_url'], safe='')}" if s.get("poster_url") else "",
             "user": s.get("username") or "Unknown",
             "device": s.get("device") or s.get("player", ""),
             "progress_pct": round((progress / duration) * 100, 1) if duration else 0,
             "state": s.get("state", ""),
+            "media_type": s.get("media_type", ""),
+            "tmdb_id": s.get("tmdb_id"),
+            "tvdb_id": s.get("tvdb_id"),
+            "imdb_id": s.get("imdb_id"),
         })
     return {"error": None, "items": items}
 
@@ -2429,23 +2460,36 @@ def fetch_tracearr_watch_history(server_name: str) -> dict:
         items.append({
             "title": title,
             "user": user.get("username") or "",
-            "poster_url": e.get("poster_url") or "",
+            "poster_url": f"/api/mediaserver/poster-proxy?url={quote(e['poster_url'], safe='')}" if e.get("poster_url") else "",
+            "media_type": e.get("media_type", ""),
+            "tmdb_id": e.get("tmdb_id"),
+            "tvdb_id": e.get("tvdb_id"),
+            "imdb_id": e.get("imdb_id"),
         })
     return {"error": None, "items": items}
 
 
-def fetch_tracearr_users() -> dict:
+def fetch_tracearr_users(server_type: str) -> dict:
     """
-    Not filtered per-server - a watcher's account list spans every
-    server they use, and Tracearr's schema doesn't carry a matchable
-    server_name for this one the way streams/history do.
+    Filtered by matching server_type (plex/jellyfin/emby) on each
+    identity's accounts, since Tracearr's schema has no per-server-name
+    field to filter by the way streams/history do. If you run more
+    than one server of the same type, this can't fully separate them -
+    only the platform type is distinguishable this way.
     """
     try:
         data = tracearr_request("/users", {"pageSize": 100})
     except requests.exceptions.RequestException as err:
         return {"error": str(err), "items": []}
 
-    items = [{"name": u.get("username", "(unknown)")} for u in (data.get("data") or [])]
+    items = []
+    for u in (data.get("data") or []):
+        matching_account = next(
+            (a for a in (u.get("accounts") or []) if a.get("server_type") == server_type), None,
+        )
+        if not matching_account:
+            continue
+        items.append({"name": matching_account.get("username") or u.get("username", "(unknown)")})
     return {"error": None, "items": items}
 
 
@@ -2457,9 +2501,55 @@ def fetch_tracearr_recently_added() -> dict:
     except requests.exceptions.RequestException as err:
         return {"error": str(err), "items": []}
 
-    items = [{"title": e.get("title", "(unknown)"), "type": e.get("media_type", "")} for e in (data.get("data") or [])]
+    items = [
+        {
+            "title": e.get("title", "(unknown)"),
+            "type": e.get("media_type", ""),
+            "media_type": e.get("media_type", ""),
+            "tmdb_id": e.get("tmdb_id"),
+            "tvdb_id": e.get("tvdb_id"),
+            "imdb_id": e.get("imdb_id"),
+        }
+        for e in (data.get("data") or [])
+    ]
     return {"error": None, "items": items}
 
+
+
+@app.route("/api/mediaserver/find-item")
+@login_required
+def api_mediaserver_find_item():
+    """
+    Cross-references an external ID (from Tracearr's data, which is
+    the only media-server source with these IDs wired up so far)
+    against your configured Radarr/Sonarr libraries, so a media-server
+    activity card can open the real detail modal. Only works for
+    titles that are actually in one of your own arr instances - a
+    title only in Plex/Jellyfin and never added to Radarr/Sonarr won't
+    resolve, which is expected, not a bug.
+    """
+    tmdb_id = request.args.get("tmdb_id", type=int)
+    tvdb_id = request.args.get("tvdb_id", type=int)
+    media_type = request.args.get("media_type", "")
+
+    target_kind = "series" if media_type in ("episode", "show", "season") else "movie"
+    if not ((target_kind == "movie" and tmdb_id) or (target_kind == "series" and tvdb_id)):
+        return jsonify({"found": False})
+
+    for name, config in APPS.items():
+        if config["library_kind"] != target_kind:
+            continue
+        try:
+            library = fetch_library(name, config)
+        except requests.exceptions.RequestException:
+            continue
+        for item in library["library_items"]:
+            if target_kind == "movie" and item.get("tmdb_id") == tmdb_id:
+                return jsonify({"found": True, "instance": name, "item_id": item["item_id"]})
+            if target_kind == "series" and item.get("tvdb_id") == tvdb_id:
+                return jsonify({"found": True, "instance": name, "item_id": item["item_id"]})
+
+    return jsonify({"found": False})
 
 
 def _dispatch_media_server_fetch(name, plex_fn, jellyfin_fn):
@@ -2514,7 +2604,7 @@ def api_mediaserver_users(name):
     if not server:
         return jsonify({"error": "unknown media server"}), 404
     if tracearr_configured():
-        return jsonify(fetch_tracearr_users())
+        return jsonify(fetch_tracearr_users(server["type"]))
     if server["type"] == "plex" and tautulli_configured():
         return jsonify(fetch_tautulli_users())
     return _dispatch_media_server_fetch(name, fetch_plex_users, fetch_jellyfin_users)
