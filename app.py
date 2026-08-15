@@ -2337,7 +2337,7 @@ def tracearr_configured() -> bool:
 def tracearr_request(path: str, params: dict = None) -> dict:
     headers = {"Authorization": f"Bearer {TRACEARR['api_key']}"}
     response = requests.get(
-        f"{TRACEARR['url'].rstrip('/')}/api/v2{path}",
+        f"{TRACEARR['url'].rstrip('/')}/api/v2/public{path}",
         headers=headers, params=params or {}, timeout=10,
     )
     response.raise_for_status()
@@ -2401,7 +2401,7 @@ def fetch_tracearr_users() -> dict:
     server_name for this one the way streams/history do.
     """
     try:
-        data = tracearr_request("/watchers", {"pageSize": 100})
+        data = tracearr_request("/users", {"pageSize": 100})
     except requests.exceptions.RequestException as err:
         return {"error": str(err), "items": []}
 
@@ -2593,7 +2593,7 @@ def api_settings_test():
             return jsonify({"ok": False, "error": "URL is required"})
         try:
             response = requests.get(
-                f"{url.rstrip('/')}/api/v2/watchers",
+                f"{url.rstrip('/')}/api/v2/public/users",
                 headers={"Authorization": f"Bearer {credential}"},
                 params={"pageSize": 1}, timeout=8,
             )
