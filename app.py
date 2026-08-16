@@ -2503,26 +2503,49 @@ def fetch_tracearr_users(server_type: str) -> dict:
     return {"error": None, "items": items}
 
 
-def resolve_tracearr_show_title(episode_entry: dict) -> str:
+def resolve_tracearr_show_media(episode_entry: dict) -> dict:
     """
-    Episodes carry no show name directly - resolves one via Tracearr's
-    /media/{ref} lookup: episode's own tvdb_id -> its canonical media
-    record (which has show_media_id) -> that show's own record (which
-    has the title). Returns None on any failure, so the caller can
-    fall back gracefully rather than show a broken group.
+    Episodes carry no show name directly - resolves the show's own
+    record via Tracearr's /media/{ref} lookup: episode's own tvdb_id ->
+    its canonical media record (which has show_media_id) -> that
+    show's own record (which has the title and the show's own
+    tvdb_id). Returns {} on any failure, so the caller can fall back
+    gracefully rather than show a broken group.
     """
     tvdb_id = episode_entry.get("tvdb_id")
     if not tvdb_id:
-        return None
+        return {}
     try:
         episode_media = tracearr_request(f"/media/episode:tvdb:{tvdb_id}")
         show_media_id = episode_media.get("show_media_id")
         if not show_media_id:
-            return None
-        show_media = tracearr_request(f"/media/{show_media_id}")
-        return show_media.get("title")
+            return {}
+        return tracearr_request(f"/media/{show_media_id}")
     except requests.exceptions.RequestException:
-        return None
+        return {}
+
+
+def fetch_tvdb_series_poster(tvdb_id) -> str:
+    """
+    Reuses the same TVDB login/integration built for Sonarr cast
+    lookups. Best-guess field name ("image") for the series' main
+    artwork on the extended series record - check the raw JSON here
+    if posters don't show up.
+    """
+    if not tvdb_id or not TVDB.get("api_key"):
+        return ""
+    token = tvdb_login()
+    if not token:
+        return ""
+    try:
+        response = requests.get(
+            f"https://api4.thetvdb.com/v4/series/{tvdb_id}/extended",
+            headers={"Authorization": f"Bearer {token}"}, timeout=15,
+        )
+        response.raise_for_status()
+        return response.json().get("data", {}).get("image") or ""
+    except requests.exceptions.RequestException:
+        return ""
 
 
 def fetch_tracearr_recently_added() -> dict:
@@ -2540,8 +2563,9 @@ def fetch_tracearr_recently_added() -> dict:
 
     Episodes are grouped by show (via grandparent_rating_key, shared
     by every episode of the same show) rather than listed individually,
-    with the show's own name resolved through a couple of extra
-    Tracearr lookups per unique show - see resolve_tracearr_show_title.
+    with the show's own name and poster resolved through a couple of
+    extra Tracearr + TVDB lookups per unique show - see
+    resolve_tracearr_show_media and fetch_tvdb_series_poster.
     """
     try:
         data = tracearr_request("/recently-added", {"pageSize": 30})
@@ -2579,7 +2603,8 @@ def fetch_tracearr_recently_added() -> dict:
         })
 
     for episodes in show_groups.values():
-        show_title = resolve_tracearr_show_title(episodes[0]) or episodes[0].get("title", "(unknown show)")
+        show_media = resolve_tracearr_show_media(episodes[0])
+        show_title = show_media.get("title") or episodes[0].get("title", "(unknown show)")
         count = len(episodes)
         items.append({
             "title": show_title,
@@ -2588,10 +2613,7 @@ def fetch_tracearr_recently_added() -> dict:
             "tmdb_id": None,
             "tvdb_id": None,
             "imdb_id": None,
-            # Not fetching show posters here - would need a separate
-            # TVDB lookup on top of everything else; left blank for now,
-            # falls back to the same text-card style as any missing image.
-            "poster_url": "",
+            "poster_url": fetch_tvdb_series_poster(show_media.get("tvdb_id")),
         })
     return {"error": None, "items": items}
 
