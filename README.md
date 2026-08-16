@@ -14,7 +14,6 @@ Actively developed — expect rough edges and breaking changes between releases.
 
 ## Features
 
-<!-- TODO: tighten/confirm this list against what actually ships today -->
 
 - Unified dashboard for your \*arr stack (Sonarr, Radarr, Lidarr, Readarr (Tested with Bookshelf and then Chaptarr))
 - Indexer visibility (Prowlarr)
