@@ -2504,24 +2504,42 @@ def fetch_tracearr_users(server_type: str) -> dict:
 
 
 def fetch_tracearr_recently_added() -> dict:
-    """Not filtered per-server either - a title's availability can span
-    multiple servers at once in Tracearr's unified library view."""
+    """
+    Not filtered per-server either - a title's availability can span
+    multiple servers at once in Tracearr's unified library view.
+
+    Tracearr's Recently Added schema has no poster_url field at all
+    (confirmed from its OpenAPI spec - only Streams and History carry
+    one). Reuses this app's existing TMDB integration to fetch a real
+    poster for movies specifically, using tmdb_id. Scoped to movies
+    only - an episode's tmdb_id refers to the episode itself, not the
+    show, so fetching a "show" poster from it would return the wrong
+    (or no) image.
+    """
     try:
         data = tracearr_request("/recently-added", {"pageSize": 30})
     except requests.exceptions.RequestException as err:
         return {"error": str(err), "items": []}
 
-    items = [
-        {
+    items = []
+    for e in (data.get("data") or []):
+        poster_url = ""
+        if e.get("media_type") == "movie" and e.get("tmdb_id") and TMDB.get("api_key"):
+            try:
+                movie = tmdb_get(f"/movie/{e['tmdb_id']}")
+                if movie.get("poster_path"):
+                    poster_url = f"https://image.tmdb.org/t/p/w200{movie['poster_path']}"
+            except requests.exceptions.RequestException:
+                pass
+        items.append({
             "title": e.get("title", "(unknown)"),
             "type": e.get("media_type", ""),
             "media_type": e.get("media_type", ""),
             "tmdb_id": e.get("tmdb_id"),
             "tvdb_id": e.get("tvdb_id"),
             "imdb_id": e.get("imdb_id"),
-        }
-        for e in (data.get("data") or [])
-    ]
+            "poster_url": poster_url,
+        })
     return {"error": None, "items": items}
 
 
