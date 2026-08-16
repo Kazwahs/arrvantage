@@ -2895,8 +2895,7 @@ def fetch_tdarr_file_list(server: dict, category: str) -> dict:
             headers=headers,
             json={
                 "data": {
-                    "start": 0, "pageSize": 300, "filters": [],
-                    "sorts": [{"id": sort_field, "desc": True}],
+                    "start": 0, "pageSize": 300, "filters": [], "sorts": [],
                     "opts": {"table": "table2"},
                 }
             },
@@ -2908,6 +2907,7 @@ def fetch_tdarr_file_list(server: dict, category: str) -> dict:
         return {"error": str(err), "items": []}
 
     matching = [r for r in rows if r.get(field) == match_value]
+    matching.sort(key=lambda r: r.get(sort_field) or 0, reverse=True)
 
     items = [
         {
