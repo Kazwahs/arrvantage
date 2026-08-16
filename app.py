@@ -2908,6 +2908,8 @@ def fetch_tdarr_file_list(server: dict, category: str) -> dict:
 
     matching = [r for r in rows if r.get(field) == match_value]
     matching.sort(key=lambda r: r.get(sort_field) or 0, reverse=True)
+    sample_values = [r.get(field) for r in rows[:5]]
+    print(f"[tdarr files debug] category={category!r} field={field!r} match_value={match_value!r} rows_fetched={len(rows)} matching={len(matching)} sample_values={sample_values}")
 
     items = [
         {
