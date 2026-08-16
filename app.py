@@ -2894,10 +2894,8 @@ def fetch_tdarr_file_list(server: dict, category: str) -> dict:
             f"{base}/api/v2/client/table2",
             headers=headers,
             json={
-                "data": {
-                    "start": 0, "pageSize": 300, "filters": [], "sorts": [],
-                    "opts": {"table": "table2"},
-                }
+                "start": 0, "pageSize": 300, "filters": [], "sorts": [],
+                "opts": {"table": "table2"},
             },
             timeout=20,
         )
