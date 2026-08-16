@@ -2894,12 +2894,15 @@ def fetch_tdarr_file_list(server: dict, category: str) -> dict:
             f"{base}/api/v2/client/table2",
             headers=headers,
             json={
-                "start": 0, "pageSize": 300, "filters": [], "sorts": [],
-                "opts": {"table": "table2"},
+                "data": {
+                    "start": 0, "pageSize": 300, "filters": [], "sorts": [],
+                    "opts": {"table": "table2"},
+                }
             },
             timeout=20,
         )
         response.raise_for_status()
+        print(f"[tdarr raw response debug] status={response.status_code} body={response.text[:500]!r}")
         rows = response.json().get("array", []) or []
     except requests.exceptions.RequestException as err:
         return {"error": str(err), "items": []}
