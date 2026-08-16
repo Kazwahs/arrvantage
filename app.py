@@ -2521,6 +2521,10 @@ def fetch_tracearr_recently_added() -> dict:
     except requests.exceptions.RequestException as err:
         return {"error": str(err), "items": []}
 
+    episode_sample = next((e for e in (data.get("data") or []) if e.get("media_type") == "episode"), None)
+    if episode_sample:
+        print(f"[tracearr recently-added episode debug] {episode_sample}")
+
     items = []
     for e in (data.get("data") or []):
         poster_url = ""
