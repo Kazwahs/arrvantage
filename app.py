@@ -2503,6 +2503,28 @@ def fetch_tracearr_users(server_type: str) -> dict:
     return {"error": None, "items": items}
 
 
+def resolve_tracearr_show_title(episode_entry: dict) -> str:
+    """
+    Episodes carry no show name directly - resolves one via Tracearr's
+    /media/{ref} lookup: episode's own tvdb_id -> its canonical media
+    record (which has show_media_id) -> that show's own record (which
+    has the title). Returns None on any failure, so the caller can
+    fall back gracefully rather than show a broken group.
+    """
+    tvdb_id = episode_entry.get("tvdb_id")
+    if not tvdb_id:
+        return None
+    try:
+        episode_media = tracearr_request(f"/media/episode:tvdb:{tvdb_id}")
+        show_media_id = episode_media.get("show_media_id")
+        if not show_media_id:
+            return None
+        show_media = tracearr_request(f"/media/{show_media_id}")
+        return show_media.get("title")
+    except requests.exceptions.RequestException:
+        return None
+
+
 def fetch_tracearr_recently_added() -> dict:
     """
     Not filtered per-server either - a title's availability can span
@@ -2515,18 +2537,29 @@ def fetch_tracearr_recently_added() -> dict:
     only - an episode's tmdb_id refers to the episode itself, not the
     show, so fetching a "show" poster from it would return the wrong
     (or no) image.
+
+    Episodes are grouped by show (via grandparent_rating_key, shared
+    by every episode of the same show) rather than listed individually,
+    with the show's own name resolved through a couple of extra
+    Tracearr lookups per unique show - see resolve_tracearr_show_title.
     """
     try:
         data = tracearr_request("/recently-added", {"pageSize": 30})
     except requests.exceptions.RequestException as err:
         return {"error": str(err), "items": []}
 
-    episode_sample = next((e for e in (data.get("data") or []) if e.get("media_type") == "episode"), None)
-    if episode_sample:
-        print(f"[tracearr recently-added episode debug] {episode_sample}")
+    entries = data.get("data") or []
+    show_groups = {}
+    standalone = []
+    for e in entries:
+        gpk = e.get("grandparent_rating_key")
+        if e.get("media_type") == "episode" and gpk:
+            show_groups.setdefault((e.get("server_id"), gpk), []).append(e)
+        else:
+            standalone.append(e)
 
     items = []
-    for e in (data.get("data") or []):
+    for e in standalone:
         poster_url = ""
         if e.get("media_type") == "movie" and e.get("tmdb_id") and TMDB.get("api_key"):
             try:
@@ -2544,8 +2577,23 @@ def fetch_tracearr_recently_added() -> dict:
             "imdb_id": e.get("imdb_id"),
             "poster_url": poster_url,
         })
-    return {"error": None, "items": items}
 
+    for episodes in show_groups.values():
+        show_title = resolve_tracearr_show_title(episodes[0]) or episodes[0].get("title", "(unknown show)")
+        count = len(episodes)
+        items.append({
+            "title": show_title,
+            "type": f"{count} new episode{'s' if count != 1 else ''}",
+            "media_type": "show",
+            "tmdb_id": None,
+            "tvdb_id": None,
+            "imdb_id": None,
+            # Not fetching show posters here - would need a separate
+            # TVDB lookup on top of everything else; left blank for now,
+            # falls back to the same text-card style as any missing image.
+            "poster_url": "",
+        })
+    return {"error": None, "items": items}
 
 
 @app.route("/api/mediaserver/find-item")
