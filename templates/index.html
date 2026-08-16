@@ -728,6 +728,21 @@
         </button>
         {% endfor %}
         {% endif %}
+
+        {% if transcoders|length > 0 %}
+        <hr class="sidebar-divider">
+        <div class="sidebar-title">Transcoders</div>
+        {% for tc in transcoders %}
+        <button class="instance-tab transcoder-tab"
+                data-transcoder="{{ tc.name }}"
+                data-transcoder-type="{{ tc.type }}"
+                style="--tab-color: {{ tc.color }};"
+                onclick="selectTranscoder('{{ tc.name }}')">
+            <img class="instance-logo" src="{{ tc.logo_url }}" alt="" onerror="this.style.display='none';">
+            {{ tc.name }}
+        </button>
+        {% endfor %}
+        {% endif %}
     </div>
 
     <div class="main">
@@ -977,6 +992,24 @@
                 {% endfor %}
             </div>
         </div>
+
+        <div id="transcoders-view" style="display:none;">
+            <div class="topbar">
+                <div class="view-tabs">
+                    <span id="transcoder-title-label" style="padding: 0.5rem 0.25rem; font-weight: 600;"></span>
+                </div>
+                <div class="topbar-right">
+                    <button class="test-btn" onclick="refreshCurrentTranscoder()">Refresh</button>
+                </div>
+            </div>
+            <div class="content">
+                {% for tc in transcoders %}
+                <div class="transcoder-panel" data-transcoder="{{ tc.name }}" style="display:none;">
+                    <div id="transcoder-stats-{{ tc.name }}" class="modal-loading">Loading...</div>
+                </div>
+                {% endfor %}
+            </div>
+        </div>
     </div>
 
     <div class="alpha-index" id="alpha-index">
@@ -1015,6 +1048,7 @@
             document.getElementById('downloaders-view').style.display = 'none';
             document.getElementById('indexers-view').style.display = 'none';
             document.getElementById('mediaservers-view').style.display = 'none';
+            document.getElementById('transcoders-view').style.display = 'none';
             document.getElementById('instances-view').style.display = 'block';
             updateQueueTabCount();
             updateRequestTabVisibility();
@@ -1040,6 +1074,7 @@
             document.getElementById('instances-view').style.display = 'none';
             document.getElementById('indexers-view').style.display = 'none';
             document.getElementById('mediaservers-view').style.display = 'none';
+            document.getElementById('transcoders-view').style.display = 'none';
             document.getElementById('downloaders-view').style.display = 'block';
 
             document.querySelectorAll('.downloader-panel').forEach(el => {
@@ -1069,6 +1104,7 @@
             document.getElementById('instances-view').style.display = 'none';
             document.getElementById('downloaders-view').style.display = 'none';
             document.getElementById('mediaservers-view').style.display = 'none';
+            document.getElementById('transcoders-view').style.display = 'none';
             document.getElementById('indexers-view').style.display = 'block';
 
             document.querySelectorAll('.indexer-service-panel').forEach(el => {
@@ -1169,6 +1205,7 @@
             document.getElementById('instances-view').style.display = 'none';
             document.getElementById('downloaders-view').style.display = 'none';
             document.getElementById('indexers-view').style.display = 'none';
+            document.getElementById('transcoders-view').style.display = 'none';
             document.getElementById('mediaservers-view').style.display = 'block';
 
             document.querySelectorAll('.mediaserver-panel').forEach(el => {
@@ -1196,6 +1233,123 @@
 
         function refreshCurrentMediaServerTab() {
             if (currentMediaServer) loadMediaServerTabData(currentMediaServer, currentMediaServerTab, true);
+        }
+
+        // --- Transcoders (Tdarr) ---
+
+        let currentTranscoder = null;
+
+        function selectTranscoder(name) {
+            currentTranscoder = name;
+            document.querySelectorAll('.instance-tab').forEach(el => {
+                el.classList.toggle('active', el.dataset.transcoder === name);
+            });
+
+            document.getElementById('instances-view').style.display = 'none';
+            document.getElementById('downloaders-view').style.display = 'none';
+            document.getElementById('indexers-view').style.display = 'none';
+            document.getElementById('mediaservers-view').style.display = 'none';
+            document.getElementById('transcoders-view').style.display = 'block';
+
+            document.querySelectorAll('.transcoder-panel').forEach(el => {
+                el.style.display = el.dataset.transcoder === name ? 'block' : 'none';
+            });
+
+            const tab = document.querySelector(`.instance-tab[data-transcoder="${name}"]`);
+            document.getElementById('transcoder-title-label').textContent = tab ? `${name} — Stats` : name;
+
+            loadTranscoderStatus(name);
+        }
+
+        function refreshCurrentTranscoder() {
+            if (currentTranscoder) loadTranscoderStatus(currentTranscoder);
+        }
+
+        function formatUptime(seconds) {
+            if (!seconds) return '';
+            const days = Math.floor(seconds / 86400);
+            const hours = Math.floor((seconds % 86400) / 3600);
+            if (days > 0) return `${days}d ${hours}h`;
+            const minutes = Math.floor((seconds % 3600) / 60);
+            return `${hours}h ${minutes}m`;
+        }
+
+        function statBox(value, label) {
+            return `
+                <div style="background: var(--panel); border: 1px solid var(--border); border-radius: 8px; padding: 0.75rem;">
+                    <div style="font-size: 1.3rem; font-weight: 700;">${value}</div>
+                    <div style="font-size: 0.72rem; color: var(--muted); margin-top: 0.15rem;">${label}</div>
+                </div>
+            `;
+        }
+
+        async function loadTranscoderStatus(name) {
+            const el = document.getElementById(`transcoder-stats-${name}`);
+            el.innerHTML = '<div class="modal-loading">Loading...</div>';
+
+            try {
+                const response = await fetch(`/api/tdarr/status/${name}`);
+                const data = await response.json();
+
+                if (data.error) {
+                    el.innerHTML = `<div class="modal-empty">${data.error}</div>`;
+                    return;
+                }
+
+                const versionLine = [
+                    data.version ? `v${data.version}` : '',
+                    data.uptime_seconds ? `up ${formatUptime(data.uptime_seconds)}` : '',
+                ].filter(Boolean).join(' · ');
+
+                let html = `
+                    <div class="modal-section-title">Overview${versionLine ? ' — ' + versionLine : ''}</div>
+                    <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(120px, 1fr)); gap: 0.75rem; margin-bottom: 1.5rem;">
+                        ${statBox(data.total_files.toLocaleString(), 'Total Files')}
+                        ${statBox(data.total_transcodes.toLocaleString(), 'Total Transcodes')}
+                        ${statBox(data.space_saved_gb + ' GB', 'Space Saved')}
+                        ${statBox(data.total_health_checks.toLocaleString(), 'Health Checks Run')}
+                    </div>
+
+                    <div class="modal-section-title">Transcode Status</div>
+                    <div style="display: flex; gap: 1.5rem; margin-bottom: 1.5rem; font-size: 0.85rem;">
+                        <span class="test-ok">${data.transcode_success.toLocaleString()} succeeded</span>
+                        <span class="test-fail">${data.transcode_error.toLocaleString()} failed</span>
+                        <span style="color: var(--muted);">${data.transcode_not_required.toLocaleString()} not required</span>
+                    </div>
+
+                    <div class="modal-section-title">Health Check Status</div>
+                    <div style="display: flex; gap: 1.5rem; margin-bottom: 1.5rem; font-size: 0.85rem;">
+                        <span class="test-ok">${data.healthcheck_success.toLocaleString()} succeeded</span>
+                        <span class="test-fail">${data.healthcheck_error.toLocaleString()} failed</span>
+                    </div>
+
+                    <div class="modal-section-title">Nodes</div>
+                `;
+
+                if (!data.nodes.length) {
+                    html += '<div class="empty">No nodes connected</div>';
+                } else {
+                    html += data.nodes.map(node => `
+                        <div class="request-row">
+                            <div class="request-info" style="flex: 1;">
+                                <div class="request-title">${node.name}${node.paused ? ' (Paused)' : ''}</div>
+                                <div class="request-meta">
+                                    ${node.cpu_percent ? 'CPU ' + node.cpu_percent + '%' : ''}${node.mem_used_gb ? ' · Mem ' + node.mem_used_gb + '/' + node.mem_total_gb + ' GB' : ''}
+                                    · ${node.active_workers} active worker${node.active_workers === 1 ? '' : 's'}
+                                </div>
+                                <div class="request-meta">
+                                    Queue — Transcode CPU: ${node.queue_lengths.transcodecpu || 0}, GPU: ${node.queue_lengths.transcodegpu || 0}
+                                    · Health CPU: ${node.queue_lengths.healthcheckcpu || 0}, GPU: ${node.queue_lengths.healthcheckgpu || 0}
+                                </div>
+                            </div>
+                        </div>
+                    `).join('');
+                }
+
+                el.innerHTML = html;
+            } catch (err) {
+                el.innerHTML = '<div class="modal-empty">Could not load Tdarr status.</div>';
+            }
         }
 
         function mediaCardOnclick(item) {

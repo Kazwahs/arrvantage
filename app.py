@@ -64,6 +64,10 @@ INDEXER_ICONS = {
     "prowlarr": "/static/icons/prowlarr.svg",
 }
 
+TRANSCODER_ICONS = {
+    "tdarr": "/static/icons/tdarr.svg",
+}
+
 MEDIA_SERVER_ICONS = {
     "plex": "/static/icons/mediaserver.svg",
     "jellyfin": "/static/icons/mediaserver.svg",
@@ -134,6 +138,12 @@ INDEXER_SERVICE_TYPES = {
     "prowlarr": "Prowlarr",
 }
 
+# Transcode automation. Only Tdarr is supported today, but kept as a
+# dict for consistency with the other single-option categories.
+TRANSCODER_TYPES = {
+    "tdarr": "Tdarr",
+}
+
 # In Docker, set CONFIG_DIR to a mounted volume path (e.g. /app/data) so
 # config.json - your instances, users, and API keys - survives image
 # rebuilds. Left unset, it defaults to sitting next to this file, same
@@ -143,7 +153,7 @@ os.makedirs(CONFIG_DIR, exist_ok=True)  # in case a fresh volume mount is still 
 CONFIG_PATH = os.path.join(CONFIG_DIR, "config.json")
 
 EMPTY_CONFIG = {
-    "instances": [], "media_servers": [], "requesters": [], "downloaders": [], "indexers": [], "users": [],
+    "instances": [], "media_servers": [], "requesters": [], "downloaders": [], "indexers": [], "transcoders": [], "users": [],
     "tmdb": {"api_key": ""}, "tvdb": {"api_key": "", "pin": ""},
     "fanart": {"api_key": ""}, "theaudiodb": {"api_key": "123"},
     "tautulli": {"url": "", "api_key": ""}, "tracearr": {"url": "", "api_key": ""}, "secret_key": "",
@@ -223,6 +233,7 @@ TAUTULLI = CONFIG.get("tautulli", {"url": "", "api_key": ""})
 TRACEARR = CONFIG.get("tracearr", {"url": "", "api_key": ""})
 DOWNLOADERS = CONFIG.get("downloaders", [])
 INDEXERS = CONFIG.get("indexers", [])
+TRANSCODERS = CONFIG.get("transcoders", [])
 USERS = CONFIG.get("users", [])
 
 # Flask needs a secret key to sign session cookies. Generate one on first
@@ -2714,6 +2725,88 @@ def api_mediaserver_users(name):
 
 
 # ---------------------------------------------------------------------------
+# Tdarr - transcode automation stats. Separate from the arr instances
+# entirely, same reasoning as Downloaders/Indexers. Field names here
+# are confirmed against real responses from a live Tdarr instance.
+# ---------------------------------------------------------------------------
+
+
+def get_transcoder(name: str):
+    return next((t for t in TRANSCODERS if t["name"] == name), None)
+
+
+def fetch_tdarr_status(server: dict) -> dict:
+    headers = {"x-api-key": server["api_key"]} if server.get("api_key") else {}
+    base = server["url"].rstrip("/")
+
+    try:
+        status_resp = requests.get(f"{base}/api/v2/status", headers=headers, timeout=10)
+        status_resp.raise_for_status()
+        status = status_resp.json()
+    except requests.exceptions.RequestException as err:
+        return {"error": str(err)}
+
+    try:
+        pies_resp = requests.post(
+            f"{base}/api/v2/stats/get-pies", headers=headers,
+            json={"data": {"libraryId": ""}}, timeout=15,
+        )
+        pies_resp.raise_for_status()
+        pie_stats = pies_resp.json().get("pieStats", {})
+    except requests.exceptions.RequestException:
+        pie_stats = {}
+
+    try:
+        nodes_resp = requests.get(f"{base}/api/v2/get-nodes", headers=headers, timeout=10)
+        nodes_resp.raise_for_status()
+        nodes_raw = nodes_resp.json()
+    except requests.exceptions.RequestException:
+        nodes_raw = {}
+
+    transcode_status = {s["name"]: s["value"] for s in (pie_stats.get("status", {}).get("transcode") or [])}
+    healthcheck_status = {s["name"]: s["value"] for s in (pie_stats.get("status", {}).get("healthcheck") or [])}
+
+    nodes = []
+    for node_id, node in (nodes_raw or {}).items():
+        os_stats = (node.get("resStats") or {}).get("os") or {}
+        nodes.append({
+            "name": node.get("nodeName", node_id),
+            "cpu_percent": os_stats.get("cpuPerc", ""),
+            "mem_used_gb": os_stats.get("memUsedGB", ""),
+            "mem_total_gb": os_stats.get("memTotalGB", ""),
+            "worker_limits": node.get("workerLimits", {}),
+            "queue_lengths": node.get("queueLengths", {}),
+            "active_workers": len(node.get("workers") or {}),
+            "paused": bool(node.get("nodePaused", False)),
+        })
+
+    return {
+        "error": None,
+        "version": status.get("version", ""),
+        "uptime_seconds": status.get("uptime", 0),
+        "total_files": pie_stats.get("totalFiles", 0),
+        "total_transcodes": pie_stats.get("totalTranscodeCount", 0),
+        "total_health_checks": pie_stats.get("totalHealthCheckCount", 0),
+        "space_saved_gb": round(pie_stats.get("sizeDiff", 0) or 0, 1),
+        "transcode_success": transcode_status.get("Transcode success", 0),
+        "transcode_error": transcode_status.get("Transcode error", 0),
+        "transcode_not_required": transcode_status.get("Not required", 0),
+        "healthcheck_success": healthcheck_status.get("Success", 0),
+        "healthcheck_error": healthcheck_status.get("Error", 0),
+        "nodes": nodes,
+    }
+
+
+@app.route("/api/tdarr/status/<name>")
+@login_required
+def api_tdarr_status(name):
+    server = get_transcoder(name)
+    if not server:
+        return jsonify({"error": "unknown transcoder"}), 404
+    return jsonify(fetch_tdarr_status(server))
+
+
+# ---------------------------------------------------------------------------
 # Settings
 # ---------------------------------------------------------------------------
 
@@ -2881,6 +2974,11 @@ def api_settings_test():
                 f"{url.rstrip('/')}/api/v1/system/status",
                 headers={"X-Api-Key": credential}, timeout=8,
             )
+        elif category == "transcoder" and kind_or_type == "tdarr":
+            response = requests.get(
+                f"{url.rstrip('/')}/api/v2/status",
+                headers={"x-api-key": credential} if credential else {}, timeout=8,
+            )
         else:
             return jsonify({"ok": False, "error": "unknown settings type"})
 
@@ -2992,7 +3090,7 @@ def parse_users(form, existing_users: list) -> list:
 @login_required
 @admin_required
 def settings():
-    global CONFIG, APPS, MEDIA_SERVERS, REQUESTERS, DOWNLOADERS, INDEXERS, USERS, TMDB, TVDB, FANART, THEAUDIODB, TAUTULLI, TRACEARR
+    global CONFIG, APPS, MEDIA_SERVERS, REQUESTERS, DOWNLOADERS, INDEXERS, TRANSCODERS, USERS, TMDB, TVDB, FANART, THEAUDIODB, TAUTULLI, TRACEARR
 
     if request.method == "POST":
         new_config = {
@@ -3006,6 +3104,8 @@ def settings():
                 request.form, "downloader", ["type", "url", "api_key", "color", "enabled"])),
             "indexers": dedupe_names(parse_indexed_entries(
                 request.form, "indexerserver", ["type", "url", "api_key", "color", "enabled"])),
+            "transcoders": dedupe_names(parse_indexed_entries(
+                request.form, "transcoder", ["type", "url", "api_key", "color", "enabled"])),
             "users": parse_users(request.form, CONFIG.get("users", [])),
             "tmdb": {"api_key": request.form.get("tmdb_api_key", "").strip()},
             "tvdb": {
@@ -3034,6 +3134,7 @@ def settings():
         REQUESTERS = CONFIG["requesters"]
         DOWNLOADERS = CONFIG["downloaders"]
         INDEXERS = CONFIG["indexers"]
+        TRANSCODERS = CONFIG["transcoders"]
         USERS = CONFIG["users"]
         TMDB = CONFIG["tmdb"]
         TVDB = CONFIG["tvdb"]
@@ -3057,6 +3158,7 @@ def settings():
         requesters=CONFIG.get("requesters", []),
         downloaders=CONFIG.get("downloaders", []),
         indexers=CONFIG.get("indexers", []),
+        transcoders=CONFIG.get("transcoders", []),
         users=CONFIG.get("users", []),
         tmdb=CONFIG.get("tmdb", {"api_key": ""}),
         tvdb=CONFIG.get("tvdb", {"api_key": "", "pin": ""}),
@@ -3069,6 +3171,7 @@ def settings():
         requester_type_options=REQUESTER_TYPES,
         downloader_type_options=DOWNLOADER_TYPES,
         indexer_type_options=INDEXER_SERVICE_TYPES,
+        transcoder_type_options=TRANSCODER_TYPES,
         saved=request.args.get("saved") == "1",
     )
 
@@ -3148,6 +3251,16 @@ def index():
         for i in INDEXERS if i.get("enabled", True)
     ]
 
+    transcoders_for_template = [
+        {
+            "name": t["name"],
+            "type": t["type"],
+            "color": t.get("color", "#5b8cff"),
+            "logo_url": TRANSCODER_ICONS.get(t["type"], ""),
+        }
+        for t in TRANSCODERS if t.get("enabled", True)
+    ]
+
     media_servers_for_template = [
         {
             "name": s["name"],
@@ -3161,6 +3274,7 @@ def index():
     return render_template(
         "index.html", instances=instances, downloaders=downloaders_for_template,
         indexer_services=indexers_for_template, media_server_list=media_servers_for_template,
+        transcoders=transcoders_for_template,
         username=user["username"], is_admin=is_admin,
         can_request=perms["requesting"], can_search=perms["searching"],
     )

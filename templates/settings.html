@@ -327,6 +327,14 @@
             </details>
 
             <details class="group">
+                <summary>Transcoders</summary>
+                <div class="group-body">
+                    <div id="transcoder-cards"></div>
+                    <button type="button" class="add-btn" onclick="addCard('transcoder')">+ Add transcoder</button>
+                </div>
+            </details>
+
+            <details class="group">
                 <summary>Metadata Services</summary>
                 <div class="group-body">
                     <div class="metadata-service-label">Movie/TV Metadata (TMDB)</div>
@@ -475,6 +483,8 @@
         const downloaderTypeOptions = {{ downloader_type_options | tojson }};
         const existingIndexers = {{ indexers | tojson }};
         const indexerTypeOptions = {{ indexer_type_options | tojson }};
+        const existingTranscoders = {{ transcoders | tojson }};
+        const transcoderTypeOptions = {{ transcoder_type_options | tojson }};
         const existingUsers = {{ users | tojson }};
 
         const kindOptions = {{ kind_options | tojson }};           // {kind: {label, ...}}
@@ -541,6 +551,19 @@
                 options: indexerTypeOptions,
                 optionLabel: (opt) => opt,
                 testCategory: 'indexerserver',
+                urlPlaceholder: 'http://192.168.1.X:PORT',
+                hasColor: true,
+                reorderable: true,
+            },
+            transcoder: {
+                formPrefix: 'transcoder',
+                credentialField: 'api_key',
+                credentialLabel: 'API Key (leave blank if your Tdarr has no auth)',
+                kindField: 'type',
+                kindLabel: 'Type',
+                options: transcoderTypeOptions,
+                optionLabel: (opt) => opt,
+                testCategory: 'transcoder',
                 urlPlaceholder: 'http://192.168.1.X:PORT',
                 hasColor: true,
                 reorderable: true,
@@ -836,6 +859,8 @@
         existingDownloaders.forEach((entry, i) => addCard('downloader', { ...entry, __suffix: `existing-${i}` }));
 
         existingIndexers.forEach((entry, i) => addCard('indexerserver', { ...entry, __suffix: `existing-${i}` }));
+
+        existingTranscoders.forEach((entry, i) => addCard('transcoder', { ...entry, __suffix: `existing-${i}` }));
 
         // --- TMDB (single field, no add/remove needed) ---
 
