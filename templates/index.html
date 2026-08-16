@@ -1011,10 +1011,13 @@
         <div id="transcoders-view" style="display:none;">
             <div class="topbar">
                 <div class="view-tabs">
-                    <span id="transcoder-title-label" style="padding: 0.5rem 0.25rem; font-weight: 600;"></span>
+                    <button class="view-tab transcoder-subtab active" data-tctab="overview" onclick="selectTranscoderTab('overview')">Overview</button>
+                    <button class="view-tab transcoder-subtab" data-tctab="transcode-success" onclick="selectTranscoderTab('transcode-success')">Successful Transcodes</button>
+                    <button class="view-tab transcoder-subtab" data-tctab="healthcheck-success" onclick="selectTranscoderTab('healthcheck-success')">Successful Health Checks</button>
+                    <button class="view-tab transcoder-subtab" data-tctab="transcode-failed" onclick="selectTranscoderTab('transcode-failed')">Failed Transcodes</button>
                 </div>
                 <div class="topbar-right">
-                    <button class="test-btn" onclick="refreshCurrentTranscoder()">Refresh</button>
+                    <button class="test-btn" onclick="refreshCurrentTranscoderTab()">Refresh</button>
                     {% if is_admin %}
                     <a class="settings-link" href="/settings" title="Settings">
                         <img src="/static/icons/settings.svg" alt="Settings">
@@ -1025,7 +1028,14 @@
             <div class="content">
                 {% for tc in transcoders %}
                 <div class="transcoder-panel" data-transcoder="{{ tc.name }}" style="display:none;">
-                    <div id="transcoder-stats-{{ tc.name }}" class="modal-loading">Loading...</div>
+                    <div class="transcoder-subpanel" data-tctab="overview" style="display:block;">
+                        <div id="transcoder-stats-{{ tc.name }}" class="modal-loading">Loading...</div>
+                    </div>
+                    {% for cat in ["transcode-success", "healthcheck-success", "transcode-failed"] %}
+                    <div class="transcoder-subpanel" data-tctab="{{ cat }}" style="display:none;">
+                        <div id="transcoder-files-{{ cat }}-{{ tc.name }}" class="modal-loading">Loading...</div>
+                    </div>
+                    {% endfor %}
                 </div>
                 {% endfor %}
             </div>
@@ -1285,6 +1295,8 @@
         // --- Transcoders (Tdarr) ---
 
         let currentTranscoder = null;
+        let currentTranscoderTab = 'overview';
+        const loadedTranscoderTabs = new Set();
 
         function selectTranscoder(name) {
             currentTranscoder = name;
@@ -1302,14 +1314,39 @@
                 el.style.display = el.dataset.transcoder === name ? 'block' : 'none';
             });
 
-            const tab = document.querySelector(`.instance-tab[data-transcoder="${name}"]`);
-            document.getElementById('transcoder-title-label').textContent = tab ? `${name} — Stats` : name;
-
-            loadTranscoderStatus(name);
+            loadTranscoderTabData(name, currentTranscoderTab);
         }
 
-        function refreshCurrentTranscoder() {
-            if (currentTranscoder) loadTranscoderStatus(currentTranscoder);
+        function selectTranscoderTab(tab) {
+            currentTranscoderTab = tab;
+            document.querySelectorAll('.transcoder-subtab').forEach(el => {
+                el.classList.toggle('active', el.dataset.tctab === tab);
+            });
+
+            const panel = document.querySelector(`.transcoder-panel[data-transcoder="${currentTranscoder}"]`);
+            if (panel) {
+                panel.querySelectorAll('.transcoder-subpanel').forEach(el => {
+                    el.style.display = el.dataset.tctab === tab ? 'block' : 'none';
+                });
+            }
+
+            if (currentTranscoder) loadTranscoderTabData(currentTranscoder, tab);
+        }
+
+        function refreshCurrentTranscoderTab() {
+            if (currentTranscoder) loadTranscoderTabData(currentTranscoder, currentTranscoderTab, true);
+        }
+
+        function loadTranscoderTabData(name, tab, forceReload) {
+            if (tab === 'overview') {
+                loadTranscoderStatus(name);
+                return;
+            }
+
+            const key = `${name}:${tab}`;
+            if (loadedTranscoderTabs.has(key) && !forceReload) return;
+            loadTranscoderFiles(name, tab);
+            loadedTranscoderTabs.add(key);
         }
 
         function formatUptime(seconds) {
@@ -1396,6 +1433,41 @@
                 el.innerHTML = html;
             } catch (err) {
                 el.innerHTML = '<div class="modal-empty">Could not load Tdarr status.</div>';
+            }
+        }
+
+        async function loadTranscoderFiles(name, category) {
+            const el = document.getElementById(`transcoder-files-${category}-${name}`);
+            el.innerHTML = '<div class="modal-loading">Loading...</div>';
+
+            try {
+                const response = await fetch(`/api/tdarr/files/${name}/${category}`);
+                const data = await response.json();
+
+                if (data.error) {
+                    el.innerHTML = `<div class="modal-empty">${escapeHtml(data.error)}</div>`;
+                    return;
+                }
+                if (!data.items.length) {
+                    el.innerHTML = '<div class="empty">Nothing in this category right now</div>';
+                    return;
+                }
+
+                el.innerHTML = data.items.map(item => `
+                    <div class="request-row">
+                        <div class="request-info" style="flex: 1;">
+                            <div class="request-title">${escapeHtml(item.filename)}</div>
+                            <div class="request-meta">
+                                ${item.resolution ? escapeHtml(item.resolution) + ' · ' : ''}${escapeHtml(item.video_codec)}${item.audio_codec ? '/' + escapeHtml(item.audio_codec) : ''}
+                                ${item.old_size_gb ? ' · ' + item.old_size_gb + ' GB' + (item.new_size_gb ? ' → ' + item.new_size_gb + ' GB' : '') : ''}
+                                ${item.ratio_pct !== null && item.ratio_pct !== undefined ? ' (' + item.ratio_pct + '%)' : ''}
+                                ${item.date_ms ? ' · ' + new Date(item.date_ms).toLocaleString() : ''}
+                            </div>
+                        </div>
+                    </div>
+                `).join('');
+            } catch (err) {
+                el.innerHTML = '<div class="modal-empty">Could not load this list.</div>';
             }
         }
 

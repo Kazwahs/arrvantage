@@ -2867,6 +2867,73 @@ def api_tdarr_status(name):
     return jsonify(fetch_tdarr_status(server))
 
 
+# Table2 is confirmed (via a real response) to be the full file list,
+# not a pre-filtered one - its records carry TranscodeDecisionMaker
+# and HealthCheck fields directly, which is what these three
+# categories filter by. The API spec's own text mentions dedicated
+# "table3" (failed transcode) and "table6" (unhealthy) tables that may
+# be more precise, but filtering table2 by these confirmed field
+# values is reliable without needing to guess more table numbers.
+TDARR_FILE_CATEGORIES = {
+    "transcode-success": ("TranscodeDecisionMaker", "Transcode success", "lastTranscodeDate"),
+    "transcode-failed": ("TranscodeDecisionMaker", "Transcode error", "lastTranscodeDate"),
+    "healthcheck-success": ("HealthCheck", "Success", "lastHealthCheckDate"),
+}
+
+
+def fetch_tdarr_file_list(server: dict, category: str) -> dict:
+    if category not in TDARR_FILE_CATEGORIES:
+        return {"error": "unknown category", "items": []}
+    field, match_value, sort_field = TDARR_FILE_CATEGORIES[category]
+
+    headers = {"x-api-key": server["api_key"]} if server.get("api_key") else {}
+    base = server["url"].rstrip("/")
+
+    try:
+        response = requests.post(
+            f"{base}/api/v2/client/table2",
+            headers=headers,
+            json={
+                "data": {
+                    "start": 0, "pageSize": 300, "filters": [],
+                    "sorts": [{"id": sort_field, "desc": True}],
+                    "opts": {"table": "table2"},
+                }
+            },
+            timeout=20,
+        )
+        response.raise_for_status()
+        rows = response.json().get("array", []) or []
+    except requests.exceptions.RequestException as err:
+        return {"error": str(err), "items": []}
+
+    matching = [r for r in rows if r.get(field) == match_value]
+
+    items = [
+        {
+            "filename": r.get("fileNameWithoutExtension") or r.get("file", "(unknown)"),
+            "resolution": r.get("video_resolution", ""),
+            "video_codec": r.get("video_codec_name", ""),
+            "audio_codec": r.get("audio_codec_name", ""),
+            "old_size_gb": round(r.get("oldSize") or 0, 2),
+            "new_size_gb": round(r.get("newSize") or 0, 2),
+            "ratio_pct": r.get("newVsOldRatio"),
+            "date_ms": r.get(sort_field) or 0,
+        }
+        for r in matching[:100]
+    ]
+    return {"error": None, "items": items}
+
+
+@app.route("/api/tdarr/files/<name>/<category>")
+@login_required
+def api_tdarr_files(name, category):
+    server = get_transcoder(name)
+    if not server:
+        return jsonify({"error": "unknown transcoder"}), 404
+    return jsonify(fetch_tdarr_file_list(server, category))
+
+
 # ---------------------------------------------------------------------------
 # Settings
 # ---------------------------------------------------------------------------
