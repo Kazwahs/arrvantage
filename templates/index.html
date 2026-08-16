@@ -1028,6 +1028,33 @@
     </div>
 
     <script>
+        // Automatically attaches the CSRF token to every POST fetch()
+        // call in this page, so the many individual calls throughout
+        // this file don't each need it added by hand.
+        (function () {
+            const csrfToken = '{{ csrf_token }}';
+            const originalFetch = window.fetch;
+            window.fetch = function (url, options) {
+                options = options || {};
+                if (options.method && options.method.toUpperCase() === 'POST') {
+                    options.headers = Object.assign({}, options.headers, { 'X-CSRF-Token': csrfToken });
+                }
+                return originalFetch(url, options);
+            };
+        })();
+
+        // Escapes text pulled from external APIs (titles, usernames,
+        // node names, etc.) before it goes into innerHTML - Jinja
+        // auto-escapes what the server renders, but this app also
+        // builds a lot of HTML client-side via template literals,
+        // which do not auto-escape.
+        function escapeHtml(value) {
+            if (value === null || value === undefined) return '';
+            const div = document.createElement('div');
+            div.textContent = String(value);
+            return div.innerHTML;
+        }
+
         let currentInstance = document.querySelector('.instance-tab').dataset.instance;
         let currentView = 'library';
 
@@ -1128,7 +1155,7 @@
                 const data = await response.json();
 
                 if (data.error) {
-                    listEl.innerHTML = `<div class="modal-empty">${data.error}</div>`;
+                    listEl.innerHTML = `<div class="modal-empty">${escapeHtml(data.error)}</div>`;
                     return;
                 }
                 if (!data.indexers.length) {
@@ -1139,12 +1166,12 @@
                 listEl.innerHTML = data.indexers.map(idx => `
                     <div class="request-row">
                         <div class="request-info" style="flex: 1;">
-                            <div class="request-title">${idx.name}</div>
+                            <div class="request-title">${escapeHtml(idx.name)}</div>
                             <div class="request-meta">
-                                ${idx.protocol || ''}${idx.enabled ? '' : ' &middot; Disabled'}
+                                ${escapeHtml(idx.protocol) || ''}${idx.enabled ? '' : ' &middot; Disabled'}
                                 &middot; <span class="${idx.healthy ? 'test-ok' : 'test-fail'}">${idx.healthy ? 'Healthy' : 'Unhealthy'}</span>
                             </div>
-                            ${!idx.healthy && idx.unhealthy_reason ? `<div class="request-meta test-fail">${idx.unhealthy_reason}</div>` : ''}
+                            ${!idx.healthy && idx.unhealthy_reason ? `<div class="request-meta test-fail">${escapeHtml(idx.unhealthy_reason)}</div>` : ''}
                             <div class="test-status" id="indexer-test-result-${idx.id}"></div>
                         </div>
                         ${!idx.healthy ? `
@@ -1292,7 +1319,7 @@
                 const data = await response.json();
 
                 if (data.error) {
-                    el.innerHTML = `<div class="modal-empty">${data.error}</div>`;
+                    el.innerHTML = `<div class="modal-empty">${escapeHtml(data.error)}</div>`;
                     return;
                 }
 
@@ -1332,7 +1359,7 @@
                     html += data.nodes.map(node => `
                         <div class="request-row">
                             <div class="request-info" style="flex: 1;">
-                                <div class="request-title">${node.name}${node.paused ? ' (Paused)' : ''}</div>
+                                <div class="request-title">${escapeHtml(node.name)}${node.paused ? ' (Paused)' : ''}</div>
                                 <div class="request-meta">
                                     ${node.cpu_percent ? 'CPU ' + node.cpu_percent + '%' : ''}${node.mem_used_gb ? ' · Mem ' + node.mem_used_gb + '/' + node.mem_total_gb + ' GB' : ''}
                                     · ${node.active_workers} active worker${node.active_workers === 1 ? '' : 's'}
@@ -1397,7 +1424,7 @@
                 const data = await response.json();
 
                 if (data.error) {
-                    listEl.innerHTML = `<div class="modal-empty">${data.error}</div>`;
+                    listEl.innerHTML = `<div class="modal-empty">${escapeHtml(data.error)}</div>`;
                     return;
                 }
                 if (!data.items.length) {
@@ -1410,43 +1437,43 @@
                     listEl.innerHTML = `<div class="library-grid">${data.items.map(item => `
                         <div class="library-card" data-title="${item.title.replace(/"/g, '&quot;')}" data-cover="${item.poster_url}">
                             <div class="cover-wrap" ${mediaCardOnclick(item)}>
-                                ${item.poster_url ? `<img src="${item.poster_url}" alt="${item.title}" onerror="this.style.display='none'; this.nextElementSibling.style.display='flex';">` : ''}
-                                <div class="cover-fallback" ${item.poster_url ? 'style="display:none;"' : ''}>${item.title}</div>
-                                <span class="status-badge status-downloaded">${item.progress_pct}%${item.state ? ' &middot; ' + item.state : ''}</span>
+                                ${item.poster_url ? `<img src="${item.poster_url}" alt="${escapeHtml(item.title)}" onerror="this.style.display='none'; this.nextElementSibling.style.display='flex';">` : ''}
+                                <div class="cover-fallback" ${item.poster_url ? 'style="display:none;"' : ''}>${escapeHtml(item.title)}</div>
+                                <span class="status-badge status-downloaded">${item.progress_pct}%${item.state ? ' &middot; ' + escapeHtml(item.state) : ''}</span>
                             </div>
-                            <div class="card-title">${item.title}</div>
-                            <div class="card-genre">${item.user}${item.device ? ' &middot; ' + item.device : ''}</div>
+                            <div class="card-title">${escapeHtml(item.title)}</div>
+                            <div class="card-genre">${escapeHtml(item.user)}${item.device ? ' &middot; ' + escapeHtml(item.device) : ''}</div>
                         </div>
                     `).join('')}</div>`;
                 } else if (tab === 'recently-added') {
                     listEl.innerHTML = `<div class="library-grid">${data.items.map(item => `
                         <div class="library-card" data-title="${item.title.replace(/"/g, '&quot;')}" data-cover="${item.poster_url || ''}">
                             <div class="cover-wrap" ${mediaCardOnclick(item)}>
-                                ${item.poster_url ? `<img src="${item.poster_url}" alt="${item.title}" onerror="this.style.display='none'; this.nextElementSibling.style.display='flex';">` : ''}
-                                <div class="cover-fallback" ${item.poster_url ? 'style="display:none;"' : ''}>${item.title}</div>
+                                ${item.poster_url ? `<img src="${item.poster_url}" alt="${escapeHtml(item.title)}" onerror="this.style.display='none'; this.nextElementSibling.style.display='flex';">` : ''}
+                                <div class="cover-fallback" ${item.poster_url ? 'style="display:none;"' : ''}>${escapeHtml(item.title)}</div>
                             </div>
-                            <div class="card-title">${item.title}</div>
-                            <div class="card-genre">${item.type || ''}</div>
+                            <div class="card-title">${escapeHtml(item.title)}</div>
+                            <div class="card-genre">${escapeHtml(item.type) || ''}</div>
                         </div>
                     `).join('')}</div>`;
                 } else if (tab === 'watch-history') {
                     listEl.innerHTML = `<div class="library-grid">${data.items.map(item => `
                         <div class="library-card" data-title="${item.title.replace(/"/g, '&quot;')}" data-cover="${item.poster_url || ''}">
                             <div class="cover-wrap" ${mediaCardOnclick(item)}>
-                                ${item.poster_url ? `<img src="${item.poster_url}" alt="${item.title}" onerror="this.style.display='none'; this.nextElementSibling.style.display='flex';">` : ''}
-                                <div class="cover-fallback" ${item.poster_url ? 'style="display:none;"' : ''}>${item.title}</div>
+                                ${item.poster_url ? `<img src="${item.poster_url}" alt="${escapeHtml(item.title)}" onerror="this.style.display='none'; this.nextElementSibling.style.display='flex';">` : ''}
+                                <div class="cover-fallback" ${item.poster_url ? 'style="display:none;"' : ''}>${escapeHtml(item.title)}</div>
                             </div>
-                            <div class="card-title">${item.title}</div>
-                            <div class="card-genre">${item.user || ''}</div>
+                            <div class="card-title">${escapeHtml(item.title)}</div>
+                            <div class="card-genre">${escapeHtml(item.user) || ''}</div>
                         </div>
                     `).join('')}</div>`;
                 } else if (tab === 'users') {
                     listEl.innerHTML = `<div class="library-grid">${data.items.map(item => `
                         <div class="library-card">
                             <div class="cover-wrap">
-                                <div class="cover-fallback">${item.name}</div>
+                                <div class="cover-fallback">${escapeHtml(item.name)}</div>
                             </div>
-                            <div class="card-title">${item.name}</div>
+                            <div class="card-title">${escapeHtml(item.name)}</div>
                         </div>
                     `).join('')}</div>`;
                 }
@@ -1464,7 +1491,7 @@
                 const data = await response.json();
 
                 if (data.error) {
-                    listEl.innerHTML = `<div class="modal-empty">${data.error}</div>`;
+                    listEl.innerHTML = `<div class="modal-empty">${escapeHtml(data.error)}</div>`;
                     return;
                 }
                 if (!data.items.length) {
@@ -1501,11 +1528,11 @@
             return torrents.map(t => `
                 <div class="request-row">
                     <div class="request-info" style="flex: 1;">
-                        <div class="request-title">${t.name}</div>
+                        <div class="request-title">${escapeHtml(t.name)}</div>
                         <div class="request-meta">
-                            ${t.state} &middot; ${t.progress_pct}% &middot; &darr;${formatBytesPerSec(t.dlspeed)} &middot; &uarr;${formatBytesPerSec(t.upspeed)}
+                            ${escapeHtml(t.state)} &middot; ${t.progress_pct}% &middot; &darr;${formatBytesPerSec(t.dlspeed)} &middot; &uarr;${formatBytesPerSec(t.upspeed)}
                             &middot; ETA ${formatEta(t.eta)} &middot; ${formatSizeGb(t.size)} &middot; Ratio ${t.ratio}
-                            ${t.category ? ' &middot; ' + t.category : ''}
+                            ${t.category ? ' &middot; ' + escapeHtml(t.category) : ''}
                         </div>
                     </div>
                     <div class="card-actions" style="margin-top: 0;">
@@ -1521,10 +1548,10 @@
             return items.map(item => `
                 <div class="request-row">
                     <div class="request-info" style="flex: 1;">
-                        <div class="request-title">${item.name}</div>
+                        <div class="request-title">${escapeHtml(item.name)}</div>
                         <div class="request-meta">
-                            ${item.status} &middot; ${item.percentage}% &middot; ${item.size_left_mb} MB left of ${item.size_mb} MB
-                            &middot; ${item.time_left || 'ETA unknown'}${item.category ? ' &middot; ' + item.category : ''}
+                            ${escapeHtml(item.status)} &middot; ${item.percentage}% &middot; ${item.size_left_mb} MB left of ${item.size_mb} MB
+                            &middot; ${escapeHtml(item.time_left) || 'ETA unknown'}${item.category ? ' &middot; ' + escapeHtml(item.category) : ''}
                         </div>
                     </div>
                     <div class="card-actions" style="margin-top: 0;">
@@ -1624,10 +1651,10 @@
                     row.className = 'search-result';
                     row.innerHTML = `
                         <div class="request-thumb">
-                            ${item.poster_url ? `<img src="${item.poster_url}" alt="${item.title}" loading="lazy" onerror="this.style.display='none'; this.nextElementSibling.style.display='flex';">` : ''}
+                            ${item.poster_url ? `<img src="${item.poster_url}" alt="${escapeHtml(item.title)}" loading="lazy" onerror="this.style.display='none'; this.nextElementSibling.style.display='flex';">` : ''}
                             <div class="request-thumb-fallback" ${item.poster_url ? 'style="display:none;"' : ''}></div>
                         </div>
-                        <span class="search-result-title">${item.title} ${item.year ? '(' + item.year + ')' : ''}</span>
+                        <span class="search-result-title">${escapeHtml(item.title)} ${item.year ? '(' + item.year + ')' : ''}</span>
                         <button class="request-btn">Request</button>
                     `;
                     row.querySelector('button').onclick = () => submitRequest(item, row);
@@ -1762,39 +1789,42 @@
                 <div class="modal-header">
                     <div class="modal-cover">
                         ${col.cover_url
-                            ? `<img src="${col.cover_url}" alt="${col.title}" onerror="this.style.display='none'; this.nextElementSibling.style.display='flex';">
-                               <div class="modal-cover-fallback" style="display:none;">${col.title}</div>`
-                            : `<div class="modal-cover-fallback">${col.title}</div>`
+                            ? `<img src="${col.cover_url}" alt="${escapeHtml(col.title)}" onerror="this.style.display='none'; this.nextElementSibling.style.display='flex';">
+                               <div class="modal-cover-fallback" style="display:none;">${escapeHtml(col.title)}</div>`
+                            : `<div class="modal-cover-fallback">${escapeHtml(col.title)}</div>`
                         }
                     </div>
                     <div class="modal-header-text">
-                        <div class="modal-title">${col.title}</div>
+                        <div class="modal-title">${escapeHtml(col.title)}</div>
                         <div class="modal-rating">${col.owned_count}/${col.total_count} owned</div>
                     </div>
                 </div>
             `;
 
-            body.innerHTML = col.movies.length === 0 ? '<div class="modal-empty">No movies found in this collection</div>' : `<div class="library-grid">${col.movies.map(m => `
+            body.innerHTML = col.movies.length === 0 ? '<div class="modal-empty">No movies found in this collection</div>' : `<div class="library-grid">${col.movies.map(m => {
+                const safeTitleForJs = m.title.replace(/\\/g, '\\\\').replace(/'/g, "\\'").replace(/"/g, '&quot;');
+                return `
                 <div class="library-card" data-title="${m.title.replace(/"/g, '&quot;')}" data-cover="${m.cover_url}">
                     <div class="cover-wrap" onclick="${m.owned
                         ? `openDetails(this, '${instance}', ${m.item_id})`
-                        : `showMissingMovieInfo(this, ${m.tmdb_id}, '${m.title.replace(/'/g, "\\'")}', '${m.cover_url}')`
+                        : `showMissingMovieInfo(this, ${m.tmdb_id}, '${safeTitleForJs}', '${m.cover_url}')`
                     }">
                         ${m.cover_url
-                            ? `<img src="${m.cover_url}" alt="${m.title}" loading="lazy" onerror="this.style.display='none'; this.nextElementSibling.style.display='flex';">`
+                            ? `<img src="${m.cover_url}" alt="${escapeHtml(m.title)}" loading="lazy" onerror="this.style.display='none'; this.nextElementSibling.style.display='flex';">`
                             : ''
                         }
-                        <div class="cover-fallback" ${m.cover_url ? 'style="display:none;"' : ''}>${m.title}</div>
+                        <div class="cover-fallback" ${m.cover_url ? 'style="display:none;"' : ''}>${escapeHtml(m.title)}</div>
                         <span class="status-badge status-${m.owned ? 'downloaded' : 'missing'}">${m.owned ? 'Owned' : 'Missing'}</span>
                     </div>
-                    <div class="card-title">${m.title}${m.year ? ' (' + m.year + ')' : ''}</div>
+                    <div class="card-title">${escapeHtml(m.title)}${m.year ? ' (' + m.year + ')' : ''}</div>
                     ${!m.owned && CAN_SEARCH ? `
                     <div class="card-actions">
-                        <button class="mini-btn" onclick="event.stopPropagation(); addMissingCollectionMovie(this, '${instance}', ${m.tmdb_id}, '${m.title.replace(/'/g, "\\'")}', ${col.quality_profile_id}, '${col.root_folder_path}')">Add &amp; Search</button>
+                        <button class="mini-btn" onclick="event.stopPropagation(); addMissingCollectionMovie(this, '${instance}', ${m.tmdb_id}, '${safeTitleForJs}', ${col.quality_profile_id}, '${col.root_folder_path}')">Add &amp; Search</button>
                     </div>
                     ` : ''}
                 </div>
-            `).join('')}</div>`;
+            `;
+            }).join('')}</div>`;
 
             document.getElementById('modal-overlay').classList.add('open');
         }
@@ -1808,13 +1838,13 @@
                 <div class="modal-header" style="margin-bottom: 1rem;">
                     <div class="modal-cover">
                         ${coverUrl
-                            ? `<img src="${coverUrl}" alt="${title}" onerror="this.style.display='none'; this.nextElementSibling.style.display='flex';">
-                               <div class="modal-cover-fallback" style="display:none;">${title}</div>`
-                            : `<div class="modal-cover-fallback">${title}</div>`
+                            ? `<img src="${coverUrl}" alt="${escapeHtml(title)}" onerror="this.style.display='none'; this.nextElementSibling.style.display='flex';">
+                               <div class="modal-cover-fallback" style="display:none;">${escapeHtml(title)}</div>`
+                            : `<div class="modal-cover-fallback">${escapeHtml(title)}</div>`
                         }
                     </div>
                     <div class="modal-header-text">
-                        <div class="modal-title">${title}</div>
+                        <div class="modal-title">${escapeHtml(title)}</div>
                     </div>
                 </div>
                 <div class="modal-loading">Loading...</div>
@@ -1826,7 +1856,7 @@
                 const loadingEl = body.querySelector('.modal-loading');
 
                 if (data.error) {
-                    loadingEl.outerHTML = `<div class="modal-empty">${data.error}</div>`;
+                    loadingEl.outerHTML = `<div class="modal-empty">${escapeHtml(data.error)}</div>`;
                     return;
                 }
 
@@ -1955,7 +1985,7 @@
                 const data = await response.json();
 
                 if (data.error) {
-                    body.innerHTML = `<div class="modal-loading">Could not load details: ${data.error}</div>`;
+                    body.innerHTML = `<div class="modal-loading">Could not load details: ${escapeHtml(data.error)}</div>`;
                     return;
                 }
 
@@ -2058,7 +2088,7 @@
                 subList.innerHTML = episodes.map(e => `
                     <div class="episode-row">
                         <div class="episode-main">
-                            <span>${e.episode_number}. ${e.title}</span>
+                            <span>${e.episode_number}. ${escapeHtml(e.title)}</span>
                             <span class="col-muted">${e.air_date || ''} &middot; ${e.has_file ? 'Downloaded' : 'Missing'}</span>
                         </div>
                         ${!e.has_file && CAN_SEARCH ? `
@@ -2079,7 +2109,7 @@
             const content = document.getElementById('modal-body');
             const albumRows = data.albums.map(a => `
                 <div class="expandable-row" onclick="toggleAlbum(this, '${instance}', ${a.album_id})">
-                    <span>${a.title}</span>
+                    <span>${escapeHtml(a.title)}</span>
                     <span class="col-muted">${a.year}</span>
                 </div>
                 <div class="sub-list" style="display:none;"></div>
@@ -2111,7 +2141,7 @@
 
                 const trackRows = tracks.map(t => `
                     <div class="item">
-                        <span>${t.track_number}. ${t.title}</span>
+                        <span>${t.track_number}. ${escapeHtml(t.title)}</span>
                         <span class="col-muted">${t.has_file ? 'Downloaded' : 'Missing'}</span>
                     </div>
                 `).join('') || '<div class="modal-empty">No tracks found</div>';
@@ -2177,8 +2207,8 @@
                 loadingEl.outerHTML = releases.map(r => `
                     <div class="release-row ${r.rejected ? 'release-rejected' : ''}">
                         <div class="release-info">
-                            <div class="release-title">${r.title}</div>
-                            <div class="release-meta">${r.indexer} &middot; ${r.quality} &middot; ${r.size_gb} GB${r.seeders !== null && r.seeders !== undefined ? ' &middot; ' + r.seeders + ' seeders' : ''}</div>
+                            <div class="release-title">${escapeHtml(r.title)}</div>
+                            <div class="release-meta">${escapeHtml(r.indexer)} &middot; ${r.quality} &middot; ${r.size_gb} GB${r.seeders !== null && r.seeders !== undefined ? ' &middot; ' + r.seeders + ' seeders' : ''}</div>
                         </div>
                         <button class="request-btn" onclick="grabRelease(this, '${instance}', '${r.guid}', ${r.indexer_id})">Grab</button>
                     </div>
@@ -2191,7 +2221,7 @@
         function renderAuthorModal(data) {
             const content = document.getElementById('modal-body');
             const bookRows = data.books.map(b => `
-                <div class="item"><span>${b.title}</span><span class="col-muted">${b.year}</span></div>
+                <div class="item"><span>${escapeHtml(b.title)}</span><span class="col-muted">${b.year}</span></div>
             `).join('');
 
             content.innerHTML = `
@@ -2204,19 +2234,23 @@
             if (!available) return '<div class="modal-empty">Cast info not available for this instance.</div>';
             if (!cast || cast.length === 0) return '<div class="modal-empty">No cast listed.</div>';
             return `<div class="cast-grid">${cast.map(c => {
+                // Escaped for two different contexts at once: the JS
+                // string inside onclick (single quotes) and the HTML
+                // attribute it sits inside (double quotes).
+                const safeNameForJs = c.name.replace(/\\/g, '\\\\').replace(/'/g, "\\'").replace(/"/g, '&quot;');
                 const clickHandler = c.person_tmdb_id
-                    ? `showActorFilmography('${instance}', ${c.person_tmdb_id}, '${c.name.replace(/'/g, "\\'")}')`
+                    ? `showActorFilmography('${instance}', ${c.person_tmdb_id}, '${safeNameForJs}')`
                     : '';
                 return `
                 <div class="cast-entry">
                     <div class="cast-photo${clickHandler ? ' cast-photo-clickable' : ''}" ${clickHandler ? `onclick="${clickHandler}"` : ''}>
-                        ${c.image_url ? `<img src="${c.image_url}" alt="${c.name}" loading="lazy" onerror="this.style.display='none';">` : ''}
+                        ${c.image_url ? `<img src="${c.image_url}" alt="${escapeHtml(c.name)}" loading="lazy" onerror="this.style.display='none';">` : ''}
                     </div>
                     ${clickHandler
-                        ? `<span class="cast-name cast-name-clickable" onclick="${clickHandler}">${c.name}</span>`
-                        : `<span class="cast-name">${c.name}</span>`
+                        ? `<span class="cast-name cast-name-clickable" onclick="${clickHandler}">${escapeHtml(c.name)}</span>`
+                        : `<span class="cast-name">${escapeHtml(c.name)}</span>`
                     }
-                    <span class="cast-role">${c.role || ''}</span>
+                    <span class="cast-role">${escapeHtml(c.role) || ''}</span>
                 </div>
             `;
             }).join('')}</div>`;
@@ -2232,7 +2266,7 @@
 
             body.innerHTML = `
                 <button class="back-to-cast-btn" onclick="restoreCastView()">&larr; Back</button>
-                <div class="modal-section-title">${personName} - other titles in your library</div>
+                <div class="modal-section-title">${escapeHtml(personName)} - other titles in your library</div>
                 <div class="modal-loading">Searching...</div>
             `;
 
@@ -2242,7 +2276,7 @@
                 const listEl = body.querySelector('.modal-loading');
 
                 if (data.error) {
-                    listEl.outerHTML = `<div class="modal-empty">${data.error}</div>`;
+                    listEl.outerHTML = `<div class="modal-empty">${escapeHtml(data.error)}</div>`;
                     return;
                 }
                 if (!data.results.length) {
@@ -2254,12 +2288,12 @@
                     <div class="library-card" data-title="${r.title.replace(/"/g, '&quot;')}" data-cover="${r.poster_url}">
                         <div class="cover-wrap" onclick="openDetails(this, '${instance}', ${r.item_id})">
                             ${r.poster_url
-                                ? `<img src="${r.poster_url}" alt="${r.title}" loading="lazy" onerror="this.style.display='none'; this.nextElementSibling.style.display='flex';">`
+                                ? `<img src="${r.poster_url}" alt="${escapeHtml(r.title)}" loading="lazy" onerror="this.style.display='none'; this.nextElementSibling.style.display='flex';">`
                                 : ''
                             }
-                            <div class="cover-fallback" ${r.poster_url ? 'style="display:none;"' : ''}>${r.title}</div>
+                            <div class="cover-fallback" ${r.poster_url ? 'style="display:none;"' : ''}>${escapeHtml(r.title)}</div>
                         </div>
-                        <div class="card-title">${r.title}${r.year ? ' (' + r.year + ')' : ''}</div>
+                        <div class="card-title">${escapeHtml(r.title)}${r.year ? ' (' + r.year + ')' : ''}</div>
                     </div>
                 `).join('')}</div>`;
             } catch (err) {
@@ -2290,7 +2324,7 @@
                 const row = document.createElement('div');
                 row.className = 'play-links-row';
                 row.innerHTML = data.links.map(link => `
-                    <a class="play-btn play-btn-${link.type}" href="${link.url}" target="_blank" rel="noopener">Play on ${link.name}</a>
+                    <a class="play-btn play-btn-${link.type}" href="${link.url}" target="_blank" rel="noopener">Play on ${escapeHtml(link.name)}</a>
                 `).join('');
                 document.getElementById('modal-body').prepend(row);
             } catch (err) {
@@ -2359,8 +2393,8 @@
                 loadingEl.outerHTML = releases.map(r => `
                     <div class="release-row ${r.rejected ? 'release-rejected' : ''}">
                         <div class="release-info">
-                            <div class="release-title">${r.title}</div>
-                            <div class="release-meta">${r.indexer} &middot; ${r.quality} &middot; ${r.size_gb} GB${r.seeders !== null && r.seeders !== undefined ? ' &middot; ' + r.seeders + ' seeders' : ''}</div>
+                            <div class="release-title">${escapeHtml(r.title)}</div>
+                            <div class="release-meta">${escapeHtml(r.indexer)} &middot; ${r.quality} &middot; ${r.size_gb} GB${r.seeders !== null && r.seeders !== undefined ? ' &middot; ' + r.seeders + ' seeders' : ''}</div>
                         </div>
                         <button class="request-btn" onclick="grabRelease(this, '${instance}', '${r.guid}', ${r.indexer_id})">Grab</button>
                     </div>
@@ -2404,8 +2438,8 @@
                 body.innerHTML = releases.map(r => `
                     <div class="release-row ${r.rejected ? 'release-rejected' : ''}">
                         <div class="release-info">
-                            <div class="release-title">${r.title}</div>
-                            <div class="release-meta">${r.indexer} &middot; ${r.quality} &middot; ${r.size_gb} GB${r.seeders !== null && r.seeders !== undefined ? ' &middot; ' + r.seeders + ' seeders' : ''}</div>
+                            <div class="release-title">${escapeHtml(r.title)}</div>
+                            <div class="release-meta">${escapeHtml(r.indexer)} &middot; ${r.quality} &middot; ${r.size_gb} GB${r.seeders !== null && r.seeders !== undefined ? ' &middot; ' + r.seeders + ' seeders' : ''}</div>
                         </div>
                         <button class="request-btn" onclick="grabRelease(this, '${instance}', '${r.guid}', ${r.indexer_id})">Grab</button>
                     </div>

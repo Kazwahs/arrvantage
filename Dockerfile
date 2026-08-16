@@ -29,6 +29,22 @@ COPY static/ static/
 ENV CONFIG_DIR=/app/data
 RUN mkdir -p /app/data
 
+# Run as a non-root user rather than the default root - limits what a
+# compromised process could do inside the container. Fixed UID/GID
+# (1000) so file ownership is predictable.
+#
+# IMPORTANT if you're updating an existing deployment: the container
+# has been running as root until now, so your existing data directory
+# on TrueNAS storage is likely root-owned. After this change, you may
+# need to fix its ownership so the container can still write
+# config.json - from TrueNAS Shell:
+#   chown -R 1000:1000 /mnt/yourpool/apps/arrvantage-data
+# (adjust the path to your actual dataset). If you skip this and
+# config saves start failing, this permission mismatch is why.
+RUN groupadd -g 1000 appuser && useradd -u 1000 -g appuser -M appuser \
+    && chown -R appuser:appuser /app
+USER appuser
+
 EXPOSE 5000
 
 # gunicorn imports the `app` object from app.py directly - this never

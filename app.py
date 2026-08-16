@@ -24,6 +24,7 @@ import re
 import secrets
 import requests
 import concurrent.futures
+import time
 
 app = Flask(__name__)
 
@@ -243,6 +244,32 @@ if not CONFIG.get("secret_key"):
     save_config(CONFIG)
 app.secret_key = CONFIG["secret_key"]
 
+
+def ensure_csrf_token() -> str:
+    """Generates a per-session CSRF token the first time it's needed,
+    and reuses it for the rest of that session."""
+    if "csrf_token" not in session:
+        session["csrf_token"] = secrets.token_hex(32)
+    return session["csrf_token"]
+
+
+@app.before_request
+def csrf_protect():
+    """
+    Every state-changing route in this app is a POST, so this single
+    check covers all of them - no per-route decoration needed. Accepts
+    the token from either a submitted form field (traditional POSTs
+    like Settings/Login/Setup) or an X-CSRF-Token header (the JS
+    fetch() calls throughout the dashboard, via the global fetch
+    override in index.html).
+    """
+    if request.method != "POST":
+        return
+    expected = session.get("csrf_token")
+    submitted = request.form.get("csrf_token") or request.headers.get("X-CSRF-Token")
+    if not expected or not submitted or not secrets.compare_digest(expected, submitted):
+        return jsonify({"ok": False, "error": "Session expired or invalid - please refresh the page."}), 403
+
 # ---------------------------------------------------------------------------
 # Auth
 # ---------------------------------------------------------------------------
@@ -263,6 +290,26 @@ def user_permissions(user):
     if user and user.get("role") == "admin":
         return {"requesting": True, "searching": True}
     return (user or {}).get("permissions", {"requesting": False, "searching": False})
+
+
+# In-memory only - not shared across gunicorn's worker processes, so a
+# determined attacker could get roughly double this budget by landing
+# on different workers. A real limitation, but a reasonable tradeoff
+# for a personal single-user tool versus adding a Redis dependency.
+_login_attempts = {}
+LOGIN_MAX_ATTEMPTS = 5
+LOGIN_LOCKOUT_SECONDS = 15 * 60
+
+
+def is_login_locked_out(client_ip: str) -> bool:
+    now = time.time()
+    recent = [t for t in _login_attempts.get(client_ip, []) if now - t < LOGIN_LOCKOUT_SECONDS]
+    _login_attempts[client_ip] = recent
+    return len(recent) >= LOGIN_MAX_ATTEMPTS
+
+
+def record_failed_login(client_ip: str) -> None:
+    _login_attempts.setdefault(client_ip, []).append(time.time())
 
 
 def login_required(view):
@@ -350,6 +397,7 @@ def setup():
         kind_options=KIND_META,
         media_server_type_options=MEDIA_SERVER_TYPES,
         requester_type_options=REQUESTER_TYPES,
+        csrf_token=ensure_csrf_token(),
     )
 
 
@@ -360,16 +408,21 @@ def login():
 
     error = None
     if request.method == "POST":
-        username = request.form.get("username", "").strip()
-        password = request.form.get("password", "")
-        user = get_user(username)
+        client_ip = request.remote_addr or "unknown"
+        if is_login_locked_out(client_ip):
+            error = "Too many failed attempts. Please wait a few minutes and try again."
+        else:
+            username = request.form.get("username", "").strip()
+            password = request.form.get("password", "")
+            user = get_user(username)
 
-        if user and check_password_hash(user["password_hash"], password):
-            session["username"] = username
-            return redirect(url_for("index"))
-        error = "Incorrect username or password."
+            if user and check_password_hash(user["password_hash"], password):
+                session["username"] = username
+                return redirect(url_for("index"))
+            record_failed_login(client_ip)
+            error = "Incorrect username or password."
 
-    return render_template("login.html", error=error)
+    return render_template("login.html", error=error, csrf_token=ensure_csrf_token())
 
 
 @app.route("/logout")
@@ -1648,15 +1701,23 @@ def api_actor_filmography(instance_name):
 # ---------------------------------------------------------------------------
 
 
+_tvdb_token_cache = {"token": None, "obtained_at": 0.0}
+
+
 def tvdb_login():
     """
     TVDB uses a login-for-a-token flow rather than a simple query-string
     key - exchange the API key (+ optional subscriber PIN) for a bearer
-    token, valid for about a month. Logged in fresh each time here for
-    simplicity, rather than caching/tracking token expiry.
+    token, valid for about a month. Cached in memory for 25 days (a bit
+    under the real limit, as a safety margin) instead of re-authenticating
+    on every single TVDB call.
     """
     if not TVDB.get("api_key"):
         return None
+
+    cache_age = time.time() - _tvdb_token_cache["obtained_at"]
+    if _tvdb_token_cache["token"] and cache_age < 25 * 24 * 60 * 60:
+        return _tvdb_token_cache["token"]
 
     payload = {"apikey": TVDB["api_key"]}
     if TVDB.get("pin"):
@@ -1665,7 +1726,11 @@ def tvdb_login():
     try:
         response = requests.post("https://api4.thetvdb.com/v4/login", json=payload, timeout=10)
         response.raise_for_status()
-        return response.json().get("data", {}).get("token")
+        token = response.json().get("data", {}).get("token")
+        if token:
+            _tvdb_token_cache["token"] = token
+            _tvdb_token_cache["obtained_at"] = time.time()
+        return token
     except requests.exceptions.RequestException:
         return None
 
@@ -2416,10 +2481,8 @@ def api_mediaserver_poster_proxy():
         response = requests.get(
             target_url, headers={"Authorization": f"Bearer {TRACEARR['api_key']}"}, timeout=10,
         )
-        print(f"[tracearr poster proxy debug] fetched {target_url} -> status {response.status_code}, content-type {response.headers.get('Content-Type')}, bytes {len(response.content)}")
         response.raise_for_status()
-    except requests.exceptions.RequestException as err:
-        print(f"[tracearr poster proxy debug] request failed for {target_url}: {err}")
+    except requests.exceptions.RequestException:
         return "", 502
 
     return Response(response.content, mimetype=response.headers.get("Content-Type", "image/jpeg"))
@@ -2448,7 +2511,6 @@ def fetch_tracearr_now_playing(server_name: str) -> dict:
         duration = s.get("duration_ms") or 0
         progress = s.get("progress_ms") or 0
         wrapped_poster = f"/api/mediaserver/poster-proxy?url={quote(s['poster_url'], safe='')}" if s.get("poster_url") else ""
-        print(f"[tracearr poster debug] server={server_name!r} raw={s.get('poster_url')!r} wrapped={wrapped_poster!r}")
         items.append({
             "title": title,
             "poster_url": wrapped_poster,
@@ -2679,7 +2741,6 @@ def api_mediaserver_now_playing(name):
     server = get_media_server(name)
     if not server:
         return jsonify({"error": "unknown media server"}), 404
-    print(f"[mediaserver source debug] name={name!r} tracearr_configured={tracearr_configured()} tautulli_configured={tautulli_configured()} server_type={server['type']!r}")
     if tracearr_configured():
         return jsonify(fetch_tracearr_now_playing(name))
     if server["type"] == "plex" and tautulli_configured():
@@ -3138,6 +3199,8 @@ def settings():
         USERS = CONFIG["users"]
         TMDB = CONFIG["tmdb"]
         TVDB = CONFIG["tvdb"]
+        _tvdb_token_cache["token"] = None
+        _tvdb_token_cache["obtained_at"] = 0.0
         FANART = CONFIG["fanart"]
         THEAUDIODB = CONFIG["theaudiodb"]
         TAUTULLI = CONFIG["tautulli"]
@@ -3173,6 +3236,7 @@ def settings():
         indexer_type_options=INDEXER_SERVICE_TYPES,
         transcoder_type_options=TRANSCODER_TYPES,
         saved=request.args.get("saved") == "1",
+        csrf_token=ensure_csrf_token(),
     )
 
 
@@ -3277,6 +3341,7 @@ def index():
         transcoders=transcoders_for_template,
         username=user["username"], is_admin=is_admin,
         can_request=perms["requesting"], can_search=perms["searching"],
+        csrf_token=ensure_csrf_token(),
     )
 
 

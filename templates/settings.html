@@ -285,6 +285,7 @@
         {% endif %}
 
         <form method="POST" action="/settings" id="settings-form">
+            <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
 
             <details class="group">
                 <summary>Instances</summary>
@@ -471,6 +472,21 @@
     </div>
 
     <script>
+        // Automatically attaches the CSRF token to every POST fetch()
+        // call in this page, so individual calls don't each need it
+        // added by hand.
+        (function () {
+            const csrfToken = '{{ csrf_token }}';
+            const originalFetch = window.fetch;
+            window.fetch = function (url, options) {
+                options = options || {};
+                if (options.method && options.method.toUpperCase() === 'POST') {
+                    options.headers = Object.assign({}, options.headers, { 'X-CSRF-Token': csrfToken });
+                }
+                return originalFetch(url, options);
+            };
+        })();
+
         // ---------------------------------------------------------------
         // Data handed over from the server: existing saved entries, plus
         // the dropdown options for each category.
