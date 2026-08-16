@@ -939,6 +939,11 @@
                 </div>
                 <div class="topbar-right">
                     <button class="test-btn" onclick="refreshCurrentDownloader()">Refresh</button>
+                    {% if is_admin %}
+                    <a class="settings-link" href="/settings" title="Settings">
+                        <img src="/static/icons/settings.svg" alt="Settings">
+                    </a>
+                    {% endif %}
                 </div>
             </div>
             <div class="content">
@@ -957,6 +962,11 @@
                 </div>
                 <div class="topbar-right">
                     <button class="test-btn" onclick="refreshCurrentIndexerService()">Refresh</button>
+                    {% if is_admin %}
+                    <a class="settings-link" href="/settings" title="Settings">
+                        <img src="/static/icons/settings.svg" alt="Settings">
+                    </a>
+                    {% endif %}
                 </div>
             </div>
             <div class="content">
@@ -978,6 +988,11 @@
                 </div>
                 <div class="topbar-right">
                     <button class="test-btn" onclick="refreshCurrentMediaServerTab()">Refresh</button>
+                    {% if is_admin %}
+                    <a class="settings-link" href="/settings" title="Settings">
+                        <img src="/static/icons/settings.svg" alt="Settings">
+                    </a>
+                    {% endif %}
                 </div>
             </div>
             <div class="content">
@@ -1000,6 +1015,11 @@
                 </div>
                 <div class="topbar-right">
                     <button class="test-btn" onclick="refreshCurrentTranscoder()">Refresh</button>
+                    {% if is_admin %}
+                    <a class="settings-link" href="/settings" title="Settings">
+                        <img src="/static/icons/settings.svg" alt="Settings">
+                    </a>
+                    {% endif %}
                 </div>
             </div>
             <div class="content">
