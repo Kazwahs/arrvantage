@@ -101,6 +101,7 @@
         /* --- Main area --- */
 
         .main { flex: 1; display: flex; flex-direction: column; min-width: 0; }
+        .main.alpha-visible { padding-right: 40px; }
 
         .topbar {
             display: flex;
@@ -321,10 +322,10 @@
             border-left: 1px solid var(--border);
             background: var(--sidebar);
             overflow-y: auto;
-            position: sticky;
+            position: fixed;
             top: 0;
-            align-self: flex-start;
-            max-height: 100vh;
+            right: 0;
+            height: 100vh;
         }
 
         .alpha-index.hidden { display: none; }
@@ -638,6 +639,7 @@
             .alpha-index { display: none; }
 
             .main { min-width: 0; }
+            .main.alpha-visible { padding-right: 0; }
 
             .topbar {
                 flex-wrap: wrap;
@@ -1820,7 +1822,9 @@
         function updateAlphaIndexVisibility() {
             const sortSelect = document.getElementById(`sort-${currentInstance}`);
             const isAlphabetical = !sortSelect || sortSelect.value === 'title';
-            document.getElementById('alpha-index').classList.toggle('hidden', currentView !== 'library' || !isAlphabetical);
+            const shouldShow = currentView === 'library' && isAlphabetical;
+            document.getElementById('alpha-index').classList.toggle('hidden', !shouldShow);
+            document.querySelector('.main').classList.toggle('alpha-visible', shouldShow);
         }
 
         function openCollectionModal(instance, collectionId) {
