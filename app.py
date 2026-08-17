@@ -60,7 +60,7 @@ INSTANCE_ICONS = {
     "movie": f"{DASHBOARD_ICONS_BASE}/radarr.svg",
     "series": f"{DASHBOARD_ICONS_BASE}/sonarr.svg",
     "artist": f"{DASHBOARD_ICONS_BASE}/lidarr.svg",
-    "author": f"{DASHBOARD_ICONS_BASE}/readarr.svg",
+    "author": f"{DASHBOARD_ICONS_BASE}/chaptarr.svg",
 }
 
 DOWNLOADER_ICONS = {
@@ -2910,7 +2910,7 @@ def fetch_home_stats() -> dict:
         })
 
     media_server_stats = [
-        {"name": s["name"], "type": s["type"], "url": s["url"]}
+        {"name": s["name"], "type": s["type"], "url": s["url"], "icon_url": MEDIA_SERVER_ICONS.get(s["type"], "")}
         for s in MEDIA_SERVERS if s.get("enabled", True)
     ]
 
@@ -2920,12 +2920,16 @@ def fetch_home_stats() -> dict:
             continue
         result = fetch_prowlarr_indexers(service)
         if result.get("error"):
-            indexer_service_stats.append({"name": service["name"], "type": service["type"], "error": result["error"]})
+            indexer_service_stats.append({
+                "name": service["name"], "type": service["type"], "error": result["error"],
+                "icon_url": INDEXER_ICONS.get(service["type"], ""),
+            })
             continue
         healthy = sum(1 for idx in result["indexers"] if idx["healthy"])
         indexer_service_stats.append({
             "name": service["name"],
             "type": INDEXER_SERVICE_TYPES.get(service["type"], service["type"]),
+            "icon_url": INDEXER_ICONS.get(service["type"], ""),
             "total": len(result["indexers"]),
             "healthy": healthy,
             "unhealthy": len(result["indexers"]) - healthy,
@@ -2941,6 +2945,7 @@ def fetch_home_stats() -> dict:
             continue
         transcoder_stats.append({
             "name": server["name"],
+            "icon_url": TRANSCODER_ICONS.get(server["type"], ""),
             "total_transcodes": status["total_transcodes"],
             "space_saved_gb": status["space_saved_gb"],
         })

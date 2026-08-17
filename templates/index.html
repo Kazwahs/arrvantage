@@ -1190,7 +1190,10 @@
                     html += '<div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 0.75rem; margin-bottom: 1.5rem;">';
                     html += data.media_servers.map(ms => `
                         <div style="background: var(--panel); border: 1px solid var(--border); border-radius: 8px; padding: 0.9rem;">
-                            <div style="font-weight: 600; margin-bottom: 0.75rem;">${escapeHtml(ms.name)}</div>
+                            <div style="display: flex; align-items: center; gap: 0.5rem; margin-bottom: 0.75rem;">
+                                <img src="${ms.icon_url}" alt="" style="width: 22px; height: 22px;" onerror="this.style.display='none';">
+                                <span style="font-weight: 600;">${escapeHtml(ms.name)}</span>
+                            </div>
                             <div style="display: flex; gap: 0.5rem;">
                                 <a href="${ms.url}" target="_blank" rel="noopener" class="mini-btn" style="text-decoration: none; text-align: center;">Open</a>
                                 <button class="mini-btn" onclick="rescanMediaServer('${ms.name}', this)">Rescan Library</button>
@@ -1205,12 +1208,18 @@
                     html += '<div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 0.75rem; margin-bottom: 1.5rem;">';
                     html += data.indexers.map(svc => svc.error ? `
                         <div style="background: var(--panel); border: 1px solid var(--border); border-radius: 8px; padding: 0.9rem;">
-                            <div style="font-weight: 600; margin-bottom: 0.5rem;">${escapeHtml(svc.name)}</div>
+                            <div style="display: flex; align-items: center; gap: 0.5rem; margin-bottom: 0.5rem;">
+                                <img src="${svc.icon_url}" alt="" style="width: 22px; height: 22px;" onerror="this.style.display='none';">
+                                <span style="font-weight: 600;">${escapeHtml(svc.name)}</span>
+                            </div>
                             <div class="test-fail" style="font-size: 0.8rem;">${escapeHtml(svc.error)}</div>
                         </div>
                     ` : `
                         <div style="background: var(--panel); border: 1px solid var(--border); border-radius: 8px; padding: 0.9rem;">
-                            <div style="font-weight: 600;">${escapeHtml(svc.name)}</div>
+                            <div style="display: flex; align-items: center; gap: 0.5rem; margin-bottom: 0.1rem;">
+                                <img src="${svc.icon_url}" alt="" style="width: 22px; height: 22px;" onerror="this.style.display='none';">
+                                <span style="font-weight: 600;">${escapeHtml(svc.name)}</span>
+                            </div>
                             <div style="font-size: 0.72rem; color: var(--muted); margin-bottom: 0.5rem;">${escapeHtml(svc.type)}</div>
                             <div style="font-family: var(--mono); font-size: 1.4rem; font-weight: 700;">${svc.total.toLocaleString()}</div>
                             <div style="font-size: 0.78rem; color: var(--muted); margin-bottom: 0.4rem;">total indexers</div>
@@ -1228,7 +1237,10 @@
                     html += '<div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 0.75rem; margin-bottom: 1.5rem;">';
                     html += data.transcoders.map(tc => `
                         <div style="background: var(--panel); border: 1px solid var(--border); border-radius: 8px; padding: 0.9rem;">
-                            <div style="font-weight: 600; margin-bottom: 0.6rem;">${escapeHtml(tc.name)}</div>
+                            <div style="display: flex; align-items: center; gap: 0.5rem; margin-bottom: 0.6rem;">
+                                <img src="${tc.icon_url}" alt="" style="width: 22px; height: 22px;" onerror="this.style.display='none';">
+                                <span style="font-weight: 600;">${escapeHtml(tc.name)}</span>
+                            </div>
                             <div style="display: flex; gap: 1.5rem;">
                                 <div>
                                     <div style="font-family: var(--mono); font-size: 1.2rem; font-weight: 700;">${tc.total_transcodes.toLocaleString()}</div>
