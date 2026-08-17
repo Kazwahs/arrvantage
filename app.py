@@ -49,30 +49,37 @@ app.config["SESSION_COOKIE_SECURE"] = os.environ.get("FORCE_HTTPS_COOKIES", "fal
 # Built-in sidebar icons, bundled as static files rather than fetched from
 # each instance - avoids depending on that instance's auth settings, and
 # keeps the app self-contained for Docker.
+# Real branded logos, from the community-maintained dashboard-icons
+# project (homarr-labs/dashboard-icons, Apache-2.0) - built specifically
+# for exactly this use case (integration icons for self-hosted
+# dashboards), served via jsDelivr so updates there show up here
+# automatically without needing to re-bundle anything.
+DASHBOARD_ICONS_BASE = "https://cdn.jsdelivr.net/gh/homarr-labs/dashboard-icons/svg"
+
 INSTANCE_ICONS = {
-    "movie": "/static/icons/movie.svg",
-    "series": "/static/icons/series.svg",
-    "artist": "/static/icons/artist.svg",
-    "author": "/static/icons/author.svg",
+    "movie": f"{DASHBOARD_ICONS_BASE}/radarr.svg",
+    "series": f"{DASHBOARD_ICONS_BASE}/sonarr.svg",
+    "artist": f"{DASHBOARD_ICONS_BASE}/lidarr.svg",
+    "author": f"{DASHBOARD_ICONS_BASE}/readarr.svg",
 }
 
 DOWNLOADER_ICONS = {
-    "qbittorrent": "/static/icons/qbittorrent.svg",
-    "sabnzbd": "/static/icons/sabnzbd.svg",
+    "qbittorrent": f"{DASHBOARD_ICONS_BASE}/qbittorrent.svg",
+    "sabnzbd": f"{DASHBOARD_ICONS_BASE}/sabnzbd.svg",
 }
 
 INDEXER_ICONS = {
-    "prowlarr": "/static/icons/prowlarr.svg",
+    "prowlarr": f"{DASHBOARD_ICONS_BASE}/prowlarr.svg",
 }
 
 TRANSCODER_ICONS = {
-    "tdarr": "/static/icons/tdarr.svg",
+    "tdarr": f"{DASHBOARD_ICONS_BASE}/tdarr.svg",
 }
 
 MEDIA_SERVER_ICONS = {
-    "plex": "/static/icons/mediaserver.svg",
-    "jellyfin": "/static/icons/mediaserver.svg",
-    "emby": "/static/icons/mediaserver.svg",
+    "plex": f"{DASHBOARD_ICONS_BASE}/plex.svg",
+    "jellyfin": f"{DASHBOARD_ICONS_BASE}/jellyfin.svg",
+    "emby": f"{DASHBOARD_ICONS_BASE}/emby.svg",
 }
 
 # Structural facts about each *kind* of arr app - which endpoints it uses,
@@ -2907,18 +2914,23 @@ def fetch_home_stats() -> dict:
         for s in MEDIA_SERVERS if s.get("enabled", True)
     ]
 
-    total_indexers = 0
-    healthy_indexers = 0
+    indexer_service_stats = []
     for service in INDEXERS:
         if not service.get("enabled", True):
             continue
         result = fetch_prowlarr_indexers(service)
         if result.get("error"):
+            indexer_service_stats.append({"name": service["name"], "type": service["type"], "error": result["error"]})
             continue
-        for idx in result["indexers"]:
-            total_indexers += 1
-            if idx["healthy"]:
-                healthy_indexers += 1
+        healthy = sum(1 for idx in result["indexers"] if idx["healthy"])
+        indexer_service_stats.append({
+            "name": service["name"],
+            "type": INDEXER_SERVICE_TYPES.get(service["type"], service["type"]),
+            "total": len(result["indexers"]),
+            "healthy": healthy,
+            "unhealthy": len(result["indexers"]) - healthy,
+            "error": None,
+        })
 
     transcoder_stats = []
     for server in TRANSCODERS:
@@ -2936,10 +2948,7 @@ def fetch_home_stats() -> dict:
     return {
         "instances": instance_stats,
         "media_servers": media_server_stats,
-        "indexers": (
-            {"total": total_indexers, "healthy": healthy_indexers, "unhealthy": total_indexers - healthy_indexers}
-            if INDEXERS else None
-        ),
+        "indexers": indexer_service_stats,
         "transcoders": transcoder_stats,
     }
 
