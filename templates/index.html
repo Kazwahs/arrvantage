@@ -1002,6 +1002,7 @@
                     <span id="indexer-service-title-label" style="padding: 0.5rem 0.25rem; font-weight: 600;"></span>
                 </div>
                 <div class="topbar-right">
+                    <button class="test-btn" id="test-all-btn" onclick="testAllIndexers(currentIndexerService)">Test All</button>
                     <button class="test-btn" onclick="refreshCurrentIndexerService()">Refresh</button>
                     {% if is_admin %}
                     <a class="settings-link" href="/settings" title="Settings">
@@ -1395,7 +1396,7 @@
                         </div>
                         ${!idx.healthy ? `
                         <div class="card-actions" style="margin-top: 0;">
-                            <button class="mini-btn" onclick="testIndexer('${name}', ${idx.id}, this)">Test</button>
+                            <button class="mini-btn" data-indexer-id="${idx.id}" onclick="testIndexer('${name}', ${idx.id}, this)">Test</button>
                         </div>
                         ` : ''}
                     </div>
@@ -1434,6 +1435,37 @@
                     resultEl.className = 'test-status test-fail';
                 }
             }
+        }
+
+        async function testAllIndexers(name) {
+            if (!name) return;
+            const buttons = document.querySelectorAll(`#indexer-list-${name} .mini-btn[data-indexer-id]`);
+            if (!buttons.length) return;
+
+            const testAllBtn = document.getElementById('test-all-btn');
+            testAllBtn.disabled = true;
+            const originalLabel = testAllBtn.textContent;
+
+            // Sequential rather than parallel - each individual test
+            // already re-fetches the indexer list on success, and
+            // firing many of those at once would just mean redundant,
+            // overlapping refreshes. One list refresh at the end here
+            // covers everything instead.
+            let done = 0;
+            for (const btn of buttons) {
+                const indexerId = btn.dataset.indexerId;
+                testAllBtn.textContent = `Testing ${done + 1}/${buttons.length}...`;
+                try {
+                    await fetch(`/api/indexers/test/${name}/${indexerId}`, { method: 'POST' });
+                } catch (err) {
+                    // keep going even if one fails - still want the rest tested
+                }
+                done++;
+            }
+
+            testAllBtn.disabled = false;
+            testAllBtn.textContent = originalLabel;
+            loadIndexerServiceStatus(name);
         }
 
         // --- Media Servers (Plex / Jellyfin / Emby activity views) ---
