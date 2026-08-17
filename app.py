@@ -2868,6 +2868,127 @@ def api_tdarr_status(name):
 
 
 # ---------------------------------------------------------------------------
+# Home - a summary landing page pulling from every configured category.
+# Reuses each category's existing fetch function rather than duplicating
+# API logic, at the cost of a few extra live calls on every Home load -
+# the same on-demand tradeoff already used throughout this app.
+# ---------------------------------------------------------------------------
+
+
+def fetch_home_stats() -> dict:
+    instance_stats = []
+    for name, config in APPS.items():
+        try:
+            library = fetch_library(name, config)
+        except requests.exceptions.RequestException:
+            continue
+        if library.get("error"):
+            instance_stats.append({"name": name, "kind": config["library_kind"], "error": library["error"]})
+            continue
+        items = library["library_items"]
+        # "Complete"/"Downloaded" count as downloaded; everything else
+        # (Missing, Partial, Unknown) counts as missing - Partial items
+        # are genuinely short something, so lumping them in here keeps
+        # the two numbers adding up to the total rather than leaving a
+        # third, unexplained bucket.
+        downloaded = sum(1 for i in items if i["status"] in ("Downloaded", "Complete"))
+        instance_stats.append({
+            "name": name,
+            "kind": config["library_kind"],
+            "icon_url": INSTANCE_ICONS.get(config["library_kind"], ""),
+            "total": len(items),
+            "downloaded": downloaded,
+            "missing": len(items) - downloaded,
+            "error": None,
+        })
+
+    media_server_stats = [
+        {"name": s["name"], "type": s["type"], "url": s["url"]}
+        for s in MEDIA_SERVERS if s.get("enabled", True)
+    ]
+
+    total_indexers = 0
+    healthy_indexers = 0
+    for service in INDEXERS:
+        if not service.get("enabled", True):
+            continue
+        result = fetch_prowlarr_indexers(service)
+        if result.get("error"):
+            continue
+        for idx in result["indexers"]:
+            total_indexers += 1
+            if idx["healthy"]:
+                healthy_indexers += 1
+
+    transcoder_stats = []
+    for server in TRANSCODERS:
+        if not server.get("enabled", True):
+            continue
+        status = fetch_tdarr_status(server)
+        if status.get("error"):
+            continue
+        transcoder_stats.append({
+            "name": server["name"],
+            "total_transcodes": status["total_transcodes"],
+            "space_saved_gb": status["space_saved_gb"],
+        })
+
+    return {
+        "instances": instance_stats,
+        "media_servers": media_server_stats,
+        "indexers": (
+            {"total": total_indexers, "healthy": healthy_indexers, "unhealthy": total_indexers - healthy_indexers}
+            if INDEXERS else None
+        ),
+        "transcoders": transcoder_stats,
+    }
+
+
+@app.route("/api/home/stats")
+@login_required
+def api_home_stats():
+    return jsonify(fetch_home_stats())
+
+
+def trigger_plex_library_scan(server: dict) -> None:
+    """Well-established Plex endpoint for refreshing every library -
+    standard across the Plex ecosystem, though not verified against
+    this specific instance."""
+    response = requests.get(
+        f"{server['url'].rstrip('/')}/library/sections/all/refresh",
+        params={"X-Plex-Token": server["credential"]}, timeout=15,
+    )
+    response.raise_for_status()
+
+
+def trigger_jellyfin_library_scan(server: dict) -> None:
+    """Well-established Jellyfin/Emby endpoint for a full library scan -
+    standard across the Jellyfin ecosystem, though not verified against
+    this specific instance."""
+    response = requests.post(
+        f"{server['url'].rstrip('/')}/Library/Refresh",
+        headers={"X-Emby-Token": server["credential"]}, timeout=15,
+    )
+    response.raise_for_status()
+
+
+@app.route("/api/mediaserver/rescan/<name>", methods=["POST"])
+@login_required
+def api_mediaserver_rescan(name):
+    server = get_media_server(name)
+    if not server:
+        return jsonify({"ok": False, "error": "unknown media server"}), 404
+    try:
+        if server["type"] == "plex":
+            trigger_plex_library_scan(server)
+        else:
+            trigger_jellyfin_library_scan(server)
+        return jsonify({"ok": True})
+    except requests.exceptions.RequestException as err:
+        return jsonify({"ok": False, "error": str(err)}), 502
+
+
+# ---------------------------------------------------------------------------
 # Settings
 # ---------------------------------------------------------------------------
 

@@ -679,13 +679,13 @@
 <body>
 
     <div class="sidebar">
-        <div class="sidebar-logo">
+        <div class="sidebar-logo" onclick="selectHome()" style="cursor: pointer;" title="Home">
             <img src="/static/icons/logo.svg" alt="arrVantage">
         </div>
         <hr class="sidebar-divider">
         <div class="sidebar-title">Instances</div>
         {% for instance in instances %}
-        <button class="instance-tab{% if loop.first %} active{% endif %}"
+        <button class="instance-tab"
                 data-instance="{{ instance.name }}"
                 data-seerr-type="{{ instance.seerr_media_type or '' }}"
                 data-kind="{{ instance.library_kind }}"
@@ -759,7 +759,29 @@
     </div>
 
     <div class="main">
-        <div id="instances-view">
+        <div id="home-view">
+            <div class="topbar">
+                <div class="view-tabs">
+                    <span style="padding: 0.5rem 0.25rem; font-weight: 600;">Home</span>
+                </div>
+                <div class="topbar-right">
+                    <button class="test-btn" onclick="loadHomeStats()">Refresh</button>
+                    {% if is_admin %}
+                    <a class="settings-link" href="/settings" title="Settings">
+                        <img src="/static/icons/settings.svg" alt="Settings">
+                    </a>
+                    {% endif %}
+                    <a class="settings-link" href="javascript:void(0)" onclick="showAbout()" title="About arrVantage">
+                        <img src="/static/icons/about.svg" alt="About">
+                    </a>
+                </div>
+            </div>
+            <div class="content">
+                <div id="home-stats-content" class="modal-loading">Loading...</div>
+            </div>
+        </div>
+
+        <div id="instances-view" style="display:none;">
         <div class="topbar">
             <div class="view-tabs">
                 <button class="view-tab active" data-view="library" onclick="selectView('library')">Library</button>
@@ -1115,11 +1137,131 @@
             {% endfor %}
         };
 
+        function selectHome() {
+            document.querySelectorAll('.instance-tab').forEach(el => el.classList.remove('active'));
+
+            document.getElementById('instances-view').style.display = 'none';
+            document.getElementById('downloaders-view').style.display = 'none';
+            document.getElementById('indexers-view').style.display = 'none';
+            document.getElementById('mediaservers-view').style.display = 'none';
+            document.getElementById('transcoders-view').style.display = 'none';
+            document.getElementById('home-view').style.display = 'block';
+
+            loadHomeStats();
+        }
+
+        async function loadHomeStats() {
+            const el = document.getElementById('home-stats-content');
+            el.innerHTML = '<div class="modal-loading">Loading...</div>';
+
+            try {
+                const response = await fetch('/api/home/stats');
+                const data = await response.json();
+
+                let html = '';
+
+                if (data.instances && data.instances.length) {
+                    html += '<div class="modal-section-title">Libraries</div>';
+                    html += '<div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 0.75rem; margin-bottom: 1.5rem;">';
+                    html += data.instances.map(inst => inst.error ? `
+                        <div style="background: var(--panel); border: 1px solid var(--border); border-radius: 8px; padding: 0.9rem;">
+                            <div style="font-weight: 600; margin-bottom: 0.5rem;">${escapeHtml(inst.name)}</div>
+                            <div class="test-fail" style="font-size: 0.8rem;">${escapeHtml(inst.error)}</div>
+                        </div>
+                    ` : `
+                        <div style="background: var(--panel); border: 1px solid var(--border); border-radius: 8px; padding: 0.9rem;">
+                            <div style="display: flex; align-items: center; gap: 0.5rem; margin-bottom: 0.6rem;">
+                                <img src="${inst.icon_url}" alt="" style="width: 20px; height: 20px;" onerror="this.style.display='none';">
+                                <span style="font-weight: 600;">${escapeHtml(inst.name)}</span>
+                            </div>
+                            <div style="font-family: var(--mono); font-size: 1.4rem; font-weight: 700;">${inst.total.toLocaleString()}</div>
+                            <div style="font-size: 0.78rem; color: var(--muted); margin-bottom: 0.4rem;">items in library</div>
+                            <div style="font-size: 0.82rem;">
+                                <span class="test-ok">${inst.downloaded.toLocaleString()} downloaded</span>
+                                &middot; <span class="test-fail">${inst.missing.toLocaleString()} missing</span>
+                            </div>
+                        </div>
+                    `).join('');
+                    html += '</div>';
+                }
+
+                if (data.media_servers && data.media_servers.length) {
+                    html += '<div class="modal-section-title">Media Servers</div>';
+                    html += '<div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 0.75rem; margin-bottom: 1.5rem;">';
+                    html += data.media_servers.map(ms => `
+                        <div style="background: var(--panel); border: 1px solid var(--border); border-radius: 8px; padding: 0.9rem;">
+                            <div style="font-weight: 600; margin-bottom: 0.75rem;">${escapeHtml(ms.name)}</div>
+                            <div style="display: flex; gap: 0.5rem;">
+                                <a href="${ms.url}" target="_blank" rel="noopener" class="mini-btn" style="text-decoration: none; text-align: center;">Open</a>
+                                <button class="mini-btn" onclick="rescanMediaServer('${ms.name}', this)">Rescan Library</button>
+                            </div>
+                        </div>
+                    `).join('');
+                    html += '</div>';
+                }
+
+                if (data.indexers) {
+                    html += '<div class="modal-section-title">Indexers</div>';
+                    html += `<div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(120px, 1fr)); gap: 0.75rem; margin-bottom: 1.5rem;">
+                        ${statBox(data.indexers.total.toLocaleString(), 'Total Indexers')}
+                        ${statBox(data.indexers.healthy.toLocaleString(), 'Healthy')}
+                        ${statBox(data.indexers.unhealthy.toLocaleString(), 'Unhealthy')}
+                    </div>`;
+                }
+
+                if (data.transcoders && data.transcoders.length) {
+                    html += '<div class="modal-section-title">Transcoders</div>';
+                    html += '<div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 0.75rem; margin-bottom: 1.5rem;">';
+                    html += data.transcoders.map(tc => `
+                        <div style="background: var(--panel); border: 1px solid var(--border); border-radius: 8px; padding: 0.9rem;">
+                            <div style="font-weight: 600; margin-bottom: 0.6rem;">${escapeHtml(tc.name)}</div>
+                            <div style="display: flex; gap: 1.5rem;">
+                                <div>
+                                    <div style="font-family: var(--mono); font-size: 1.2rem; font-weight: 700;">${tc.total_transcodes.toLocaleString()}</div>
+                                    <div style="font-size: 0.72rem; color: var(--muted);">total transcoded</div>
+                                </div>
+                                <div>
+                                    <div style="font-family: var(--mono); font-size: 1.2rem; font-weight: 700;">${tc.space_saved_gb.toLocaleString()} GB</div>
+                                    <div style="font-size: 0.72rem; color: var(--muted);">space saved</div>
+                                </div>
+                            </div>
+                        </div>
+                    `).join('');
+                    html += '</div>';
+                }
+
+                if (!html) {
+                    html = '<div class="empty">Nothing configured yet - add instances, media servers, indexers, or transcoders in Settings.</div>';
+                }
+
+                el.innerHTML = html;
+            } catch (err) {
+                el.innerHTML = '<div class="modal-empty">Could not load Home stats.</div>';
+            }
+        }
+
+        async function rescanMediaServer(name, btn) {
+            btn.disabled = true;
+            const original = btn.textContent;
+            btn.textContent = 'Scanning...';
+
+            try {
+                const response = await fetch(`/api/mediaserver/rescan/${name}`, { method: 'POST' });
+                const result = await response.json();
+                btn.textContent = result.ok ? 'Scan started' : 'Failed';
+            } catch (err) {
+                btn.textContent = 'Failed';
+            }
+
+            setTimeout(() => { btn.disabled = false; btn.textContent = original; }, 3000);
+        }
+
         function selectInstance(name) {
             currentInstance = name;
             document.querySelectorAll('.instance-tab').forEach(el => {
                 el.classList.toggle('active', el.dataset.instance === name);
             });
+            document.getElementById('home-view').style.display = 'none';
             document.getElementById('downloaders-view').style.display = 'none';
             document.getElementById('indexers-view').style.display = 'none';
             document.getElementById('mediaservers-view').style.display = 'none';
@@ -1146,6 +1288,7 @@
                 el.classList.toggle('active', el.dataset.downloader === name);
             });
 
+            document.getElementById('home-view').style.display = 'none';
             document.getElementById('instances-view').style.display = 'none';
             document.getElementById('indexers-view').style.display = 'none';
             document.getElementById('mediaservers-view').style.display = 'none';
@@ -1176,6 +1319,7 @@
                 el.classList.toggle('active', el.dataset.indexerService === name);
             });
 
+            document.getElementById('home-view').style.display = 'none';
             document.getElementById('instances-view').style.display = 'none';
             document.getElementById('downloaders-view').style.display = 'none';
             document.getElementById('mediaservers-view').style.display = 'none';
@@ -1277,6 +1421,7 @@
                 el.classList.toggle('active', el.dataset.mediaserver === name);
             });
 
+            document.getElementById('home-view').style.display = 'none';
             document.getElementById('instances-view').style.display = 'none';
             document.getElementById('downloaders-view').style.display = 'none';
             document.getElementById('indexers-view').style.display = 'none';
@@ -1320,6 +1465,7 @@
                 el.classList.toggle('active', el.dataset.transcoder === name);
             });
 
+            document.getElementById('home-view').style.display = 'none';
             document.getElementById('instances-view').style.display = 'none';
             document.getElementById('downloaders-view').style.display = 'none';
             document.getElementById('indexers-view').style.display = 'none';
@@ -2570,6 +2716,7 @@
                 btn.disabled = false;
             }
         }
+        loadHomeStats();
     </script>
 
 </body>
