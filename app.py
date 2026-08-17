@@ -2078,16 +2078,16 @@ def fetch_prowlarr_indexers(service: dict) -> dict:
         status = status_by_id.get(i.get("id"))
         reason = ""
         if status:
-            # Best-guess fields - Prowlarr's IndexerStatus doesn't
-            # appear to carry a free-text message, just failure info,
-            # so this surfaces whatever's there. Check the raw JSON
-            # here if this comes back empty for a known-bad indexer.
-            reason = (
-                status.get("mostRecentFailureMessage")
-                or status.get("mostRecentFailure")
-                or (f"Disabled until {status.get('disabledTill')}" if status.get("disabledTill") else "")
-                or "Recent failures detected"
-            )
+            # Confirmed via Prowlarr's real OpenAPI spec: IndexerStatus
+            # only has disabledTill/mostRecentFailure/initialFailure as
+            # timestamps - no free-text message field exists at all,
+            # so this is the most specific info actually available.
+            if status.get("disabledTill"):
+                reason = f"Disabled until {status['disabledTill']}"
+            elif status.get("mostRecentFailure"):
+                reason = f"Most recent failure: {status['mostRecentFailure']}"
+            else:
+                reason = "Recent failures detected"
         indexers.append({
             "id": i.get("id"),
             "name": i.get("name", "(unknown)"),
@@ -2102,13 +2102,28 @@ def fetch_prowlarr_indexers(service: dict) -> dict:
 
 def test_prowlarr_indexer(service: dict, indexer_id: int) -> str:
     """
+    Confirmed via Prowlarr's real OpenAPI spec: testing an indexer
+    means GETting its full current definition, then POSTing that
+    whole object to a plain /test endpoint (no ID in the URL) -
+    matching the arr-family convention of testing by full-body POST
+    rather than a /test/{id} sub-resource. An earlier version of this
+    guessed the /test/{id} shape and got a 405, since Prowlarr doesn't
+    recognize that pattern at all.
+
     Returns an empty string on success, or a best-effort error detail
-    on failure. Best-guess endpoint path and response shape - check
-    here first if testing fails or the message isn't useful.
+    on failure.
     """
     base = service["url"].rstrip("/")
     headers = {"X-Api-Key": service["api_key"]}
-    response = requests.post(f"{base}/api/v1/indexer/test/{indexer_id}", headers=headers, timeout=30)
+
+    try:
+        get_resp = requests.get(f"{base}/api/v1/indexer/{indexer_id}", headers=headers, timeout=15)
+        get_resp.raise_for_status()
+        indexer_config = get_resp.json()
+    except requests.exceptions.RequestException as err:
+        return str(err)
+
+    response = requests.post(f"{base}/api/v1/indexer/test", headers=headers, json=indexer_config, timeout=30)
 
     if response.ok:
         return ""
@@ -2121,6 +2136,31 @@ def test_prowlarr_indexer(service: dict, indexer_id: int) -> str:
             return "; ".join(item.get("errorMessage", str(item)) for item in body)
         if isinstance(body, dict) and body.get("message"):
             return body["message"]
+        return str(body)[:300]
+    except ValueError:
+        return response.text[:300] or f"HTTP {response.status_code}"
+
+
+def test_all_prowlarr_indexers(service: dict) -> str:
+    """
+    Prowlarr has a native bulk-test endpoint (confirmed via its real
+    OpenAPI spec) - much simpler and more efficient than looping
+    individual tests, since it runs server-side in one request.
+    """
+    base = service["url"].rstrip("/")
+    headers = {"X-Api-Key": service["api_key"]}
+    try:
+        response = requests.post(f"{base}/api/v1/indexer/testall", headers=headers, timeout=60)
+    except requests.exceptions.RequestException as err:
+        return str(err)
+
+    if response.ok:
+        return ""
+
+    try:
+        body = response.json()
+        if isinstance(body, list) and body:
+            return "; ".join(item.get("errorMessage", str(item)) for item in body)
         return str(body)[:300]
     except ValueError:
         return response.text[:300] or f"HTTP {response.status_code}"
@@ -2148,6 +2188,22 @@ def api_indexers_test(name, indexer_id):
         return jsonify({"ok": False, "error": "unknown indexer service"}), 404
     try:
         error_detail = test_prowlarr_indexer(service, indexer_id)
+        if error_detail:
+            return jsonify({"ok": False, "error": error_detail})
+        return jsonify({"ok": True})
+    except requests.exceptions.RequestException as err:
+        return jsonify({"ok": False, "error": str(err)}), 502
+
+
+@app.route("/api/indexers/test-all/<name>", methods=["POST"])
+@login_required
+@permission_required("searching")
+def api_indexers_test_all(name):
+    service = get_indexer_service(name)
+    if not service:
+        return jsonify({"ok": False, "error": "unknown indexer service"}), 404
+    try:
+        error_detail = test_all_prowlarr_indexers(service)
         if error_detail:
             return jsonify({"ok": False, "error": error_detail})
         return jsonify({"ok": True})
