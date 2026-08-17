@@ -522,6 +522,8 @@
             color: var(--muted);
             margin: 1.25rem 0 0.5rem 0;
         }
+        #modal-body p { line-height: 1.55; font-size: 0.9rem; margin: 0 0 0.5rem 0; }
+        #modal-body p a { color: var(--accent); }
         .modal-section-title:first-of-type { margin-top: 0; }
 
         .cast-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(105px, 1fr)); gap: 0.5rem; }
@@ -761,6 +763,9 @@
                     <img src="/static/icons/settings.svg" alt="Settings">
                 </a>
                 {% endif %}
+                <a class="settings-link" href="javascript:void(0)" onclick="showAbout()" title="About arrVantage">
+                    <img src="/static/icons/about.svg" alt="About">
+                </a>
                 <div class="user-menu">
                     <span class="user-name">{{ username }}</span>
                     <a class="logout-link" href="/logout">Log out</a>
@@ -944,6 +949,9 @@
                         <img src="/static/icons/settings.svg" alt="Settings">
                     </a>
                     {% endif %}
+                    <a class="settings-link" href="javascript:void(0)" onclick="showAbout()" title="About arrVantage">
+                        <img src="/static/icons/about.svg" alt="About">
+                    </a>
                 </div>
             </div>
             <div class="content">
@@ -967,6 +975,9 @@
                         <img src="/static/icons/settings.svg" alt="Settings">
                     </a>
                     {% endif %}
+                    <a class="settings-link" href="javascript:void(0)" onclick="showAbout()" title="About arrVantage">
+                        <img src="/static/icons/about.svg" alt="About">
+                    </a>
                 </div>
             </div>
             <div class="content">
@@ -993,6 +1004,9 @@
                         <img src="/static/icons/settings.svg" alt="Settings">
                     </a>
                     {% endif %}
+                    <a class="settings-link" href="javascript:void(0)" onclick="showAbout()" title="About arrVantage">
+                        <img src="/static/icons/about.svg" alt="About">
+                    </a>
                 </div>
             </div>
             <div class="content">
@@ -1020,6 +1034,9 @@
                         <img src="/static/icons/settings.svg" alt="Settings">
                     </a>
                     {% endif %}
+                    <a class="settings-link" href="javascript:void(0)" onclick="showAbout()" title="About arrVantage">
+                        <img src="/static/icons/about.svg" alt="About">
+                    </a>
                 </div>
             </div>
             <div class="content">
@@ -2023,6 +2040,55 @@
 
         function closeDetails() {
             document.getElementById('modal-overlay').classList.remove('open');
+        }
+
+        function showAbout() {
+            const header = document.getElementById('modal-header');
+            const body = document.getElementById('modal-body');
+
+            header.innerHTML = `
+                <div class="modal-header">
+                    <div class="modal-cover" style="display: flex; align-items: center; justify-content: center; padding: 1rem;">
+                        <img src="/static/icons/logo.svg" alt="arrVantage" style="width: 100%; height: auto;">
+                    </div>
+                    <div class="modal-header-text">
+                        <div class="modal-title">About arrVantage</div>
+                    </div>
+                </div>
+            `;
+
+            body.innerHTML = `
+                <div class="modal-section-title">Why arrVantage?</div>
+                <p>I run the full *arr stack, Seerr, a media server, and a transcoder, and every time I needed to check on one I had a browser tab open for each. What started as a batch file that just launched all those tabs at once slowly turned into the idea for a proper unified frontend — one place to see and manage everything instead of tab-hopping between five different UIs.</p>
+
+                <div class="modal-section-title">A Note on How This Was Built</div>
+                <p>I'm in my mid-40s, work more than full-time, and have a family — I don't have the spare hours to learn a new stack from scratch right now. So I built arrVantage with Claude's help rather than writing every line by hand. Full transparency on that: the architecture decisions, the debugging, and the ongoing maintenance are mine, but a lot of the code itself came out of that collaboration. It's working well for me, and I'd rather ship something useful than wait until I had time to do it "the traditional way."</p>
+                <p>It's still evolving — I'm actively using it myself and tweaking it as I go. Feel free to try it out, and open an issue if something breaks or you'd like to see a feature added.</p>
+
+                <div class="modal-section-title">Supported Integrations</div>
+                <p>Radarr, Sonarr, Lidarr, and Readarr-style book libraries · Plex, Jellyfin, and Emby · Overseerr and Jellyseerr · qBittorrent and SABnzbd · Prowlarr · Tautulli and Tracearr · Tdarr · TMDB, TVDB, Fanart.tv, and TheAudioDB</p>
+
+                <div class="modal-section-title">Roadmap</div>
+                <p>Actively evolving — check the GitHub repo's issues for what's currently planned.</p>
+
+                <div class="modal-section-title">Contributing / Feedback</div>
+                <p>Issues and feature requests are welcome — this is very much a living project.</p>
+
+                <div class="modal-section-title">License</div>
+                <p>Licensed under the <a href="https://github.com/Kazwahs/arrvantage/blob/main/LICENSE" target="_blank" rel="noopener">GNU General Public License v3.0</a> — the same license used by Sonarr, Radarr, and Prowlarr. In short: you're free to use, modify, and redistribute arrVantage, but any distributed modified version must also be open source under GPLv3.</p>
+
+                <div class="modal-section-title">Acknowledgments</div>
+                <p>Built with the help of <a href="https://claude.ai/" target="_blank" rel="noopener">Claude</a>.</p>
+
+                <div style="margin-top: 1.5rem; text-align: center;">
+                    <a href="https://www.buymeacoffee.com/kazwahs" target="_blank" rel="noopener"
+                       style="display: inline-block; background: #FFDD00; color: #000; font-weight: 600; padding: 0.6rem 1.4rem; border-radius: 8px; text-decoration: none;">
+                        ☕ Buy me a coffee
+                    </a>
+                </div>
+            `;
+
+            document.getElementById('modal-overlay').classList.add('open');
         }
 
         function renderMovieModal(instance, itemId, data) {
