@@ -7,15 +7,17 @@
     <link rel="icon" href="/static/icons/favicon.svg" type="image/svg+xml">
     <style>
         :root {
-            --bg: #14161a;
-            --panel: #1c1f26;
-            --sidebar: #181a20;
-            --border: #2a2e37;
-            --text: #e4e6eb;
-            --muted: #8b93a3;
-            --accent: #5b8cff;
-            --error: #ff6b6b;
-            --success: #4ade80;
+            --bg: #0d1117;
+            --panel: #151b23;
+            --sidebar: #0a0e14;
+            --border: #262f3a;
+            --text: #e6e9ef;
+            --muted: #8891a0;
+            --accent: #4d8fdd;
+            --accent-amber: #e8a33d;
+            --mono: ui-monospace, "SF Mono", "Cascadia Code", "Roboto Mono", Consolas, monospace;
+            --error: #e5484d;
+            --success: #5fd97a;
         }
 
         * { box-sizing: border-box; }
@@ -82,7 +84,8 @@
         .instance-tab.active {
             color: var(--text);
             border-color: var(--tab-color, var(--accent));
-            background: rgba(91, 140, 255, 0.1);
+            background: rgba(77, 143, 221, 0.1);
+            box-shadow: inset 3px 0 0 var(--accent-amber), 0 0 14px -4px var(--accent-amber);
         }
 
         .instance-logo {
@@ -165,9 +168,10 @@
         .view-tab.active {
             color: var(--text);
             border-color: var(--accent);
-            background: rgba(91, 140, 255, 0.1);
+            background: rgba(77, 143, 221, 0.1);
         }
         .view-tab.hidden { display: none; }
+        #queue-tab-count { font-family: var(--mono); }
 
         .content { padding: 1.5rem; overflow-y: auto; }
 
@@ -376,9 +380,10 @@
             top: 0.4rem;
             right: 0.4rem;
             font-size: 0.68rem;
+            font-family: var(--mono);
             padding: 0.15rem 0.4rem;
             border-radius: 4px;
-            background: rgba(20, 22, 26, 0.85);
+            background: rgba(13, 17, 23, 0.85);
             color: var(--text);
         }
 
@@ -1341,7 +1346,7 @@
         function statBox(value, label) {
             return `
                 <div style="background: var(--panel); border: 1px solid var(--border); border-radius: 8px; padding: 0.75rem;">
-                    <div style="font-size: 1.3rem; font-weight: 700;">${value}</div>
+                    <div style="font-family: var(--mono); font-size: 1.3rem; font-weight: 700; letter-spacing: -0.02em;">${value}</div>
                     <div style="font-size: 0.72rem; color: var(--muted); margin-top: 0.15rem;">${label}</div>
                 </div>
             `;
