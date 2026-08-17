@@ -1175,11 +1175,12 @@
                                 <span style="font-weight: 600;">${escapeHtml(inst.name)}</span>
                             </div>
                             <div style="font-family: var(--mono); font-size: 1.4rem; font-weight: 700;">${inst.total.toLocaleString()}</div>
-                            <div style="font-size: 0.78rem; color: var(--muted); margin-bottom: 0.4rem;">items in library</div>
-                            <div style="font-size: 0.82rem;">
+                            <div style="font-size: 0.78rem; color: var(--muted); margin-bottom: 0.4rem;">${escapeHtml(inst.unit)} in library</div>
+                            <div style="font-size: 0.82rem; margin-bottom: 0.4rem;">
                                 <span class="test-ok">${inst.downloaded.toLocaleString()} downloaded</span>
                                 &middot; <span class="test-fail">${inst.missing.toLocaleString()} missing</span>
                             </div>
+                            <div style="font-family: var(--mono); font-size: 0.78rem; color: var(--muted);">${escapeHtml(inst.size_display)} on disk</div>
                         </div>
                     `).join('');
                     html += '</div>';

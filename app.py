@@ -73,7 +73,7 @@ INDEXER_ICONS = {
 }
 
 TRANSCODER_ICONS = {
-    "tdarr": f"{DASHBOARD_ICONS_BASE}/tdarr.svg",
+    "tdarr": "https://cdn.jsdelivr.net/gh/homarr-labs/dashboard-icons/png/tdarr.png",
 }
 
 MEDIA_SERVER_ICONS = {
@@ -629,6 +629,8 @@ def get_library_item(record: dict, kind: str, config: dict) -> dict:
     genre = get_genre(record)
     status = get_status_category(kind, record)
     cover_url = get_cover_url(record, config)
+    episode_have = episode_total = None
+    size_bytes = 0
 
     if kind == "movie":
         title = record.get("title", "(unknown)")
@@ -636,11 +638,14 @@ def get_library_item(record: dict, kind: str, config: dict) -> dict:
         detail = ""
         title = f"{title} ({year})" if year else title
         release_date = record.get("inCinemas") or record.get("physicalRelease") or str(year)
+        size_bytes = record.get("sizeOnDisk", 0) or 0
     elif kind == "series":
         title = record.get("title", "(unknown)")
         stats = record.get("statistics", {})
-        detail = f"{stats.get('episodeFileCount', 0)}/{stats.get('episodeCount', 0)} episodes"
+        episode_have, episode_total = stats.get("episodeFileCount", 0), stats.get("episodeCount", 0)
+        detail = f"{episode_have}/{episode_total} episodes"
         release_date = record.get("firstAired", "")
+        size_bytes = stats.get("sizeOnDisk", 0) or 0
     elif kind == "artist":
         title = record.get("artistName", "(unknown)")
         stats = record.get("statistics", {})
@@ -648,12 +653,14 @@ def get_library_item(record: dict, kind: str, config: dict) -> dict:
         # No clean single "release date" concept for an artist as a
         # whole - Release Date sort won't distinguish artists well.
         release_date = ""
+        size_bytes = stats.get("sizeOnDisk", 0) or 0
     elif kind == "author":
         title = record.get("authorName", "(unknown)")
         stats = record.get("statistics", {})
         detail = f"{stats.get('bookFileCount', 0)}/{stats.get('bookCount', 0)} books"
         # Same limitation as artists - no single release date for an author.
         release_date = ""
+        size_bytes = stats.get("sizeOnDisk", 0) or 0
     else:
         title = record.get("title", "(unknown)")
         detail = ""
@@ -664,7 +671,8 @@ def get_library_item(record: dict, kind: str, config: dict) -> dict:
             "tmdb_id": record.get("tmdbId") if kind == "movie" else None,
             "tvdb_id": record.get("tvdbId") if kind == "series" else None,
             "foreign_artist_id": record.get("foreignArtistId") if kind == "artist" else None,
-            "release_date": release_date or "", "date_added": record.get("added", "") or ""}
+            "release_date": release_date or "", "date_added": record.get("added", "") or "",
+            "episode_have": episode_have, "episode_total": episode_total, "size_bytes": size_bytes}
 
 
 def fetch_library(name: str, config: dict) -> dict:
@@ -2882,6 +2890,13 @@ def api_tdarr_status(name):
 # ---------------------------------------------------------------------------
 
 
+def format_size_gb(size_bytes: int) -> str:
+    gb = (size_bytes or 0) / (1024 ** 3)
+    if gb >= 1024:
+        return f"{gb / 1024:.1f} TB"
+    return f"{gb:.1f} GB"
+
+
 def fetch_home_stats() -> dict:
     instance_stats = []
     for name, config in APPS.items():
@@ -2893,21 +2908,43 @@ def fetch_home_stats() -> dict:
             instance_stats.append({"name": name, "kind": config["library_kind"], "error": library["error"]})
             continue
         items = library["library_items"]
-        # "Complete"/"Downloaded" count as downloaded; everything else
-        # (Missing, Partial, Unknown) counts as missing - Partial items
-        # are genuinely short something, so lumping them in here keeps
-        # the two numbers adding up to the total rather than leaving a
-        # third, unexplained bucket.
-        downloaded = sum(1 for i in items if i["status"] in ("Downloaded", "Complete"))
-        instance_stats.append({
-            "name": name,
-            "kind": config["library_kind"],
-            "icon_url": INSTANCE_ICONS.get(config["library_kind"], ""),
-            "total": len(items),
-            "downloaded": downloaded,
-            "missing": len(items) - downloaded,
-            "error": None,
-        })
+        size_bytes = sum(i.get("size_bytes") or 0 for i in items)
+
+        if config["library_kind"] == "series":
+            # Episode-level counts rather than show-level - a show
+            # marked "Partial" hides how much is actually missing, so
+            # this sums the real episode have/total across every show.
+            have = sum(i.get("episode_have") or 0 for i in items)
+            total = sum(i.get("episode_total") or 0 for i in items)
+            instance_stats.append({
+                "name": name,
+                "kind": config["library_kind"],
+                "icon_url": INSTANCE_ICONS.get(config["library_kind"], ""),
+                "total": total,
+                "downloaded": have,
+                "missing": total - have,
+                "unit": "episodes",
+                "size_display": format_size_gb(size_bytes),
+                "error": None,
+            })
+        else:
+            # "Complete"/"Downloaded" count as downloaded; everything else
+            # (Missing, Partial, Unknown) counts as missing - Partial items
+            # are genuinely short something, so lumping them in here keeps
+            # the two numbers adding up to the total rather than leaving a
+            # third, unexplained bucket.
+            downloaded = sum(1 for i in items if i["status"] in ("Downloaded", "Complete"))
+            instance_stats.append({
+                "name": name,
+                "kind": config["library_kind"],
+                "icon_url": INSTANCE_ICONS.get(config["library_kind"], ""),
+                "total": len(items),
+                "downloaded": downloaded,
+                "missing": len(items) - downloaded,
+                "unit": "items",
+                "size_display": format_size_gb(size_bytes),
+                "error": None,
+            })
 
     media_server_stats = [
         {"name": s["name"], "type": s["type"], "url": s["url"], "icon_url": MEDIA_SERVER_ICONS.get(s["type"], "")}
