@@ -1933,20 +1933,28 @@ def qbt_torrent_action(downloader: dict, action: str, torrent_hash: str, delete_
     base = downloader["url"].rstrip("/")
     headers = qbt_headers(downloader)
 
-    # Best-guess endpoint names, matching qBittorrent's long-documented
-    # v4.1-v4.6 API - if pause/resume don't work on your version, this
-    # is the first place to check (some newer versions renamed these).
+    # qBittorrent v5.0 renamed pause/resume to stop/start (confirmed
+    # via qBittorrent's own official WebUI API docs) - installs on
+    # v4.x still only recognize the old names, so this tries the new
+    # endpoint first and falls back to the old one on a 404, covering
+    # both generations rather than assuming one.
     if action == "pause":
-        response = requests.post(f"{base}/api/v2/torrents/pause", headers=headers, data={"hashes": torrent_hash}, timeout=10)
+        endpoint_names = ["stop", "pause"]
+        data = {"hashes": torrent_hash}
     elif action == "resume":
-        response = requests.post(f"{base}/api/v2/torrents/resume", headers=headers, data={"hashes": torrent_hash}, timeout=10)
+        endpoint_names = ["start", "resume"]
+        data = {"hashes": torrent_hash}
     elif action == "delete":
-        response = requests.post(
-            f"{base}/api/v2/torrents/delete", headers=headers,
-            data={"hashes": torrent_hash, "deleteFiles": str(delete_files).lower()}, timeout=10,
-        )
+        endpoint_names = ["delete"]
+        data = {"hashes": torrent_hash, "deleteFiles": str(delete_files).lower()}
     else:
         raise ValueError(f"unknown action: {action}")
+
+    response = None
+    for endpoint_name in endpoint_names:
+        response = requests.post(f"{base}/api/v2/torrents/{endpoint_name}", headers=headers, data=data, timeout=10)
+        if response.status_code != 404:
+            break
     response.raise_for_status()
 
 
@@ -2051,12 +2059,11 @@ def api_downloader_action(name):
 
 def fetch_prowlarr_indexers(service: dict) -> dict:
     """
-    Best-guess structure: GET /api/v1/indexer for the base indexer
-    list, cross-referenced against GET /api/v1/indexerstatus for
-    health - Prowlarr tracks failing indexers separately, only listing
-    ones currently having issues there, so absence from that list
-    means healthy. Check raw JSON from both endpoints first if health
-    looks wrong.
+    Confirmed via Prowlarr's real OpenAPI spec: GET /api/v1/indexer
+    for the base indexer list, cross-referenced against GET
+    /api/v1/indexerstatus for health - Prowlarr tracks failing
+    indexers separately, only listing ones currently having issues
+    there, so absence from that list means healthy.
     """
     base = service["url"].rstrip("/")
     headers = {"X-Api-Key": service["api_key"]}
@@ -2717,6 +2724,21 @@ def fetch_tracearr_recently_added() -> dict:
         return {"error": str(err), "items": []}
 
     entries = data.get("data") or []
+
+    # A file that gets replaced (e.g. by Tdarr transcoding it after the
+    # initial import) can show up as a second, separate "recently
+    # added" event for what's really the same piece of content -
+    # deduplicate by the canonical media_id (stable across a transcode,
+    # unlike the server-specific rating_key/id) so it's only shown
+    # once, keeping whichever entry was added most recently.
+    deduped_by_media = {}
+    for e in entries:
+        key = e.get("media_id") or e.get("id")
+        existing = deduped_by_media.get(key)
+        if not existing or (e.get("added_at") or "") > (existing.get("added_at") or ""):
+            deduped_by_media[key] = e
+    entries = list(deduped_by_media.values())
+
     show_groups = {}
     standalone = []
     for e in entries:
