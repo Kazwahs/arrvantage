@@ -2166,6 +2166,87 @@ def test_all_prowlarr_indexers(service: dict) -> str:
         return response.text[:300] or f"HTTP {response.status_code}"
 
 
+def enable_prowlarr_indexer(service: dict, indexer_id: int) -> str:
+    """
+    Confirmed via Prowlarr's real OpenAPI spec: PUT /api/v1/indexer/{id}
+    updates an indexer, requiring the full current object in the body
+    (same full-object convention as testing). Fetches the current
+    config, flips enable to true, and PUTs it back.
+    """
+    base = service["url"].rstrip("/")
+    headers = {"X-Api-Key": service["api_key"]}
+
+    try:
+        get_resp = requests.get(f"{base}/api/v1/indexer/{indexer_id}", headers=headers, timeout=15)
+        get_resp.raise_for_status()
+        indexer_config = get_resp.json()
+    except requests.exceptions.RequestException as err:
+        return str(err)
+
+    indexer_config["enable"] = True
+
+    try:
+        response = requests.put(
+            f"{base}/api/v1/indexer/{indexer_id}", headers=headers, json=indexer_config, timeout=30,
+        )
+    except requests.exceptions.RequestException as err:
+        return str(err)
+
+    if response.ok:
+        return ""
+
+    try:
+        body = response.json()
+        if isinstance(body, list) and body:
+            return "; ".join(item.get("errorMessage", str(item)) for item in body)
+        if isinstance(body, dict) and body.get("message"):
+            return body["message"]
+        return str(body)[:300]
+    except ValueError:
+        return response.text[:300] or f"HTTP {response.status_code}"
+
+
+def enable_all_prowlarr_indexers(service: dict) -> str:
+    """
+    Uses Prowlarr's bulk update endpoint (confirmed via its real
+    OpenAPI spec - IndexerBulkResource takes ids + enable) to enable
+    every currently-disabled indexer in one request, rather than
+    looping individual enables.
+    """
+    base = service["url"].rstrip("/")
+    headers = {"X-Api-Key": service["api_key"]}
+
+    try:
+        list_resp = requests.get(f"{base}/api/v1/indexer", headers=headers, timeout=15)
+        list_resp.raise_for_status()
+        all_indexers = list_resp.json()
+    except requests.exceptions.RequestException as err:
+        return str(err)
+
+    disabled_ids = [i["id"] for i in all_indexers if not i.get("enable", True)]
+    if not disabled_ids:
+        return ""  # nothing to enable - not an error
+
+    try:
+        response = requests.put(
+            f"{base}/api/v1/indexer/bulk", headers=headers,
+            json={"ids": disabled_ids, "enable": True}, timeout=30,
+        )
+    except requests.exceptions.RequestException as err:
+        return str(err)
+
+    if response.ok:
+        return ""
+
+    try:
+        body = response.json()
+        if isinstance(body, list) and body:
+            return "; ".join(item.get("errorMessage", str(item)) for item in body)
+        return str(body)[:300]
+    except ValueError:
+        return response.text[:300] or f"HTTP {response.status_code}"
+
+
 def get_indexer_service(name: str):
     return next((s for s in INDEXERS if s["name"] == name), None)
 
@@ -2204,6 +2285,38 @@ def api_indexers_test_all(name):
         return jsonify({"ok": False, "error": "unknown indexer service"}), 404
     try:
         error_detail = test_all_prowlarr_indexers(service)
+        if error_detail:
+            return jsonify({"ok": False, "error": error_detail})
+        return jsonify({"ok": True})
+    except requests.exceptions.RequestException as err:
+        return jsonify({"ok": False, "error": str(err)}), 502
+
+
+@app.route("/api/indexers/enable/<name>/<int:indexer_id>", methods=["POST"])
+@login_required
+@permission_required("searching")
+def api_indexers_enable(name, indexer_id):
+    service = get_indexer_service(name)
+    if not service:
+        return jsonify({"ok": False, "error": "unknown indexer service"}), 404
+    try:
+        error_detail = enable_prowlarr_indexer(service, indexer_id)
+        if error_detail:
+            return jsonify({"ok": False, "error": error_detail})
+        return jsonify({"ok": True})
+    except requests.exceptions.RequestException as err:
+        return jsonify({"ok": False, "error": str(err)}), 502
+
+
+@app.route("/api/indexers/enable-all/<name>", methods=["POST"])
+@login_required
+@permission_required("searching")
+def api_indexers_enable_all(name):
+    service = get_indexer_service(name)
+    if not service:
+        return jsonify({"ok": False, "error": "unknown indexer service"}), 404
+    try:
+        error_detail = enable_all_prowlarr_indexers(service)
         if error_detail:
             return jsonify({"ok": False, "error": error_detail})
         return jsonify({"ok": True})

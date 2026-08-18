@@ -1003,6 +1003,7 @@
                 </div>
                 <div class="topbar-right">
                     <button class="test-btn" id="test-all-btn" onclick="testAllIndexers(currentIndexerService)">Test All</button>
+                    <button class="test-btn" id="enable-all-btn" onclick="enableAllIndexers(currentIndexerService)">Enable All</button>
                     <button class="test-btn" onclick="refreshCurrentIndexerService()">Refresh</button>
                     {% if is_admin %}
                     <a class="settings-link" href="/settings" title="Settings">
@@ -1394,9 +1395,10 @@
                             ${!idx.healthy && idx.unhealthy_reason ? `<div class="request-meta test-fail">${escapeHtml(idx.unhealthy_reason)}</div>` : ''}
                             <div class="test-status" id="indexer-test-result-${idx.id}"></div>
                         </div>
-                        ${!idx.healthy ? `
+                        ${(!idx.healthy || !idx.enabled) ? `
                         <div class="card-actions" style="margin-top: 0;">
-                            <button class="mini-btn" data-indexer-id="${idx.id}" onclick="testIndexer('${name}', ${idx.id}, this)">Test</button>
+                            ${!idx.healthy ? `<button class="mini-btn" data-indexer-id="${idx.id}" onclick="testIndexer('${name}', ${idx.id}, this)">Test</button>` : ''}
+                            ${!idx.enabled ? `<button class="mini-btn" onclick="enableIndexer('${name}', ${idx.id}, this)">Enable</button>` : ''}
                         </div>
                         ` : ''}
                     </div>
@@ -1456,6 +1458,56 @@
             setTimeout(() => {
                 testAllBtn.disabled = false;
                 testAllBtn.textContent = originalLabel;
+            }, 1500);
+
+            loadIndexerServiceStatus(name);
+        }
+
+        async function enableIndexer(name, indexerId, btn) {
+            btn.disabled = true;
+            const original = btn.textContent;
+            btn.textContent = 'Enabling...';
+
+            try {
+                const response = await fetch(`/api/indexers/enable/${name}/${indexerId}`, { method: 'POST' });
+                const result = await response.json();
+
+                if (result.ok) {
+                    loadIndexerServiceStatus(name); // refresh to reflect the new enabled state
+                } else {
+                    btn.textContent = 'Failed';
+                    btn.disabled = false;
+                    const resultEl = document.getElementById(`indexer-test-result-${indexerId}`);
+                    if (resultEl) {
+                        resultEl.textContent = result.error || 'Unknown error';
+                        resultEl.className = 'test-status test-fail';
+                    }
+                }
+            } catch (err) {
+                btn.textContent = 'Failed';
+                btn.disabled = false;
+            }
+        }
+
+        async function enableAllIndexers(name) {
+            if (!name) return;
+
+            const enableAllBtn = document.getElementById('enable-all-btn');
+            enableAllBtn.disabled = true;
+            const originalLabel = enableAllBtn.textContent;
+            enableAllBtn.textContent = 'Enabling all...';
+
+            try {
+                const response = await fetch(`/api/indexers/enable-all/${name}`, { method: 'POST' });
+                const result = await response.json();
+                enableAllBtn.textContent = result.ok ? 'Done' : 'Failed';
+            } catch (err) {
+                enableAllBtn.textContent = 'Failed';
+            }
+
+            setTimeout(() => {
+                enableAllBtn.disabled = false;
+                enableAllBtn.textContent = originalLabel;
             }, 1500);
 
             loadIndexerServiceStatus(name);
