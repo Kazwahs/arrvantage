@@ -14,6 +14,16 @@ import importlib
 
 import pytest
 
+# Explicitly add the repo root (this file's parent directory) to
+# sys.path, rather than relying on pytest's own rootdir-insertion
+# heuristics to make "import app" work. Those heuristics depend on
+# exactly how pytest discovers this directory, which can vary (e.g.
+# a testpaths mismatch falling back to recursive discovery uses a
+# different code path than the direct one) - doing this explicitly
+# means the import works the same way regardless of what the tests
+# directory is named or how it was found.
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+
 
 @pytest.fixture
 def app_module(tmp_path, monkeypatch):
