@@ -763,6 +763,10 @@
             <div class="topbar">
                 <div class="view-tabs">
                     <span style="padding: 0.5rem 0.25rem; font-weight: 600;">Home</span>
+                    <input type="text" id="cross-instance-search" class="topbar-search"
+                           placeholder="Search across all your libraries..."
+                           onkeydown="if (event.key === 'Enter') runCrossInstanceSearch();">
+                    <button class="test-btn" onclick="runCrossInstanceSearch()">Search</button>
                 </div>
                 <div class="topbar-right">
                     <button class="test-btn" onclick="loadHomeStats()">Refresh</button>
@@ -777,6 +781,7 @@
                 </div>
             </div>
             <div class="content">
+                <div id="cross-instance-search-results" style="display:none; margin-bottom: 1.5rem;"></div>
                 <div id="home-stats-content" class="modal-loading">Loading...</div>
             </div>
         </div>
@@ -1265,6 +1270,52 @@
                 el.innerHTML = html;
             } catch (err) {
                 el.innerHTML = '<div class="modal-empty">Could not load Home stats.</div>';
+            }
+        }
+
+        async function runCrossInstanceSearch() {
+            const query = document.getElementById('cross-instance-search').value.trim();
+            const resultsEl = document.getElementById('cross-instance-search-results');
+            const statsEl = document.getElementById('home-stats-content');
+
+            if (!query) {
+                resultsEl.style.display = 'none';
+                statsEl.style.display = 'block';
+                return;
+            }
+
+            resultsEl.style.display = 'block';
+            statsEl.style.display = 'none';
+            resultsEl.innerHTML = '<div class="modal-loading">Searching...</div>';
+
+            try {
+                const response = await fetch(`/api/search/cross-instance?q=${encodeURIComponent(query)}`);
+                const data = await response.json();
+
+                if (!data.results.length) {
+                    resultsEl.innerHTML = '<div class="empty">No matches found across your libraries</div>';
+                    return;
+                }
+
+                resultsEl.innerHTML = `
+                    <div class="modal-section-title">Search Results (${data.results.length})</div>
+                    <div class="library-grid">${data.results.map(r => `
+                        <div class="library-card" data-title="${r.title.replace(/"/g, '&quot;')}" data-cover="${r.cover_url}">
+                            <div class="cover-wrap" onclick="openDetails(this, '${r.instance}', ${r.item_id})">
+                                ${r.cover_url
+                                    ? `<img src="${r.cover_url}" alt="${escapeHtml(r.title)}" loading="lazy" onerror="this.style.display='none'; this.nextElementSibling.style.display='flex';">`
+                                    : ''
+                                }
+                                <div class="cover-fallback" ${r.cover_url ? 'style="display:none;"' : ''}>${escapeHtml(r.title)}</div>
+                                <span class="status-badge status-${r.status.toLowerCase()}">${escapeHtml(r.status)}</span>
+                            </div>
+                            <div class="card-title">${escapeHtml(r.title)}</div>
+                            <div class="card-genre">${escapeHtml(r.instance)}</div>
+                        </div>
+                    `).join('')}</div>
+                `;
+            } catch (err) {
+                resultsEl.innerHTML = '<div class="modal-empty">Search failed.</div>';
             }
         }
 

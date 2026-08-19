@@ -1,10 +1,9 @@
 name: Build and Publish Docker Image
 
-# Builds automatically on every push to main - no manual tagging step
-# needed. Publishes to GitHub Container Registry (ghcr.io), tagged
-# both `latest` (what TrueNAS tracks for updates) and with the short
-# commit SHA (a traceable, pinnable version if you ever need to roll
-# back to a known-good build).
+# Runs the test suite first - the build/publish job only starts if
+# tests pass, so a broken change can't reach the registry (and from
+# there, TrueNAS via pull_policy: always) even if it was accidentally
+# pushed to main.
 
 on:
   push:
@@ -14,7 +13,25 @@ env:
   REGISTRY: ghcr.io
 
 jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install dependencies
+        run: pip install -r requirements-dev.txt
+
+      - name: Run tests
+        run: pytest
+
   build-and-push:
+    needs: test
     runs-on: ubuntu-latest
     permissions:
       contents: read

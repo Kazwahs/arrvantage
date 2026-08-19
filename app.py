@@ -3079,6 +3079,44 @@ def api_home_stats():
     return jsonify(fetch_home_stats())
 
 
+@app.route("/api/search/cross-instance")
+@login_required
+def api_search_cross_instance():
+    """
+    Searches every configured instance's library at once, rather than
+    needing to click into each one separately. Fetches each library
+    fresh on every search (same on-demand tradeoff used throughout
+    this app) rather than caching, so a very large library set could
+    make this noticeably slower than a per-instance search - a
+    reasonable cost for how infrequently this gets used compared to
+    browsing a single instance.
+    """
+    query = request.args.get("q", "").strip().lower()
+    if len(query) < 2:
+        return jsonify({"results": []})
+
+    results = []
+    for name, config in APPS.items():
+        try:
+            library = fetch_library(name, config)
+        except requests.exceptions.RequestException:
+            continue
+        if library.get("error"):
+            continue
+        for item in library["library_items"]:
+            if query in item["title"].lower():
+                results.append({
+                    "instance": name,
+                    "kind": config["library_kind"],
+                    "title": item["title"],
+                    "cover_url": item["cover_url"],
+                    "status": item["status"],
+                    "item_id": item["item_id"],
+                })
+
+    return jsonify({"results": results[:50]})
+
+
 def trigger_plex_library_scan(server: dict) -> None:
     """Well-established Plex endpoint for refreshing every library -
     standard across the Plex ecosystem, though not verified against
