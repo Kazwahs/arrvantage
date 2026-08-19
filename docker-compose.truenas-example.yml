@@ -1,0 +1,25 @@
+services:
+  arrvantage:
+    # Replace <your-github-username> below with your actual (lowercase)
+    # GitHub username. Built automatically by GitHub Actions on every
+    # push to main - see SETUP.md for the one-time setup this depends
+    # on (forking the repo, letting the first build run, making the
+    # resulting package public).
+    image: ghcr.io/<your-github-username>/arrvantage:latest
+    # Always checks the registry for a newer :latest on every redeploy,
+    # rather than silently reusing whatever's cached locally - this is
+    # what makes "just redeploy" reliably pick up new pushes.
+    pull_policy: always
+    container_name: arrvantage
+    restart: unless-stopped
+    ports:
+      # Left side: whatever port fits your setup. Right side: leave as 5000.
+      - "5000:5000"
+    volumes:
+      # Point this at a real TrueNAS dataset path you created for
+      # persistent config storage (instances, users, API keys).
+      - /mnt/yourpool/apps/arrvantage-data:/app/data
+    environment:
+      - CONFIG_DIR=/app/data
+      # Flip to "true" once your reverse proxy + SSL is confirmed working.
+      - FORCE_HTTPS_COOKIES=false

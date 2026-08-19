@@ -14,7 +14,6 @@ Actively developed — expect rough edges and breaking changes between releases.
 
 ## Features
 
-
 - Unified dashboard for your \*arr stack (Sonarr, Radarr, Lidarr, Readarr (Tested with Bookshelf and then Chaptarr))
 - Indexer visibility (Prowlarr)
 - Request management via Seerr (Overseerr / Jellyseerr / Seerr)
@@ -22,15 +21,19 @@ Actively developed — expect rough edges and breaking changes between releases.
 - Metadata lookups (TMDB / TVDB / Fanart.tv)
 - Transcode status (Tdarr)
 
-## Installation
+## Getting Started
 
-<!-- TODO: confirm image name/tag — inferred from the GHCR package page -->
+**Just want to run it?** Use the quick install below.
+
+**Want to fork it, customize it, or build your own image?** See [SETUP.md](SETUP.md) for the full walkthrough — forking the repo, the automatic build pipeline, deployment on a generic Docker host or TrueNAS specifically, and a complete reference table of where to find every integration's API key.
+
+## Installation
 
 ```bash
 docker run -d \
   --name arrvantage \
-  -p 8080:8080 \
-  -v /path/to/config:/config \
+  -p 5000:5000 \
+  -v /path/to/config:/app/data \
   ghcr.io/kazwahs/arrvantage:latest
 ```
 
@@ -40,26 +43,26 @@ Or with `docker-compose.yml`:
 services:
   arrvantage:
     image: ghcr.io/kazwahs/arrvantage:latest
+    pull_policy: always
     container_name: arrvantage
     ports:
-      - "8080:8080"
+      - "5000:5000"
     volumes:
-      - /path/to/config:/config
+      - /path/to/config:/app/data
     environment:
-        - TZ=America/Los_Angeles
+      - CONFIG_DIR=/app/data
+      - FORCE_HTTPS_COOKIES=false
     restart: unless-stopped
 ```
 
-Then open `http://<your-server>:8080` and connect your services (API URLs + keys) from the settings page. There is an initial setup wizard that will run for you to set up your admin account.
+Then open `http://<your-server>:5000` and connect your services (API URLs + keys) from the settings page. There is an initial setup wizard that will run for you to set up your admin account.
 
 ## Configuration
 
-<!-- TODO: table of env vars / config options -->
-
 | Variable | Description | Default |
 |---|---|---|
-| `TZ` | Timezone | `UTC` |
-| ... | ... | ... |
+| `CONFIG_DIR` | Where `config.json` (instances, users, API keys) is read from and written to inside the container. Must point at your mounted volume, or settings won't survive a restart. | `/app/data` |
+| `FORCE_HTTPS_COOKIES` | Set to `true` once your reverse proxy + SSL certificate are confirmed working end-to-end, to make the login cookie HTTPS-only. Leave `false` for plain local-network HTTP access. | `false` |
 
 ## Why arrVantage?
 
@@ -73,16 +76,16 @@ It's still evolving — I'm actively using it myself and tweaking it as I go. Fe
 
 ## Supported Integrations
 
-<!-- TODO: real table once confirmed 
-
 | Category | Supported |
 |---|---|
-| \*Arr apps | ... |
-| Indexers | ... |
-| Requests | ... |
-| Media servers | ... |
-| Metadata | ... |
-| Transcoding | ... |  -->
+| \*Arr apps | Radarr (movies), Sonarr (TV), Lidarr (music), Chaptarr / Readarr-style book managers |
+| Indexers | Prowlarr — indexer health status, individual and bulk testing |
+| Downloaders | qBittorrent, SABnzbd |
+| Requests | Overseerr, Jellyseerr |
+| Media servers | Plex, Jellyfin, Emby — Now Playing, Recently Added, Watch History, Users, library rescan |
+| Activity data | Tautulli and/or Tracearr, for richer Now Playing / Watch History / Users than the media servers' own APIs provide alone |
+| Metadata | TMDB, TVDB, Fanart.tv, TheAudioDB |
+| Transcoding | Tdarr — stats overview, space saved, per-node worker/queue status |
 
 ## Roadmap
 
