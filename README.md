@@ -2,8 +2,7 @@
 
 > A unified web frontend for your media automation stack — arr apps, indexers, Seerr, media servers, metadata providers, and transcoders, all in one place.
 
-<!-- TODO: screenshot or GIF of the dashboard goes here. This is the single highest-value addition — README traffic mostly bounces at "no picture." -->
-<!-- ![arrVantage dashboard](docs/screenshot.png) -->
+![arrVantage dashboard](docs/screenshot.png)
 
 <!-- TODO: badges, once you have them — e.g. license, latest image tag, GHCR pulls -->
 <!-- ![License](https://img.shields.io/github/license/Kazwahs/arrvantage) ![Docker](https://img.shields.io/badge/ghcr.io-arrvantage-blue) -->
