@@ -4,10 +4,21 @@ name: Build and Publish Docker Image
 # tests pass, so a broken change can't reach the registry (and from
 # there, TrueNAS via pull_policy: always) even if it was accidentally
 # pushed to main.
+#
+# Two triggers:
+# - push to main: publishes :latest and :sha-xxxxx, same as always.
+# - a published GitHub Release (e.g. v1.0.0): additionally tags the
+#   image with that exact version, so ghcr.io/.../arrvantage:v1.0.0
+#   becomes a real, pullable, pinned tag - matching what most other
+#   apps in TrueNAS's catalog use, and what its own update-tracking
+#   bot is built around. This only applies going forward - it can't
+#   retroactively tag a release published before this existed.
 
 on:
   push:
     branches: [main]
+  release:
+    types: [published]
 
 env:
   REGISTRY: ghcr.io
@@ -54,7 +65,8 @@ jobs:
           echo "image_name=$(echo '${{ env.REGISTRY }}/${{ github.repository }}' | tr '[:upper:]' '[:lower:]')" >> "$GITHUB_OUTPUT"
           echo "sha_short=$(git rev-parse --short HEAD)" >> "$GITHUB_OUTPUT"
 
-      - name: Build and push image
+      - name: Build and push image (push to main)
+        if: github.event_name == 'push'
         uses: docker/build-push-action@v5
         with:
           context: .
@@ -62,3 +74,13 @@ jobs:
           tags: |
             ${{ steps.vars.outputs.image_name }}:latest
             ${{ steps.vars.outputs.image_name }}:sha-${{ steps.vars.outputs.sha_short }}
+
+      - name: Build and push image (release)
+        if: github.event_name == 'release'
+        uses: docker/build-push-action@v5
+        with:
+          context: .
+          push: true
+          tags: |
+            ${{ steps.vars.outputs.image_name }}:latest
+            ${{ steps.vars.outputs.image_name }}:${{ github.event.release.tag_name }}
