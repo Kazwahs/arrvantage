@@ -30,8 +30,12 @@ ENV CONFIG_DIR=/app/data
 RUN mkdir -p /app/data
 
 # Run as a non-root user rather than the default root - limits what a
-# compromised process could do inside the container. Fixed UID/GID
-# (1000) so file ownership is predictable.
+# compromised process could do inside the container. UID/GID 1000 is
+# the default here, but the app can genuinely run as any non-root
+# UID/GID at runtime (e.g. `docker run --user 5000:5000`) - the chmod
+# below makes the app code readable/executable by any user, not just
+# the specific one baked into this image, since ownership alone
+# (chown) only helps the exact UID it names.
 #
 # IMPORTANT if you're updating an existing deployment: the container
 # has been running as root until now, so your existing data directory
@@ -42,10 +46,15 @@ RUN mkdir -p /app/data
 # (adjust the path to your actual dataset). If you skip this and
 # config saves start failing, this permission mismatch is why.
 RUN groupadd -g 1000 appuser && useradd -u 1000 -g appuser -M appuser \
-    && chown -R appuser:appuser /app
+    && chown -R appuser:appuser /app \
+    && chmod -R o+rX /app
 USER appuser
 
+# EXPOSE is purely documentary (it doesn't restrict what a container
+# can actually bind to at runtime) - kept at the default here since
+# that's what most deployments will use, but PORT below can override it.
 EXPOSE 5000
+ENV PORT=5000
 
 # gunicorn imports the `app` object from app.py directly - this never
 # runs app.py's own `if __name__ == "__main__"` block, so the Flask
@@ -54,4 +63,10 @@ EXPOSE 5000
 # to external metadata APIs (TMDB/TVDB/Fanart.tv) for many library
 # items at once can genuinely take a while for a large library, even
 # running those lookups in parallel.
-CMD ["gunicorn", "--bind", "0.0.0.0:5000", "--workers", "2", "--timeout", "90", "app:app"]
+#
+# Runs through a shell so ${PORT} actually gets substituted (exec-form
+# CMD, i.e. CMD ["gunicorn", ...], does NOT expand env vars) - `exec`
+# inside that shell replaces the shell process with gunicorn itself,
+# so signals like SIGTERM reach gunicorn directly for a clean shutdown
+# instead of being absorbed by an intermediate shell process.
+CMD ["sh", "-c", "exec gunicorn --bind 0.0.0.0:${PORT} --workers 2 --timeout 90 app:app"]

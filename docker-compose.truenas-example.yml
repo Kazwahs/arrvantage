@@ -13,7 +13,8 @@ services:
     container_name: arrvantage
     restart: unless-stopped
     ports:
-      # Left side: whatever port fits your setup. Right side: leave as 5000.
+      # Left side: whatever port fits your setup. Right side (5000)
+      # must match PORT below if you change it.
       - "5000:5000"
     volumes:
       # Point this at a real TrueNAS dataset path you created for
@@ -23,3 +24,5 @@ services:
       - CONFIG_DIR=/app/data
       # Flip to "true" once your reverse proxy + SSL is confirmed working.
       - FORCE_HTTPS_COOKIES=false
+      # Only needed if 5000 conflicts with something else on this host.
+      # - PORT=5000
