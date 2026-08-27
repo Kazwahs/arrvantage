@@ -408,6 +408,20 @@ def setup():
     )
 
 
+@app.route("/health")
+def health():
+    """
+    A true liveness check - returns 200 unconditionally, regardless of
+    whether any user accounts exist yet. Unlike /login or /setup (which
+    both redirect depending on setup state - /login to /setup when no
+    users exist, /setup to /login once they do), this never redirects,
+    so it's the only safe target for a Docker/TrueNAS healthcheck.
+    A brand-new instance failing its healthcheck before anyone's even
+    completed the setup wizard is exactly the bug this fixes.
+    """
+    return jsonify({"status": "ok"}), 200
+
+
 @app.route("/login", methods=["GET", "POST"])
 def login():
     if not USERS:
