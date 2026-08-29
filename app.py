@@ -299,10 +299,10 @@ def user_permissions(user):
     return (user or {}).get("permissions", {"requesting": False, "searching": False})
 
 
-# In-memory only - not shared across gunicorn's worker processes, so a
-# determined attacker could get roughly double this budget by landing
-# on different workers. A real limitation, but a reasonable tradeoff
-# for a personal single-user tool versus adding a Redis dependency.
+# In-memory only. Safe now that the app runs as a single gunicorn
+# worker (see the Dockerfile's CMD for why) - there's only ever one
+# process, so this dict is the only copy that exists, with no
+# cross-worker inconsistency to worry about.
 _login_attempts = {}
 LOGIN_MAX_ATTEMPTS = 5
 LOGIN_LOCKOUT_SECONDS = 15 * 60

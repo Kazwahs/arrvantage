@@ -64,9 +64,24 @@ ENV PORT=5000
 # items at once can genuinely take a while for a large library, even
 # running those lookups in parallel.
 #
+# --workers 1 is deliberate, not a placeholder to raise later: CONFIG
+# and USERS are loaded into memory once per worker process at startup,
+# so multiple workers each get their own separate copy - fine for
+# read-only data, but a real bug for anything that gets *written* at
+# runtime (like completing the setup wizard). With 2 workers, whichever
+# one handles the setup POST updates its own in-memory USERS, but its
+# sibling never finds out, since it only knows the file changed on
+# disk, not what a different process now has in memory - so /setup and
+# /login can each land on a different worker with a different answer
+# for "do any users exist yet", bouncing between them indefinitely on
+# a fresh install. A single worker makes that whole class of bug
+# impossible, and matches what this app actually is: a personal,
+# single-user tool with no database, where the concurrency multiple
+# workers exist for was never really needed in the first place.
+#
 # Runs through a shell so ${PORT} actually gets substituted (exec-form
 # CMD, i.e. CMD ["gunicorn", ...], does NOT expand env vars) - `exec`
 # inside that shell replaces the shell process with gunicorn itself,
 # so signals like SIGTERM reach gunicorn directly for a clean shutdown
 # instead of being absorbed by an intermediate shell process.
-CMD ["sh", "-c", "exec gunicorn --bind 0.0.0.0:${PORT} --workers 2 --timeout 90 app:app"]
+CMD ["sh", "-c", "exec gunicorn --bind 0.0.0.0:${PORT} --workers 1 --timeout 90 app:app"]
