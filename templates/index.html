@@ -710,7 +710,7 @@
             <img class="instance-logo" src="{{ instance.logo_url }}" alt="" onerror="this.style.display='none';">
             {{ instance.name }}
             <span class="tab-open-link" title="Open {{ instance.name }} directly"
-                  onclick="event.stopPropagation(); window.open('{{ instance.url }}', '_blank', 'noopener');">
+                  onclick="event.stopPropagation(); openDirectly('{{ instance.url }}');">
                 <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
                     <path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6"></path>
                     <polyline points="15 3 21 3 21 9"></polyline>
@@ -732,7 +732,7 @@
             <img class="instance-logo" src="{{ dl.logo_url }}" alt="" onerror="this.style.display='none';">
             {{ dl.name }}
             <span class="tab-open-link" title="Open {{ dl.name }} directly"
-                  onclick="event.stopPropagation(); window.open('{{ dl.url }}', '_blank', 'noopener');">
+                  onclick="event.stopPropagation(); openDirectly('{{ dl.url }}');">
                 <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
                     <path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6"></path>
                     <polyline points="15 3 21 3 21 9"></polyline>
@@ -755,7 +755,7 @@
             <img class="instance-logo" src="{{ ms.logo_url }}" alt="" onerror="this.style.display='none';">
             {{ ms.name }}
             <span class="tab-open-link" title="Open {{ ms.name }} directly"
-                  onclick="event.stopPropagation(); window.open('{{ ms.url }}', '_blank', 'noopener');">
+                  onclick="event.stopPropagation(); openDirectly('{{ ms.url }}');">
                 <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
                     <path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6"></path>
                     <polyline points="15 3 21 3 21 9"></polyline>
@@ -778,7 +778,7 @@
             <img class="instance-logo" src="{{ idx.logo_url }}" alt="" onerror="this.style.display='none';">
             {{ idx.name }}
             <span class="tab-open-link" title="Open {{ idx.name }} directly"
-                  onclick="event.stopPropagation(); window.open('{{ idx.url }}', '_blank', 'noopener');">
+                  onclick="event.stopPropagation(); openDirectly('{{ idx.url }}');">
                 <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
                     <path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6"></path>
                     <polyline points="15 3 21 3 21 9"></polyline>
@@ -1179,6 +1179,21 @@
             return div.innerHTML;
         }
 
+        function withScheme(url) {
+            // A URL saved in Settings without http(s):// (e.g. just
+            // "192.168.1.50:8080") doesn't open correctly as a raw
+            // string - default to http:// so "open directly" links
+            // work even for a URL saved without one, rather than
+            // requiring every saved URL to already include a scheme.
+            if (!url) return url;
+            return /^https?:\/\//i.test(url) ? url : `http://${url}`;
+        }
+
+        function openDirectly(url) {
+            if (!url) return;
+            window.open(withScheme(url), '_blank', 'noopener');
+        }
+
         let currentInstance = document.querySelector('.instance-tab').dataset.instance;
         let currentView = 'library';
         updateOpenInstanceLink();
@@ -1187,7 +1202,7 @@
             const activeTab = document.querySelector(`.instance-tab[data-instance="${currentInstance}"]`);
             const link = document.getElementById('open-instance-link');
             if (activeTab && link) {
-                link.href = activeTab.dataset.url;
+                link.href = withScheme(activeTab.dataset.url);
             }
         }
 

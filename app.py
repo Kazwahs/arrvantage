@@ -3613,6 +3613,7 @@ def index():
         {
             "name": i["name"],
             "type": i["type"],
+            "url": i["url"],
             "color": i.get("color", "#5b8cff"),
             "logo_url": INDEXER_ICONS.get(i["type"], ""),
         }
@@ -3623,6 +3624,7 @@ def index():
         {
             "name": t["name"],
             "type": t["type"],
+            "url": t["url"],
             "color": t.get("color", "#5b8cff"),
             "logo_url": TRANSCODER_ICONS.get(t["type"], ""),
         }
@@ -3633,6 +3635,7 @@ def index():
         {
             "name": s["name"],
             "type": s["type"],
+            "url": s["url"],
             "color": s.get("color", "#5b8cff"),
             "logo_url": MEDIA_SERVER_ICONS.get(s["type"], ""),
         }
