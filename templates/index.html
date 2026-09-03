@@ -755,7 +755,7 @@
             <img class="instance-logo" src="{{ ms.logo_url }}" alt="" onerror="this.style.display='none';">
             {{ ms.name }}
             <span class="tab-open-link" title="Open {{ ms.name }} directly"
-                  onclick="event.stopPropagation(); openDirectly('{{ ms.url }}');">
+                  onclick="event.stopPropagation(); openDirectly('{{ ms.open_url }}');">
                 <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
                     <path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6"></path>
                     <polyline points="15 3 21 3 21 9"></polyline>
@@ -1274,7 +1274,7 @@
                                 <span style="font-weight: 600;">${escapeHtml(ms.name)}</span>
                             </div>
                             <div style="display: flex; gap: 0.5rem;">
-                                <a href="${ms.url}" target="_blank" rel="noopener" class="mini-btn" style="text-decoration: none; text-align: center;">Open</a>
+                                <a href="${ms.open_url}" target="_blank" rel="noopener" class="mini-btn" style="text-decoration: none; text-align: center;">Open</a>
                                 <button class="mini-btn" onclick="rescanMediaServer('${ms.name}', this)">Rescan Library</button>
                             </div>
                         </div>

@@ -2250,6 +2250,23 @@ def api_indexers_test_all(name):
 # ---------------------------------------------------------------------------
 
 
+def get_media_server_open_url(server: dict) -> str:
+    """
+    The stored "url" field is the API base, used for every API call
+    this app makes - but Plex's bare API root serves raw XML by
+    default rather than redirecting to its own web UI (confirmed
+    earlier via find_plex_link, which already needed to target
+    /web/index.html specifically for deep-links). Jellyfin/Emby don't
+    have this problem - their servers redirect the bare root to their
+    web UI correctly on their own, so only Plex needs a different path
+    here.
+    """
+    base = server["url"].rstrip("/")
+    if server["type"] == "plex":
+        return f"{base}/web/index.html"
+    return base
+
+
 def get_media_server(name: str):
     return next((s for s in MEDIA_SERVERS if s["name"] == name), None)
 
@@ -3039,7 +3056,11 @@ def fetch_home_stats() -> dict:
             })
 
     media_server_stats = [
-        {"name": s["name"], "type": s["type"], "url": s["url"], "icon_url": MEDIA_SERVER_ICONS.get(s["type"], "")}
+        {
+            "name": s["name"], "type": s["type"], "url": s["url"],
+            "open_url": get_media_server_open_url(s),
+            "icon_url": MEDIA_SERVER_ICONS.get(s["type"], ""),
+        }
         for s in MEDIA_SERVERS if s.get("enabled", True)
     ]
 
@@ -3636,6 +3657,7 @@ def index():
             "name": s["name"],
             "type": s["type"],
             "url": s["url"],
+            "open_url": get_media_server_open_url(s),
             "color": s.get("color", "#5b8cff"),
             "logo_url": MEDIA_SERVER_ICONS.get(s["type"], ""),
         }
