@@ -3585,6 +3585,7 @@ def index():
             "logo_url": INSTANCE_ICONS.get(config["library_kind"], ""),
             "color": config.get("color", "#5b8cff"),
             "library_kind": config["library_kind"],
+            "url": config["url"],
             "seerr_media_type": effective_seerr_type,
             "error": queue["error"],
             "queue_items": queue["queue_items"],
@@ -3601,6 +3602,7 @@ def index():
         {
             "name": d["name"],
             "type": d["type"],
+            "url": d["url"],
             "color": d.get("color", "#5b8cff"),
             "logo_url": DOWNLOADER_ICONS.get(d["type"], ""),
         }

@@ -88,6 +88,20 @@
             box-shadow: inset 3px 0 0 var(--accent-amber), 0 0 14px -4px var(--accent-amber);
         }
 
+        .tab-open-link {
+            margin-left: auto;
+            padding: 0.2rem;
+            border-radius: 4px;
+            opacity: 0;
+            flex-shrink: 0;
+            transition: opacity 0.15s, background 0.15s;
+        }
+        .instance-tab:hover .tab-open-link,
+        .downloader-tab:hover .tab-open-link,
+        .mediaserver-tab:hover .tab-open-link,
+        .indexer-tab:hover .tab-open-link { opacity: 0.6; }
+        .tab-open-link:hover { opacity: 1 !important; background: rgba(255,255,255,0.08); }
+
         .instance-logo {
             width: 22px;
             height: 22px;
@@ -690,10 +704,19 @@
                 data-seerr-type="{{ instance.seerr_media_type or '' }}"
                 data-kind="{{ instance.library_kind }}"
                 data-queue-count="{{ instance.queue_items|length }}"
+                data-url="{{ instance.url }}"
                 style="--tab-color: {{ instance.color }};"
                 onclick="selectInstance('{{ instance.name }}')">
             <img class="instance-logo" src="{{ instance.logo_url }}" alt="" onerror="this.style.display='none';">
             {{ instance.name }}
+            <span class="tab-open-link" title="Open {{ instance.name }} directly"
+                  onclick="event.stopPropagation(); window.open('{{ instance.url }}', '_blank', 'noopener');">
+                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                    <path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6"></path>
+                    <polyline points="15 3 21 3 21 9"></polyline>
+                    <line x1="10" y1="14" x2="21" y2="3"></line>
+                </svg>
+            </span>
         </button>
         {% endfor %}
 
@@ -708,6 +731,14 @@
                 onclick="selectDownloader('{{ dl.name }}')">
             <img class="instance-logo" src="{{ dl.logo_url }}" alt="" onerror="this.style.display='none';">
             {{ dl.name }}
+            <span class="tab-open-link" title="Open {{ dl.name }} directly"
+                  onclick="event.stopPropagation(); window.open('{{ dl.url }}', '_blank', 'noopener');">
+                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                    <path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6"></path>
+                    <polyline points="15 3 21 3 21 9"></polyline>
+                    <line x1="10" y1="14" x2="21" y2="3"></line>
+                </svg>
+            </span>
         </button>
         {% endfor %}
         {% endif %}
@@ -723,6 +754,14 @@
                 onclick="selectMediaServer('{{ ms.name }}')">
             <img class="instance-logo" src="{{ ms.logo_url }}" alt="" onerror="this.style.display='none';">
             {{ ms.name }}
+            <span class="tab-open-link" title="Open {{ ms.name }} directly"
+                  onclick="event.stopPropagation(); window.open('{{ ms.url }}', '_blank', 'noopener');">
+                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                    <path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6"></path>
+                    <polyline points="15 3 21 3 21 9"></polyline>
+                    <line x1="10" y1="14" x2="21" y2="3"></line>
+                </svg>
+            </span>
         </button>
         {% endfor %}
         {% endif %}
@@ -738,6 +777,14 @@
                 onclick="selectIndexerService('{{ idx.name }}')">
             <img class="instance-logo" src="{{ idx.logo_url }}" alt="" onerror="this.style.display='none';">
             {{ idx.name }}
+            <span class="tab-open-link" title="Open {{ idx.name }} directly"
+                  onclick="event.stopPropagation(); window.open('{{ idx.url }}', '_blank', 'noopener');">
+                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                    <path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6"></path>
+                    <polyline points="15 3 21 3 21 9"></polyline>
+                    <line x1="10" y1="14" x2="21" y2="3"></line>
+                </svg>
+            </span>
         </button>
         {% endfor %}
         {% endif %}
@@ -795,6 +842,7 @@
                 <button class="view-tab" data-view="history" onclick="selectView('history')">History</button>
             </div>
             <div class="topbar-right">
+                <a class="test-btn" id="open-instance-link" href="#" target="_blank" rel="noopener" style="text-decoration: none; display: inline-block;">Open</a>
                 <input type="text" id="global-search" class="topbar-search" placeholder="Search this tab..." oninput="applyGlobalSearch()">
                 {% if is_admin %}
                 <a class="settings-link" href="/settings" title="Settings">
@@ -1133,6 +1181,15 @@
 
         let currentInstance = document.querySelector('.instance-tab').dataset.instance;
         let currentView = 'library';
+        updateOpenInstanceLink();
+
+        function updateOpenInstanceLink() {
+            const activeTab = document.querySelector(`.instance-tab[data-instance="${currentInstance}"]`);
+            const link = document.getElementById('open-instance-link');
+            if (activeTab && link) {
+                link.href = activeTab.dataset.url;
+            }
+        }
 
         const CAN_SEARCH = {{ can_search | tojson }};
         const COLLECTIONS_DATA = {
@@ -1340,6 +1397,7 @@
             document.querySelectorAll('.instance-tab').forEach(el => {
                 el.classList.toggle('active', el.dataset.instance === name);
             });
+            updateOpenInstanceLink();
             document.getElementById('home-view').style.display = 'none';
             document.getElementById('downloaders-view').style.display = 'none';
             document.getElementById('indexers-view').style.display = 'none';
