@@ -90,6 +90,8 @@ KIND_META = {
         "queue_endpoint": "/api/v3/queue",
         "history_endpoint": "/api/v3/history",
         "library_endpoint": "/api/v3/movie",
+        "health_endpoint": "/api/v3/health",
+        "diskspace_endpoint": "/api/v3/diskspace",
         "seerr_media_type": "movie",
         "label": "Movies (Radarr-type)",
     },
@@ -97,6 +99,8 @@ KIND_META = {
         "queue_endpoint": "/api/v3/queue",
         "history_endpoint": "/api/v3/history",
         "library_endpoint": "/api/v3/series",
+        "health_endpoint": "/api/v3/health",
+        "diskspace_endpoint": "/api/v3/diskspace",
         "seerr_media_type": "tv",
         "label": "TV (Sonarr-type)",
     },
@@ -104,6 +108,8 @@ KIND_META = {
         "queue_endpoint": "/api/v1/queue",
         "history_endpoint": "/api/v1/history",
         "library_endpoint": "/api/v1/artist",
+        "health_endpoint": "/api/v1/health",
+        "diskspace_endpoint": "/api/v1/diskspace",
         "seerr_media_type": None,
         "label": "Music (Lidarr-type)",
     },
@@ -111,6 +117,8 @@ KIND_META = {
         "queue_endpoint": "/api/v1/queue",
         "history_endpoint": "/api/v1/history",
         "library_endpoint": "/api/v1/author",
+        "health_endpoint": "/api/v1/health",
+        "diskspace_endpoint": "/api/v1/diskspace",
         "seerr_media_type": None,
         "label": "Books (Readarr-type)",
     },
@@ -129,6 +137,37 @@ MEDIA_SERVER_TYPES = {
 # API-compatible fork of Overseerr, so one integration covers both.
 REQUESTER_TYPES = {
     "overseerr": "Overseerr / Jellyseerr",
+}
+
+# Overseerr/Jellyseerr send these as bare integers, not strings - see
+# server/constants/media.ts in Overseerr's own source (MediaRequestStatus
+# and MediaStatus enums) for the confirmed numbering. Two separate
+# enums: SEERR_REQUEST_STATUS is "did an admin approve this ask", while
+# SEERR_MEDIA_STATUS is "how far along is the actual download" - a
+# request can be Approved while the underlying media is still Pending.
+SEERR_REQUEST_STATUS = {
+    1: "Pending Approval",
+    2: "Approved",
+    3: "Declined",
+    4: "Failed",
+    5: "Completed",
+}
+SEERR_MEDIA_STATUS = {
+    1: "Unknown",
+    2: "Pending",
+    3: "Processing",
+    4: "Partially Available",
+    5: "Available",
+    6: "Deleted",
+}
+# CSS severity class per request status, for the same badge styling
+# used by health checks elsewhere in this app.
+SEERR_REQUEST_STATUS_CLASS = {
+    1: "warning",  # Pending Approval
+    2: "success",  # Approved
+    3: "error",    # Declined
+    4: "error",    # Failed
+    5: "success",  # Completed
 }
 
 # Download client types. Separate from Instances entirely - not tied to
@@ -207,6 +246,8 @@ def build_apps(cfg: dict) -> dict:
             "queue_endpoint": meta["queue_endpoint"],
             "history_endpoint": meta["history_endpoint"],
             "library_endpoint": meta["library_endpoint"],
+            "health_endpoint": meta["health_endpoint"],
+            "diskspace_endpoint": meta["diskspace_endpoint"],
             "seerr_media_type": meta["seerr_media_type"],
             "library_kind": kind,
             "url": entry.get("url", ""),
@@ -472,6 +513,29 @@ def get_time_left(record: dict) -> str:
     return record.get("status", "unknown")
 
 
+def get_queue_progress_pct(record: dict) -> "int | None":
+    """None (rather than 0) when the arr app hasn't reported a size yet,
+    so the frontend can tell 'unknown' apart from 'just started'."""
+    size = record.get("size") or 0
+    sizeleft = record.get("sizeleft")
+    if not size or sizeleft is None:
+        return None
+    done = max(0, size - sizeleft)
+    return round((done / size) * 100)
+
+
+def get_queue_status_messages(record: dict) -> list:
+    """Queue items report problems two ways: a top-level errorMessage,
+    and/or a list of per-file statusMessages (each with its own list of
+    strings) - flatten both into one list of short strings for display."""
+    messages = []
+    for status in record.get("statusMessages") or []:
+        messages.extend(status.get("messages") or [])
+    if record.get("errorMessage"):
+        messages.append(record["errorMessage"])
+    return messages
+
+
 # ---------------------------------------------------------------------------
 # Queue
 # ---------------------------------------------------------------------------
@@ -495,7 +559,19 @@ def fetch_queue(name: str, config: dict) -> dict:
     records = data.get("records", data) if isinstance(data, dict) else data
 
     queue_items = [
-        {"title": get_item_title(record), "time_left": get_time_left(record)}
+        {
+            "title": get_item_title(record),
+            "time_left": get_time_left(record),
+            "status": record.get("status", "unknown"),
+            "progress_pct": get_queue_progress_pct(record),
+            "status_messages": get_queue_status_messages(record),
+            "indexer": record.get("indexer") or "",
+            "download_client": record.get("downloadClient") or "",
+            "protocol": (record.get("protocol") or "").lower(),
+            "quality": ((record.get("quality") or {}).get("quality") or {}).get("name", ""),
+            "custom_format_score": record.get("customFormatScore", 0),
+            "size_human": format_size_gb(record["size"]) if record.get("size") else "",
+        }
         for record in records
     ]
     return {"error": None, "queue_items": queue_items}
@@ -545,6 +621,72 @@ def fetch_history(name: str, config: dict) -> dict:
         for record in records
     ]
     return {"error": None, "history_items": history_items}
+
+
+# ---------------------------------------------------------------------------
+# Health + disk space - the same "problems" banner and free-space figures
+# the arr app's own UI shows, surfaced here instead of making people check
+# each app individually.
+# ---------------------------------------------------------------------------
+
+
+def fetch_health(name: str, config: dict) -> dict:
+    url = config["url"].rstrip("/") + config["health_endpoint"]
+    headers = {"X-Api-Key": config["api_key"]}
+
+    try:
+        response = requests.get(url, headers=headers, timeout=10)
+        response.raise_for_status()
+    except requests.exceptions.ConnectionError:
+        return {"error": f"could not connect ({config['url']})", "health_items": []}
+    except requests.exceptions.HTTPError:
+        return {"error": f"HTTP error {response.status_code} - check API key", "health_items": []}
+    except requests.exceptions.RequestException as err:
+        return {"error": f"request failed: {err}", "health_items": []}
+
+    records = response.json() or []
+
+    health_items = [
+        {
+            "type": (record.get("type") or "notice").lower(),
+            "source": record.get("source", ""),
+            "message": record.get("message", ""),
+            "wiki_url": record.get("wikiUrl", ""),
+        }
+        for record in records
+    ]
+    return {"error": None, "health_items": health_items}
+
+
+def fetch_diskspace(name: str, config: dict) -> dict:
+    url = config["url"].rstrip("/") + config["diskspace_endpoint"]
+    headers = {"X-Api-Key": config["api_key"]}
+
+    try:
+        response = requests.get(url, headers=headers, timeout=10)
+        response.raise_for_status()
+    except requests.exceptions.ConnectionError:
+        return {"error": f"could not connect ({config['url']})", "diskspace_items": []}
+    except requests.exceptions.HTTPError:
+        return {"error": f"HTTP error {response.status_code} - check API key", "diskspace_items": []}
+    except requests.exceptions.RequestException as err:
+        return {"error": f"request failed: {err}", "diskspace_items": []}
+
+    records = response.json() or []
+
+    diskspace_items = []
+    for record in records:
+        total = record.get("totalSpace") or 0
+        free = record.get("freeSpace") or 0
+        percent_free = round((free / total) * 100) if total else None
+        diskspace_items.append({
+            "path": record.get("path", ""),
+            "label": record.get("label") or "",
+            "free_human": format_size_gb(free),
+            "total_human": format_size_gb(total),
+            "percent_free": percent_free,
+        })
+    return {"error": None, "diskspace_items": diskspace_items}
 
 
 # ---------------------------------------------------------------------------
@@ -1388,8 +1530,12 @@ def fetch_seerr_requests(requester, media_type) -> dict:
         request_items.append({
             "title": info["title"],
             "poster_url": info["poster_url"],
-            "status": item.get("status", "unknown"),
+            "status": SEERR_REQUEST_STATUS.get(item.get("status"), "Unknown"),
+            "status_class": SEERR_REQUEST_STATUS_CLASS.get(item.get("status"), "notice"),
+            "media_status": SEERR_MEDIA_STATUS.get(media.get("status"), "Unknown"),
+            "is4k": bool(item.get("is4k")),
             "requested_by": (item.get("requestedBy") or {}).get("displayName", "unknown"),
+            "requested_date": (item.get("createdAt") or "")[:10],
         })
     return {"error": None, "request_items": request_items}
 
@@ -1937,10 +2083,40 @@ def fetch_qbittorrent_torrents(downloader: dict) -> dict:
             "size": t.get("size", 0),
             "ratio": round(t.get("ratio", 0), 2),
             "category": t.get("category", ""),
+            "num_seeds": t.get("num_seeds", 0),
+            "num_leechs": t.get("num_leechs", 0),
+            "tags": t.get("tags", ""),
         }
         for t in response.json()
     ]
     return {"error": None, "torrents": torrents}
+
+
+def fetch_qbittorrent_transfer_info(downloader: dict) -> dict:
+    """
+    GET /api/v2/transfer/info - global (not per-torrent) stats, confirmed
+    via qBittorrent's own WebUI API reference. connection_status in
+    particular ("connected" / "firewalled" / "disconnected") is a real
+    health signal: "firewalled" usually means an unforwarded port is
+    silently starving every torrent of incoming peers, which nothing in
+    the per-torrent list would ever surface on its own.
+    """
+    try:
+        response = requests.get(
+            f"{downloader['url'].rstrip('/')}/api/v2/transfer/info",
+            headers=qbt_headers(downloader), timeout=15,
+        )
+        response.raise_for_status()
+        data = response.json()
+    except requests.exceptions.RequestException as err:
+        return {"error": str(err), "connection_status": "", "dl_speed": 0, "up_speed": 0}
+
+    return {
+        "error": None,
+        "connection_status": data.get("connection_status", ""),
+        "dl_speed": data.get("dl_info_speed", 0),
+        "up_speed": data.get("up_info_speed", 0),
+    }
 
 
 def qbt_torrent_action(downloader: dict, action: str, torrent_hash: str, delete_files: bool = False) -> None:
@@ -1982,10 +2158,12 @@ def fetch_sabnzbd_queue(downloader: dict) -> dict:
         response.raise_for_status()
         data = response.json()
     except requests.exceptions.RequestException as err:
-        return {"error": str(err), "items": []}
+        return {"error": str(err), "items": [], "summary": {}}
 
     if "error" in data:
-        return {"error": data["error"], "items": []}
+        return {"error": data["error"], "items": [], "summary": {}}
+
+    queue = data.get("queue", {})
 
     items = [
         {
@@ -1998,9 +2176,24 @@ def fetch_sabnzbd_queue(downloader: dict) -> dict:
             "time_left": slot.get("timeleft", ""),
             "category": slot.get("cat", ""),
         }
-        for slot in data.get("queue", {}).get("slots", [])
+        for slot in queue.get("slots", [])
     ]
-    return {"error": None, "items": items}
+
+    # Queue-wide fields sitting on the same response, confirmed against
+    # SABnzbd's own API reference - previously discarded entirely even
+    # though they cover things the per-slot data can't (is SABnzbd
+    # paused with an empty queue, is a folder nearly out of space).
+    summary = {
+        "paused": bool(queue.get("paused", False)),
+        "speed": queue.get("speed", ""),
+        "time_left": queue.get("timeleft", ""),
+        "have_warnings": int(queue.get("have_warnings") or 0),
+        "diskspace_temp_free": queue.get("diskspace1", ""),
+        "diskspace_temp_total": queue.get("diskspacetotal1", ""),
+        "diskspace_complete_free": queue.get("diskspace2", ""),
+        "diskspace_complete_total": queue.get("diskspacetotal2", ""),
+    }
+    return {"error": None, "items": items, "summary": summary}
 
 
 def sabnzbd_action(downloader: dict, mode: str, nzo_id: str) -> None:
@@ -2029,10 +2222,18 @@ def api_downloader_status(name):
 
     if downloader["type"] == "qbittorrent":
         result = fetch_qbittorrent_torrents(downloader)
-        return jsonify({"type": "qbittorrent", "error": result["error"], "items": result["torrents"]})
+        transfer = fetch_qbittorrent_transfer_info(downloader)
+        return jsonify({
+            "type": "qbittorrent", "error": result["error"], "items": result["torrents"],
+            "summary": {
+                "connection_status": transfer["connection_status"],
+                "dl_speed": transfer["dl_speed"],
+                "up_speed": transfer["up_speed"],
+            },
+        })
     elif downloader["type"] == "sabnzbd":
         result = fetch_sabnzbd_queue(downloader)
-        return jsonify({"type": "sabnzbd", "error": result["error"], "items": result["items"]})
+        return jsonify({"type": "sabnzbd", "error": result["error"], "items": result["items"], "summary": result["summary"]})
     return jsonify({"error": "unknown downloader type"}), 400
 
 
@@ -2121,6 +2322,44 @@ def fetch_prowlarr_indexers(service: dict) -> dict:
     return {"error": None, "indexers": indexers}
 
 
+def fetch_prowlarr_health(service: dict) -> dict:
+    """
+    Prowlarr is itself part of the Servarr family (same underlying
+    framework as Radarr/Sonarr), so it exposes the same GET /api/v1/health
+    endpoint with an identical HealthResource shape - confirmed by
+    reading Prowlarr's own HealthController/HealthResource source. This
+    is a *different* signal than fetch_prowlarr_indexers' per-indexer
+    failure tracking above: that's "is this specific indexer failing",
+    this is "does Prowlarr itself have a problem" (e.g. an unsynced
+    application connection, a stale update, a missing download client).
+    """
+    base = service["url"].rstrip("/")
+    headers = {"X-Api-Key": service["api_key"]}
+
+    try:
+        response = requests.get(f"{base}/api/v1/health", headers=headers, timeout=10)
+        response.raise_for_status()
+    except requests.exceptions.ConnectionError:
+        return {"error": f"could not connect ({service['url']})", "health_items": []}
+    except requests.exceptions.HTTPError:
+        return {"error": f"HTTP error {response.status_code} - check API key", "health_items": []}
+    except requests.exceptions.RequestException as err:
+        return {"error": f"request failed: {err}", "health_items": []}
+
+    records = response.json() or []
+
+    health_items = [
+        {
+            "type": (record.get("type") or "notice").lower(),
+            "source": record.get("source", ""),
+            "message": record.get("message", ""),
+            "wiki_url": record.get("wikiUrl", ""),
+        }
+        for record in records
+    ]
+    return {"error": None, "health_items": health_items}
+
+
 def test_prowlarr_indexer(service: dict, indexer_id: int) -> str:
     """
     Confirmed via Prowlarr's real OpenAPI spec: testing an indexer
@@ -2197,7 +2436,11 @@ def api_indexers_status(name):
     service = get_indexer_service(name)
     if not service:
         return jsonify({"error": "unknown indexer service"}), 404
-    return jsonify(fetch_prowlarr_indexers(service))
+    result = fetch_prowlarr_indexers(service)
+    health = fetch_prowlarr_health(service)
+    result["health_items"] = health["health_items"]
+    result["health_error"] = health["error"]
+    return jsonify(result)
 
 
 @app.route("/api/indexers/test/<name>/<int:indexer_id>", methods=["POST"])
@@ -2291,6 +2534,22 @@ def fetch_plex_now_playing(server: dict) -> dict:
         if s.get("grandparentTitle"):
             title = f"{s['grandparentTitle']} - {title}"
         thumb = s.get("thumb") or s.get("grandparentThumb") or ""
+        media = (s.get("Media") or [{}])[0]
+
+        # A TranscodeSession is only present at all when Plex is doing
+        # some form of transcoding - its absence *is* Direct Play, so
+        # this isn't guessable from a single field the way Jellyfin's
+        # PlayMethod enum is. videoDecision "copy" means the video
+        # stream itself is passed through untouched (Direct Stream) -
+        # only "transcode" is genuine CPU/GPU work.
+        transcode = s.get("TranscodeSession")
+        if transcode:
+            play_method = "Transcoding" if transcode.get("videoDecision") == "transcode" else "Direct Stream"
+            bitrate_kbps = transcode.get("bitrate")
+        else:
+            play_method = "Direct Play"
+            bitrate_kbps = media.get("bitrate")
+
         items.append({
             "title": title,
             "poster_url": f"{server['url'].rstrip('/')}{thumb}?X-Plex-Token={server['credential']}" if thumb else "",
@@ -2298,6 +2557,9 @@ def fetch_plex_now_playing(server: dict) -> dict:
             "device": (s.get("Player") or {}).get("title", ""),
             "progress_pct": round((offset / duration) * 100, 1) if duration else 0,
             "state": (s.get("Player") or {}).get("state", ""),
+            "play_method": play_method,
+            "bitrate_kbps": bitrate_kbps or 0,
+            "video_resolution": media.get("videoResolution", ""),
         })
     return {"error": None, "items": items}
 
@@ -2325,6 +2587,11 @@ def fetch_jellyfin_now_playing(server: dict) -> dict:
         if now_playing.get("SeriesName"):
             title = f"{now_playing['SeriesName']} - {title}"
         item_id = now_playing.get("Id")
+        # PlayMethod ("DirectPlay"/"DirectStream"/"Transcode") and the
+        # sibling TranscodingInfo object are confirmed via Jellyfin's
+        # own PlayerStateInfo/TranscodingInfo source models.
+        transcoding_info = s.get("TranscodingInfo") or {}
+        play_method = play_state.get("PlayMethod", "DirectPlay")
         items.append({
             "title": title,
             "poster_url": f"{server['url'].rstrip('/')}/Items/{item_id}/Images/Primary?api_key={server['credential']}" if item_id else "",
@@ -2332,6 +2599,9 @@ def fetch_jellyfin_now_playing(server: dict) -> dict:
             "device": s.get("DeviceName", ""),
             "progress_pct": round((position / runtime) * 100, 1) if runtime else 0,
             "state": "paused" if play_state.get("IsPaused") else "playing",
+            "play_method": "Transcoding" if play_method == "Transcode" else play_method,
+            "bitrate_kbps": round((transcoding_info.get("Bitrate") or 0) / 1000),
+            "video_resolution": f"{transcoding_info['Width']}x{transcoding_info['Height']}" if transcoding_info.get("Width") else "",
         })
     return {"error": None, "items": items}
 
@@ -2484,12 +2754,23 @@ def tautulli_request(cmd: str, params: dict = None) -> dict:
     return response.json().get("response", {}).get("data", {}) or {}
 
 
+TAUTULLI_TRANSCODE_DECISION = {
+    "direct play": "Direct Play",
+    "copy": "Direct Stream",
+    "transcode": "Transcoding",
+}
+
+
 def fetch_tautulli_now_playing() -> dict:
     """
     Same item shape as fetch_plex_now_playing, so the frontend needs no
     changes at all - only where the data comes from. Best-guess field
-    names throughout - check the raw JSON here first if something
-    looks off. Poster path uses Tautulli's own image proxy convention.
+    names throughout for the base fields (friendly_name/player/etc,
+    long since proven correct in production) - check the raw JSON here
+    first if something looks off. The transcode-related fields below
+    (transcode_decision, quality_profile, bandwidth) are confirmed
+    against Tautulli's own published API reference, not guessed.
+    Poster path uses Tautulli's own image proxy convention.
     """
     try:
         data = tautulli_request("get_activity")
@@ -2502,6 +2783,7 @@ def fetch_tautulli_now_playing() -> dict:
         if s.get("grandparent_title"):
             title = f"{s['grandparent_title']} - {title}"
         thumb = s.get("thumb") or s.get("grandparent_thumb") or ""
+        decision = (s.get("transcode_decision") or "").lower()
         items.append({
             "title": title,
             "poster_url": f"{TAUTULLI['url'].rstrip('/')}/pms_image_proxy?img={thumb}&apikey={TAUTULLI['api_key']}" if thumb else "",
@@ -2509,6 +2791,9 @@ def fetch_tautulli_now_playing() -> dict:
             "device": s.get("player", ""),
             "progress_pct": round(float(s.get("progress_percent") or 0), 1),
             "state": s.get("state", ""),
+            "play_method": TAUTULLI_TRANSCODE_DECISION.get(decision, decision.title() or "Unknown"),
+            "bitrate_kbps": int(s.get("bandwidth") or 0),
+            "video_resolution": s.get("stream_video_resolution") or s.get("video_resolution", ""),
         })
     return {"error": None, "items": items}
 
@@ -3591,7 +3876,15 @@ def index():
         queue = fetch_queue(name, config)
         history = fetch_history(name, config)
         library = fetch_library(name, config)
+        health = fetch_health(name, config)
+        diskspace = fetch_diskspace(name, config)
         seerr = fetch_seerr_requests(active_requester, effective_seerr_type)
+
+        # Only "warning" and "error" are actual problems worth badging -
+        # "notice" is informational (e.g. "you're on a pre-release branch").
+        health_issue_count = sum(
+            1 for item in health["health_items"] if item["type"] in ("warning", "error")
+        )
 
         collections = []
         if config["library_kind"] == "movie":
@@ -3617,6 +3910,11 @@ def index():
             "genre_options": library["genre_options"],
             "request_items": seerr["request_items"],
             "collections": collections,
+            "health_items": health["health_items"],
+            "health_error": health["error"],
+            "health_issue_count": health_issue_count,
+            "diskspace_items": diskspace["diskspace_items"],
+            "diskspace_error": diskspace["error"],
         })
 
     downloaders_for_template = [

@@ -216,6 +216,113 @@
 
         .error { color: var(--error); font-size: 0.9rem; }
 
+        /* --- Queue tab: title/time row plus an optional progress bar
+               and status/error messages underneath --- */
+
+        .queue-item {
+            padding: 0.6rem 0;
+            border-top: 1px solid var(--border);
+        }
+        .queue-item:first-child { border-top: none; }
+
+        .queue-item-row {
+            font-size: 0.9rem;
+            display: flex;
+            justify-content: space-between;
+            align-items: baseline;
+        }
+        .queue-item-meta {
+            color: var(--muted);
+            font-size: 0.78rem;
+            margin-top: 0.2rem;
+        }
+
+        .queue-progress-track {
+            margin-top: 0.4rem;
+            height: 5px;
+            border-radius: 3px;
+            background: var(--border);
+            overflow: hidden;
+        }
+        .queue-progress-fill {
+            height: 100%;
+            background: var(--accent);
+            border-radius: 3px;
+        }
+        .queue-progress-fill.has-issue { background: var(--accent-amber); }
+
+        .queue-status-msg {
+            margin-top: 0.3rem;
+            font-size: 0.8rem;
+            color: var(--accent-amber);
+        }
+        .queue-status-msg.is-error { color: var(--error); }
+
+        /* --- Inline severity badges, for rows (not the absolutely
+               positioned cover-art .status-badge above) --- */
+
+        .inline-badge {
+            display: inline-block;
+            font-size: 0.68rem;
+            font-family: var(--mono);
+            padding: 0.1rem 0.4rem;
+            border-radius: 4px;
+            background: rgba(255, 255, 255, 0.08);
+        }
+        .inline-badge.badge-error { color: var(--error); }
+        .inline-badge.badge-warning { color: var(--accent-amber); }
+        .inline-badge.badge-notice { color: var(--muted); }
+        .inline-badge.badge-success { color: var(--success); }
+
+        /* --- System tab: health checks + disk space --- */
+
+        .health-item {
+            padding: 0.6rem 0;
+            border-top: 1px solid var(--border);
+            display: flex;
+            gap: 0.6rem;
+            align-items: baseline;
+            font-size: 0.88rem;
+        }
+        .health-item:first-child { border-top: none; }
+        .health-item-source { color: var(--muted); font-size: 0.78rem; white-space: nowrap; }
+
+        .diskspace-item { padding: 0.6rem 0; border-top: 1px solid var(--border); }
+        .diskspace-item:first-child { border-top: none; }
+        .diskspace-item-row {
+            display: flex;
+            justify-content: space-between;
+            font-size: 0.88rem;
+            margin-bottom: 0.35rem;
+        }
+        .diskspace-item-row .path { font-family: var(--mono); font-size: 0.82rem; }
+        .diskspace-item-row .free { color: var(--muted); }
+
+        .section-heading {
+            font-size: 0.78rem;
+            text-transform: uppercase;
+            letter-spacing: 0.05em;
+            color: var(--muted);
+            margin: 1.25rem 0 0.4rem 0;
+        }
+        .section-heading:first-child { margin-top: 0; }
+
+        /* Small red dot on an instance's sidebar tab when it has open
+           health warnings/errors - deliberately not a number, so it
+           doesn't compete with the queue count for attention. */
+        .instance-tab { position: relative; }
+        .health-dot {
+            position: absolute;
+            top: 0.5rem;
+            right: 0.6rem;
+            width: 7px;
+            height: 7px;
+            border-radius: 50%;
+            background: var(--error);
+        }
+
+        #system-tab-badge { font-family: var(--mono); color: var(--error); }
+
         /* --- Request tab: search box + results --- */
 
         .search-row { display: flex; gap: 0.5rem; margin-bottom: 1rem; }
@@ -704,9 +811,13 @@
                 data-seerr-type="{{ instance.seerr_media_type or '' }}"
                 data-kind="{{ instance.library_kind }}"
                 data-queue-count="{{ instance.queue_items|length }}"
+                data-health-count="{{ instance.health_issue_count }}"
                 data-url="{{ instance.url }}"
                 style="--tab-color: {{ instance.color }};"
                 onclick="selectInstance('{{ instance.name }}')">
+            {% if instance.health_issue_count > 0 %}
+            <span class="health-dot" title="{{ instance.health_issue_count }} health issue(s)"></span>
+            {% endif %}
             <img class="instance-logo" src="{{ instance.logo_url }}" alt="" onerror="this.style.display='none';">
             {{ instance.name }}
             <span class="tab-open-link" title="Open {{ instance.name }} directly"
@@ -840,6 +951,7 @@
                 <button class="view-tab" data-view="request" onclick="selectView('request')">Request</button>
                 <button class="view-tab" data-view="queue" onclick="selectView('queue')">Queue <span id="queue-tab-count">0</span></button>
                 <button class="view-tab" data-view="history" onclick="selectView('history')">History</button>
+                <button class="view-tab" data-view="system" onclick="selectView('system')">System <span id="system-tab-badge"></span></button>
             </div>
             <div class="topbar-right">
                 <a class="test-btn" id="open-instance-link" href="#" target="_blank" rel="noopener" style="text-decoration: none; display: inline-block;">Open</a>
@@ -974,8 +1086,13 @@
                                     <div class="request-thumb-fallback" {% if r.poster_url %}style="display:none;"{% endif %}></div>
                                 </div>
                                 <div class="request-info">
-                                    <div class="request-title">{{ r.title }}</div>
-                                    <div class="request-meta">{{ r.status }} &middot; req. by {{ r.requested_by }}</div>
+                                    <div class="request-title">{{ r.title }}{% if r.is4k %} <span class="inline-badge badge-notice">4K</span>{% endif %}</div>
+                                    <div class="request-meta">
+                                        <span class="inline-badge badge-{{ r.status_class }}">{{ r.status }}</span>
+                                        {% if r.status_class == 'success' %}&middot; {{ r.media_status }}{% endif %}
+                                        &middot; req. by {{ r.requested_by }}
+                                        {% if r.requested_date %}&middot; {{ r.requested_date }}{% endif %}
+                                    </div>
                                 </div>
                             </div>
                             {% endfor %}
@@ -994,9 +1111,26 @@
                     <div class="empty">Queue is empty</div>
                 {% else %}
                     {% for item in instance.queue_items %}
-                    <div class="item">
-                        <span>{{ item.title }}</span>
-                        <span class="item-time">{{ item.time_left }}</span>
+                    <div class="queue-item">
+                        <div class="queue-item-row">
+                            <span>{{ item.title }}</span>
+                            <span class="item-time">{{ item.time_left }}</span>
+                        </div>
+                        {% if item.indexer or item.quality or item.download_client %}
+                        <div class="queue-item-meta">
+                            {{ [item.quality, item.indexer, item.download_client, item.protocol] | select | join(' · ') }}
+                            {% if item.custom_format_score %}&middot; CF score {{ item.custom_format_score }}{% endif %}
+                            {% if item.size_human %}&middot; {{ item.size_human }}{% endif %}
+                        </div>
+                        {% endif %}
+                        {% if item.progress_pct is not none %}
+                        <div class="queue-progress-track">
+                            <div class="queue-progress-fill {% if item.status_messages %}has-issue{% endif %}" style="width: {{ item.progress_pct }}%;"></div>
+                        </div>
+                        {% endif %}
+                        {% for msg in item.status_messages %}
+                        <div class="queue-status-msg is-error">{{ msg }}</div>
+                        {% endfor %}
                     </div>
                     {% endfor %}
                 {% endif %}
@@ -1014,6 +1148,47 @@
                         <span>{{ item.title }}</span>
                         <span class="item-event">{{ item.event }}</span>
                         <span class="item-date">{{ item.date }}</span>
+                    </div>
+                    {% endfor %}
+                {% endif %}
+            </div>
+
+            <!-- System panel: health checks + disk space -->
+            <div class="panel" data-instance="{{ instance.name }}" data-view="system">
+                <div class="section-heading">Health</div>
+                {% if instance.health_error %}
+                    <div class="error">{{ instance.health_error }}</div>
+                {% elif instance.health_items|length == 0 %}
+                    <div class="empty">No health issues reported</div>
+                {% else %}
+                    {% for h in instance.health_items %}
+                    <div class="health-item">
+                        <span class="inline-badge badge-{{ h.type }}">{{ h.type }}</span>
+                        <span>
+                            {% if h.wiki_url %}<a href="{{ h.wiki_url }}" target="_blank" rel="noopener" style="color: inherit;">{{ h.message }}</a>{% else %}{{ h.message }}{% endif %}
+                            {% if h.source %}<span class="health-item-source">&middot; {{ h.source }}</span>{% endif %}
+                        </span>
+                    </div>
+                    {% endfor %}
+                {% endif %}
+
+                <div class="section-heading">Disk space</div>
+                {% if instance.diskspace_error %}
+                    <div class="error">{{ instance.diskspace_error }}</div>
+                {% elif instance.diskspace_items|length == 0 %}
+                    <div class="empty">No root folders reported</div>
+                {% else %}
+                    {% for d in instance.diskspace_items %}
+                    <div class="diskspace-item">
+                        <div class="diskspace-item-row">
+                            <span class="path">{{ d.path }}{% if d.label %} ({{ d.label }}){% endif %}</span>
+                            <span class="free">{{ d.free_human }} free of {{ d.total_human }}</span>
+                        </div>
+                        {% if d.percent_free is not none %}
+                        <div class="queue-progress-track">
+                            <div class="queue-progress-fill {% if d.percent_free < 10 %}has-issue{% endif %}" style="width: {{ 100 - d.percent_free }}%;"></div>
+                        </div>
+                        {% endif %}
                     </div>
                     {% endfor %}
                 {% endif %}
@@ -1420,6 +1595,7 @@
             document.getElementById('transcoders-view').style.display = 'none';
             document.getElementById('instances-view').style.display = 'block';
             updateQueueTabCount();
+            updateSystemTabBadge();
             updateRequestTabVisibility();
             updateAlphaIndexVisibility();
             render();
@@ -1428,6 +1604,12 @@
         function updateQueueTabCount() {
             const activeTab = document.querySelector(`.instance-tab[data-instance="${currentInstance}"]`);
             document.getElementById('queue-tab-count').textContent = activeTab ? activeTab.dataset.queueCount : '0';
+        }
+
+        function updateSystemTabBadge() {
+            const activeTab = document.querySelector(`.instance-tab[data-instance="${currentInstance}"]`);
+            const count = activeTab ? parseInt(activeTab.dataset.healthCount, 10) || 0 : 0;
+            document.getElementById('system-tab-badge').textContent = count > 0 ? count : '';
         }
 
         // --- Downloaders (separate section from Instances entirely) ---
@@ -1507,7 +1689,24 @@
                     return;
                 }
 
-                listEl.innerHTML = data.indexers.map(idx => `
+                // Prowlarr's own health checks (sync/connection/update
+                // problems) - separate from the per-indexer failures
+                // below, which come from a different endpoint entirely.
+                const healthHtml = (data.health_items || []).length ? `
+                    <div class="section-heading">Prowlarr health</div>
+                    ${data.health_items.map(h => `
+                        <div class="health-item">
+                            <span class="inline-badge badge-${h.type}">${escapeHtml(h.type)}</span>
+                            <span>
+                                ${h.wiki_url ? `<a href="${h.wiki_url}" target="_blank" rel="noopener" style="color: inherit;">${escapeHtml(h.message)}</a>` : escapeHtml(h.message)}
+                                ${h.source ? `<span class="health-item-source">&middot; ${escapeHtml(h.source)}</span>` : ''}
+                            </span>
+                        </div>
+                    `).join('')}
+                    <div class="section-heading">Indexers</div>
+                ` : '';
+
+                listEl.innerHTML = healthHtml + data.indexers.map(idx => `
                     <div class="request-row">
                         <div class="request-info" style="flex: 1;">
                             <div class="request-title">${escapeHtml(idx.name)}</div>
@@ -1813,6 +2012,10 @@
                             </div>
                             <div class="card-title">${escapeHtml(item.title)}</div>
                             <div class="card-genre">${escapeHtml(item.user)}${item.device ? ' &middot; ' + escapeHtml(item.device) : ''}</div>
+                            ${item.play_method ? `<div class="card-genre">
+                                <span class="inline-badge ${item.play_method === 'Transcoding' ? 'badge-warning' : 'badge-success'}">${escapeHtml(item.play_method)}</span>
+                                ${item.video_resolution ? ' &middot; ' + escapeHtml(item.video_resolution) : ''}${item.bitrate_kbps ? ' &middot; ' + item.bitrate_kbps + ' kbps' : ''}
+                            </div>` : ''}
                         </div>
                     `).join('')}</div>`;
                 } else if (tab === 'recently-added') {
@@ -1864,17 +2067,48 @@
                     listEl.innerHTML = `<div class="modal-empty">${escapeHtml(data.error)}</div>`;
                     return;
                 }
-                if (!data.items.length) {
-                    listEl.innerHTML = '<div class="empty">Nothing active right now</div>';
-                    return;
-                }
 
-                listEl.innerHTML = data.type === 'qbittorrent'
-                    ? renderQbittorrentTorrents(name, data.items)
-                    : renderSabnzbdQueue(name, data.items);
+                // The summary bar (global speed/connection/disk space)
+                // is worth showing even when nothing is actively
+                // downloading right now - that's exactly when a paused
+                // queue or a firewalled connection is easiest to miss.
+                const summaryHtml = data.type === 'qbittorrent'
+                    ? renderQbittorrentSummary(data.summary)
+                    : renderSabnzbdSummary(data.summary);
+
+                const itemsHtml = data.items.length
+                    ? (data.type === 'qbittorrent' ? renderQbittorrentTorrents(name, data.items) : renderSabnzbdQueue(name, data.items))
+                    : '<div class="empty">Nothing active right now</div>';
+
+                listEl.innerHTML = summaryHtml + itemsHtml;
             } catch (err) {
                 listEl.innerHTML = '<div class="modal-empty">Could not load status.</div>';
             }
+        }
+
+        function renderQbittorrentSummary(summary) {
+            if (!summary) return '';
+            const statusClass = summary.connection_status === 'connected' ? 'badge-success'
+                : summary.connection_status === 'firewalled' ? 'badge-warning'
+                : summary.connection_status ? 'badge-error' : 'badge-notice';
+            return `
+                <div class="queue-item-meta" style="margin-bottom: 0.75rem;">
+                    ${summary.connection_status ? `<span class="inline-badge ${statusClass}">${escapeHtml(summary.connection_status)}</span> &middot; ` : ''}
+                    &darr;${formatBytesPerSec(summary.dl_speed)} &middot; &uarr;${formatBytesPerSec(summary.up_speed)}
+                </div>
+            `;
+        }
+
+        function renderSabnzbdSummary(summary) {
+            if (!summary) return '';
+            const parts = [];
+            if (summary.paused) parts.push('<span class="inline-badge badge-warning">Paused</span>');
+            if (summary.speed) parts.push(`&darr;${escapeHtml(summary.speed)}`);
+            if (summary.time_left) parts.push(`ETA ${escapeHtml(summary.time_left)}`);
+            if (summary.have_warnings) parts.push(`<span class="inline-badge badge-warning">${summary.have_warnings} warning(s)</span>`);
+            if (summary.diskspace_temp_free) parts.push(`${escapeHtml(summary.diskspace_temp_free)} GB free (temp)`);
+            if (summary.diskspace_complete_free) parts.push(`${escapeHtml(summary.diskspace_complete_free)} GB free (complete)`);
+            return parts.length ? `<div class="queue-item-meta" style="margin-bottom: 0.75rem;">${parts.join(' &middot; ')}</div>` : '';
         }
 
         function formatBytesPerSec(bytes) {
@@ -1902,7 +2136,9 @@
                         <div class="request-meta">
                             ${escapeHtml(t.state)} &middot; ${t.progress_pct}% &middot; &darr;${formatBytesPerSec(t.dlspeed)} &middot; &uarr;${formatBytesPerSec(t.upspeed)}
                             &middot; ETA ${formatEta(t.eta)} &middot; ${formatSizeGb(t.size)} &middot; Ratio ${t.ratio}
+                            &middot; ${t.num_seeds} seed${t.num_seeds === 1 ? '' : 's'} / ${t.num_leechs} peer${t.num_leechs === 1 ? '' : 's'}
                             ${t.category ? ' &middot; ' + escapeHtml(t.category) : ''}
+                            ${t.tags ? ' &middot; ' + escapeHtml(t.tags) : ''}
                         </div>
                     </div>
                     <div class="card-actions" style="margin-top: 0;">
@@ -2062,6 +2298,7 @@
         }
 
         updateQueueTabCount();
+        updateSystemTabBadge();
         updateRequestTabVisibility();
         updateAlphaIndexVisibility();
         render();
@@ -2283,9 +2520,14 @@
             const activePanel = document.querySelector('.panel.active');
             if (!activePanel) return;
 
-            activePanel.querySelectorAll('.item').forEach(row => {
+            // Row containers differ in their normal display value - .item
+            // and .health-item are flex rows, .queue-item and
+            // .diskspace-item are block containers (they stack a
+            // progress bar/status lines under the main row).
+            activePanel.querySelectorAll('.item, .queue-item, .health-item, .diskspace-item').forEach(row => {
                 const matches = !query || row.textContent.toLowerCase().includes(query);
-                row.style.display = matches ? 'flex' : 'none';
+                const display = (row.classList.contains('queue-item') || row.classList.contains('diskspace-item')) ? 'block' : 'flex';
+                row.style.display = matches ? display : 'none';
             });
         }
 
