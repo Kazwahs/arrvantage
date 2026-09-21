@@ -18,6 +18,7 @@ from urllib.parse import quote
 from functools import wraps
 from werkzeug.security import generate_password_hash, check_password_hash
 from werkzeug.middleware.proxy_fix import ProxyFix
+from datetime import datetime
 import json
 import os
 import re
@@ -61,6 +62,7 @@ INSTANCE_ICONS = {
     "series": f"{DASHBOARD_ICONS_BASE}/sonarr.svg",
     "artist": f"{DASHBOARD_ICONS_BASE}/lidarr.svg",
     "author": f"{DASHBOARD_ICONS_BASE}/chaptarr.svg",
+    "comic": f"{DASHBOARD_ICONS_BASE}/kapowarr.svg",
 }
 
 DOWNLOADER_ICONS = {
@@ -80,6 +82,7 @@ MEDIA_SERVER_ICONS = {
     "plex": f"{DASHBOARD_ICONS_BASE}/plex.svg",
     "jellyfin": f"{DASHBOARD_ICONS_BASE}/jellyfin.svg",
     "emby": f"{DASHBOARD_ICONS_BASE}/emby.svg",
+    "komga": f"{DASHBOARD_ICONS_BASE}/komga.svg",
 }
 
 # Structural facts about each *kind* of arr app - which endpoints it uses,
@@ -122,6 +125,27 @@ KIND_META = {
         "seerr_media_type": None,
         "label": "Books (Readarr-type)",
     },
+    # Kapowarr isn't part of the Servarr family the other four kinds
+    # share - confirmed directly from its source (frontend/api.py,
+    # backend/internals/status.py, backend/implementations/root_folders.py)
+    # since it has no published OpenAPI spec. Two real differences that
+    # matter here: api_key is a query parameter, not an X-Api-Key header,
+    # and every response is wrapped in {"error", "result"} rather than a
+    # bare list/records object. The endpoints below are kept for display/
+    # reference consistency with the other kinds, but the actual fetch_*
+    # functions for this kind dispatch to dedicated fetch_kapowarr_*
+    # implementations (see "backend" below) rather than using these paths
+    # directly the way the Servarr-family fetchers do.
+    "comic": {
+        "queue_endpoint": "/api/activity/queue",
+        "history_endpoint": "/api/activity/history",
+        "library_endpoint": "/api/volumes",
+        "health_endpoint": "/api/system/status",
+        "diskspace_endpoint": "/api/rootfolder",
+        "seerr_media_type": None,  # Overseerr/Jellyseerr have no comics support
+        "label": "Comics (Kapowarr-type)",
+        "backend": "kapowarr",
+    },
 }
 
 # Media server types we can actually talk to correctly. Jellyfin and Emby
@@ -131,6 +155,20 @@ MEDIA_SERVER_TYPES = {
     "plex": "Plex",
     "jellyfin": "Jellyfin",
     "emby": "Emby",
+    "komga": "Komga",
+}
+
+# Friendly message + CSS severity per Kapowarr system/status "type" -
+# confirmed against backend/internals/status.py and backend/base/
+# definitions.py's StatusType enum (only these 5 values exist there).
+# Falls back gracefully for anything unrecognized, same as the Overseerr
+# status-code handling above, in case a future Kapowarr version adds one.
+KAPOWARR_STATUS_MESSAGES = {
+    "cv_rate_limit": ("warning", "ComicVine rate limit reached"),
+    "download_service_rate_limit": ("warning", "A download service's daily rate limit was reached"),
+    "root_folder_almost_full": ("warning", "Root folder is almost full"),
+    "root_folder_full": ("error", "Root folder is full"),
+    "cf_challenge_with_no_fs": ("warning", "Cloudflare challenge blocked and no FlareSolverr is configured"),
 }
 
 # Requester types we can actually talk to correctly. Jellyseerr is an
@@ -249,6 +287,7 @@ def build_apps(cfg: dict) -> dict:
             "health_endpoint": meta["health_endpoint"],
             "diskspace_endpoint": meta["diskspace_endpoint"],
             "seerr_media_type": meta["seerr_media_type"],
+            "backend": meta.get("backend", "servarr"),
             "library_kind": kind,
             "url": entry.get("url", ""),
             "api_key": entry.get("api_key", ""),
@@ -542,6 +581,9 @@ def get_queue_status_messages(record: dict) -> list:
 
 
 def fetch_queue(name: str, config: dict) -> dict:
+    if config.get("backend") == "kapowarr":
+        return fetch_kapowarr_queue(name, config)
+
     url = config["url"].rstrip("/") + config["queue_endpoint"]
     headers = {"X-Api-Key": config["api_key"]}
 
@@ -595,6 +637,9 @@ def get_history_event(record: dict) -> str:
 
 
 def fetch_history(name: str, config: dict) -> dict:
+    if config.get("backend") == "kapowarr":
+        return fetch_kapowarr_history(name, config)
+
     url = config["url"].rstrip("/") + config["history_endpoint"]
     headers = {"X-Api-Key": config["api_key"]}
     params = {"pageSize": 25, "sortKey": "date", "sortDirection": "descending"}
@@ -631,6 +676,9 @@ def fetch_history(name: str, config: dict) -> dict:
 
 
 def fetch_health(name: str, config: dict) -> dict:
+    if config.get("backend") == "kapowarr":
+        return fetch_kapowarr_health(name, config)
+
     url = config["url"].rstrip("/") + config["health_endpoint"]
     headers = {"X-Api-Key": config["api_key"]}
 
@@ -659,6 +707,9 @@ def fetch_health(name: str, config: dict) -> dict:
 
 
 def fetch_diskspace(name: str, config: dict) -> dict:
+    if config.get("backend") == "kapowarr":
+        return fetch_kapowarr_diskspace(name, config)
+
     url = config["url"].rstrip("/") + config["diskspace_endpoint"]
     headers = {"X-Api-Key": config["api_key"]}
 
@@ -690,6 +741,194 @@ def fetch_diskspace(name: str, config: dict) -> dict:
 
 
 # ---------------------------------------------------------------------------
+# Kapowarr - a comics-focused *arr app, but with a meaningfully different
+# API shape from the Servarr-family apps above: api_key is a query
+# parameter (not an X-Api-Key header), and every response - success or
+# failure - is wrapped in {"error": ..., "result": ...}. Confirmed
+# directly from Kapowarr's own source (frontend/api.py for routes/auth,
+# backend/internals/status.py for the health-check shape,
+# backend/implementations/root_folders.py for disk space,
+# backend/implementations/volumes.py for the volumes/issues shape) since
+# it has no published OpenAPI spec at the time this was written. The
+# exact key names inside a queue entry's as_dict() weren't independently
+# confirmed beyond the abstract Download class's own property names
+# (id, volume_id, issue_id, title, size, state, progress, speed,
+# source_name) - if a queue item looks wrong, that's the place to check
+# against a live response first.
+# ---------------------------------------------------------------------------
+
+
+def kapowarr_request(config: dict, path: str, params: dict = None):
+    """
+    Shared GET helper - every Kapowarr endpoint needs api_key as a query
+    parameter rather than a header, and wraps its JSON body in
+    {"error", "result"} even on some logical failures (an actually
+    invalid key comes back as a real 401, which raise_for_status()
+    catches upstream instead).
+    """
+    url = config["url"].rstrip("/") + path
+    query = {"api_key": config["api_key"]}
+    if params:
+        query.update(params)
+    response = requests.get(url, params=query, timeout=15)
+    response.raise_for_status()
+    data = response.json()
+    return data.get("result"), data.get("error")
+
+
+def fetch_kapowarr_queue(name: str, config: dict) -> dict:
+    try:
+        result, error = kapowarr_request(config, "/api/activity/queue")
+    except requests.exceptions.ConnectionError:
+        return {"error": f"could not connect ({config['url']})", "queue_items": []}
+    except requests.exceptions.HTTPError:
+        return {"error": "HTTP error - check API key", "queue_items": []}
+    except requests.exceptions.RequestException as err:
+        return {"error": f"request failed: {err}", "queue_items": []}
+    if error:
+        return {"error": error, "queue_items": []}
+
+    queue_items = []
+    for record in result or []:
+        state = record.get("state", "unknown")
+        status_messages = []
+        if state == "failed":
+            status_messages.append("Download failed")
+        elif state == "canceled":
+            status_messages.append("Download canceled")
+
+        progress = record.get("progress")
+        size = record.get("size", -1)
+        queue_items.append({
+            "title": record.get("title") or "(unknown title)",
+            "time_left": state,
+            "status": state,
+            "progress_pct": round(progress) if isinstance(progress, (int, float)) else None,
+            "status_messages": status_messages,
+            "indexer": record.get("source_name") or "",
+            "download_client": "",
+            "protocol": "",
+            "quality": "",
+            "custom_format_score": 0,
+            "size_human": format_size_gb(size) if size and size > 0 else "",
+        })
+    return {"error": None, "queue_items": queue_items}
+
+
+def fetch_kapowarr_history(name: str, config: dict) -> dict:
+    try:
+        result, error = kapowarr_request(config, "/api/activity/history")
+    except requests.exceptions.ConnectionError:
+        return {"error": f"could not connect ({config['url']})", "history_items": []}
+    except requests.exceptions.HTTPError:
+        return {"error": "HTTP error - check API key", "history_items": []}
+    except requests.exceptions.RequestException as err:
+        return {"error": f"request failed: {err}", "history_items": []}
+    if error:
+        return {"error": error, "history_items": []}
+
+    history_items = []
+    for record in result or []:
+        # downloaded_at's exact type (epoch seconds vs ISO string) isn't
+        # independently confirmed - handled defensively rather than
+        # assumed, same spirit as this project's other flagged
+        # uncertain fields (see CLAUDE.md).
+        raw_date = record.get("downloaded_at")
+        if isinstance(raw_date, (int, float)):
+            date = datetime.fromtimestamp(raw_date).strftime("%Y-%m-%d")
+        else:
+            date = str(raw_date or "")[:10]
+        history_items.append({
+            "title": record.get("file_title") or record.get("web_title") or "(unknown title)",
+            "event": "Downloaded" if record.get("success") else "Failed",
+            "date": date,
+        })
+    return {"error": None, "history_items": history_items}
+
+
+def fetch_kapowarr_health(name: str, config: dict) -> dict:
+    try:
+        result, error = kapowarr_request(config, "/api/system/status")
+    except requests.exceptions.ConnectionError:
+        return {"error": f"could not connect ({config['url']})", "health_items": []}
+    except requests.exceptions.HTTPError:
+        return {"error": "HTTP error - check API key", "health_items": []}
+    except requests.exceptions.RequestException as err:
+        return {"error": f"request failed: {err}", "health_items": []}
+    if error:
+        return {"error": error, "health_items": []}
+
+    health_items = []
+    for record in result or []:
+        status_type = record.get("type", "")
+        severity, message = KAPOWARR_STATUS_MESSAGES.get(
+            status_type, ("notice", status_type.replace("_", " ").title() or "Unknown issue")
+        )
+        subtypes = record.get("display_subtypes") or []
+        if subtypes:
+            message = f"{message}: {', '.join(subtypes)}"
+        health_items.append({"type": severity, "source": "Kapowarr", "message": message, "wiki_url": ""})
+    return {"error": None, "health_items": health_items}
+
+
+def fetch_kapowarr_diskspace(name: str, config: dict) -> dict:
+    try:
+        result, error = kapowarr_request(config, "/api/rootfolder")
+    except requests.exceptions.ConnectionError:
+        return {"error": f"could not connect ({config['url']})", "diskspace_items": []}
+    except requests.exceptions.HTTPError:
+        return {"error": "HTTP error - check API key", "diskspace_items": []}
+    except requests.exceptions.RequestException as err:
+        return {"error": f"request failed: {err}", "diskspace_items": []}
+    if error:
+        return {"error": error, "diskspace_items": []}
+
+    diskspace_items = []
+    for record in result or []:
+        # "size" is null when Kapowarr couldn't read disk usage for that
+        # folder (e.g. it doesn't exist yet) - confirmed in
+        # root_folders.py's own exception handling.
+        size = record.get("size") or {}
+        total = size.get("total") or 0
+        free = size.get("free") or 0
+        percent_free = round((free / total) * 100) if total else None
+        diskspace_items.append({
+            "path": record.get("folder", ""),
+            "label": "",
+            "free_human": format_size_gb(free) if total else "",
+            "total_human": format_size_gb(total) if total else "",
+            "percent_free": percent_free,
+        })
+    return {"error": None, "diskspace_items": diskspace_items}
+
+
+def get_kapowarr_cover_url(record: dict, config: dict) -> str:
+    volume_id = record.get("id")
+    if volume_id is None:
+        return ""
+    return f"{config['url'].rstrip('/')}/api/volumes/{volume_id}/cover?api_key={config['api_key']}"
+
+
+def fetch_kapowarr_library(name: str, config: dict) -> dict:
+    try:
+        result, error = kapowarr_request(config, "/api/volumes", params={"sort": "title"})
+    except requests.exceptions.ConnectionError:
+        return {"error": f"could not connect ({config['url']})", "library_items": [], "status_options": [], "genre_options": []}
+    except requests.exceptions.HTTPError:
+        return {"error": "HTTP error - check API key", "library_items": [], "status_options": [], "genre_options": []}
+    except requests.exceptions.RequestException as err:
+        return {"error": f"request failed: {err}", "library_items": [], "status_options": [], "genre_options": []}
+    if error:
+        return {"error": error, "library_items": [], "status_options": [], "genre_options": []}
+
+    library_items = [get_library_item(record, "comic", config) for record in (result or [])]
+    library_items.sort(key=lambda item: item["title"].lower())
+    status_options = sorted({item["status"] for item in library_items})
+    genre_options = sorted({g for item in library_items for g in item["genre"].split(", ") if item["genre"] != "Unknown"})
+    return {"error": None, "library_items": library_items, "status_options": status_options, "genre_options": genre_options}
+
+
+# ---------------------------------------------------------------------------
 # Library
 # ---------------------------------------------------------------------------
 
@@ -710,6 +949,8 @@ def get_status_category(kind: str, record: dict) -> str:
         have, total = stats.get("trackFileCount", 0), stats.get("trackCount", 0)
     elif kind == "author":
         have, total = stats.get("bookFileCount", 0), stats.get("bookCount", 0)
+    elif kind == "comic":
+        have, total = record.get("issues_downloaded", 0), record.get("issue_count", 0)
     else:
         have, total = 0, 0
 
@@ -784,7 +1025,7 @@ def get_person_image_url(credit: dict, config: dict) -> str:
 def get_library_item(record: dict, kind: str, config: dict) -> dict:
     genre = get_genre(record)
     status = get_status_category(kind, record)
-    cover_url = get_cover_url(record, config)
+    cover_url = get_kapowarr_cover_url(record, config) if kind == "comic" else get_cover_url(record, config)
     episode_have = episode_total = None
     size_bytes = 0
 
@@ -817,6 +1058,17 @@ def get_library_item(record: dict, kind: str, config: dict) -> dict:
         # Same limitation as artists - no single release date for an author.
         release_date = ""
         size_bytes = stats.get("sizeOnDisk", 0) or 0
+    elif kind == "comic":
+        title = record.get("title", "(unknown)")
+        year = record.get("year", "")
+        title = f"{title} ({year})" if year else title
+        episode_have = record.get("issues_downloaded", 0)
+        episode_total = record.get("issue_count", 0)
+        detail = f"{episode_have}/{episode_total} issues"
+        # No single release date concept for a volume as a whole - same
+        # reasoning as artists/authors above.
+        release_date = ""
+        size_bytes = record.get("total_size") or 0
     else:
         title = record.get("title", "(unknown)")
         detail = ""
@@ -832,6 +1084,9 @@ def get_library_item(record: dict, kind: str, config: dict) -> dict:
 
 
 def fetch_library(name: str, config: dict) -> dict:
+    if config.get("backend") == "kapowarr":
+        return fetch_kapowarr_library(name, config)
+
     url = config["url"].rstrip("/") + config["library_endpoint"]
     headers = {"X-Api-Key": config["api_key"]}
 
@@ -2514,6 +2769,203 @@ def get_media_server(name: str):
     return next((s for s in MEDIA_SERVERS if s["name"] == name), None)
 
 
+# ---------------------------------------------------------------------------
+# Komga - a comics/manga/book server. Unlike Plex/Jellyfin, there's no
+# "now playing" concept (no live streaming sessions to poll), so this
+# gets its own tabs entirely (Library, On Deck, Recently Added) rather
+# than plugging into the now-playing/recently-added/watch-history/users
+# tab set built for the other media server types. Confirmed against
+# Komga's own published OpenAPI spec (komga.org/docs/openapi, and the
+# raw spec at github.com/gotson/komga/blob/master/komga/docs/openapi.json)
+# - auth is a real X-API-Key header, same convention as everything else
+# in this app, and every list endpoint returns a standard Spring Page
+# object ({"content": [...], "totalPages": ..., ...}).
+#
+# Cover art needs a server-side proxy (same reasoning as the Tracearr
+# poster-proxy above) since Komga's thumbnail endpoints require the
+# X-API-Key header, which an <img> tag can't send.
+#
+# "Open in Komga" links use Komga's web UI's documented route pattern
+# (/series/{id}, /book/{id}/read) - this matches Komga's own Vue Router
+# structure as commonly referenced in its community guides, but wasn't
+# independently confirmed against the webui's router source itself. If
+# a link 404s inside Komga's own UI, that's the thing to double-check.
+# ---------------------------------------------------------------------------
+
+
+def komga_headers(server: dict) -> dict:
+    return {"X-API-Key": server["credential"]}
+
+
+def fetch_komga_libraries(server: dict) -> dict:
+    try:
+        response = requests.get(
+            f"{server['url'].rstrip('/')}/api/v1/libraries",
+            headers=komga_headers(server), timeout=10,
+        )
+        response.raise_for_status()
+    except requests.exceptions.ConnectionError:
+        return {"error": f"could not connect ({server['url']})", "libraries": []}
+    except requests.exceptions.HTTPError:
+        return {"error": f"HTTP error {response.status_code} - check API key", "libraries": []}
+    except requests.exceptions.RequestException as err:
+        return {"error": f"request failed: {err}", "libraries": []}
+
+    libraries = [{"id": lib.get("id"), "name": lib.get("name", "(unnamed)")} for lib in response.json() or []]
+    return {"error": None, "libraries": libraries}
+
+
+def get_komga_series_summary(record: dict, server_name: str) -> dict:
+    metadata = record.get("metadata") or {}
+    return {
+        "id": record.get("id"),
+        "title": metadata.get("title") or record.get("name", "(unknown)"),
+        "publisher": metadata.get("publisher", ""),
+        "status": (metadata.get("status") or "").title(),
+        "books_count": record.get("booksCount", 0),
+        "books_read_count": record.get("booksReadCount", 0),
+        "books_unread_count": record.get("booksUnreadCount", 0),
+        "books_in_progress_count": record.get("booksInProgressCount", 0),
+        "cover_url": f"/api/komga/cover/{server_name}/series/{record.get('id')}",
+    }
+
+
+def fetch_komga_series(server: dict, server_name: str, library_id: str = None,
+                        search: str = None, page: int = 0, size: int = 24) -> dict:
+    params = {"page": page, "size": size, "sort": "metadata.titleSort,asc"}
+    if library_id:
+        params["library_id"] = library_id
+    if search:
+        params["search"] = search
+
+    try:
+        response = requests.get(
+            f"{server['url'].rstrip('/')}/api/v1/series",
+            headers=komga_headers(server), params=params, timeout=15,
+        )
+        response.raise_for_status()
+    except requests.exceptions.ConnectionError:
+        return {"error": f"could not connect ({server['url']})", "items": [], "page": 0, "total_pages": 0}
+    except requests.exceptions.HTTPError:
+        return {"error": f"HTTP error {response.status_code} - check API key", "items": [], "page": 0, "total_pages": 0}
+    except requests.exceptions.RequestException as err:
+        return {"error": f"request failed: {err}", "items": [], "page": 0, "total_pages": 0}
+
+    data = response.json()
+    items = [get_komga_series_summary(r, server_name) for r in data.get("content", [])]
+    return {
+        "error": None, "items": items,
+        "page": data.get("number", 0), "total_pages": data.get("totalPages", 0),
+        "total_elements": data.get("totalElements", 0),
+    }
+
+
+def fetch_komga_series_detail(server: dict, server_name: str, series_id: str) -> dict:
+    try:
+        series_resp = requests.get(
+            f"{server['url'].rstrip('/')}/api/v1/series/{series_id}",
+            headers=komga_headers(server), timeout=15,
+        )
+        series_resp.raise_for_status()
+        books_resp = requests.get(
+            f"{server['url'].rstrip('/')}/api/v1/series/{series_id}/books",
+            headers=komga_headers(server),
+            params={"size": 500, "sort": "metadata.numberSort,asc"}, timeout=15,
+        )
+        books_resp.raise_for_status()
+    except requests.exceptions.ConnectionError:
+        return {"error": f"could not connect ({server['url']})", "series": None, "books": []}
+    except requests.exceptions.HTTPError:
+        return {"error": "HTTP error - check API key", "series": None, "books": []}
+    except requests.exceptions.RequestException as err:
+        return {"error": f"request failed: {err}", "series": None, "books": []}
+
+    record = series_resp.json()
+    metadata = record.get("metadata") or {}
+    series = {
+        "id": record.get("id"),
+        "title": metadata.get("title") or record.get("name", "(unknown)"),
+        "summary": metadata.get("summary", ""),
+        "publisher": metadata.get("publisher", ""),
+        "status": (metadata.get("status") or "").title(),
+        "genres": metadata.get("genres") or [],
+        "books_count": record.get("booksCount", 0),
+        "books_read_count": record.get("booksReadCount", 0),
+        "cover_url": f"/api/komga/cover/{server_name}/series/{series_id}",
+        "open_url": f"{server['url'].rstrip('/')}/series/{series_id}",
+    }
+
+    books = []
+    for b in books_resp.json().get("content", []):
+        b_metadata = b.get("metadata") or {}
+        progress = b.get("readProgress") or {}
+        media = b.get("media") or {}
+        books.append({
+            "id": b.get("id"),
+            "number": b_metadata.get("number") or b.get("number", ""),
+            "title": b_metadata.get("title") or b.get("name", "(unknown)"),
+            "read": bool(progress.get("completed")),
+            "in_progress": bool(progress) and not progress.get("completed"),
+            "page": progress.get("page"),
+            "pages_total": media.get("pagesCount"),
+            "size": b.get("size", ""),
+            "cover_url": f"/api/komga/cover/{server_name}/book/{b.get('id')}",
+            "open_url": f"{server['url'].rstrip('/')}/book/{b.get('id')}/read",
+        })
+    return {"error": None, "series": series, "books": books}
+
+
+def fetch_komga_ondeck(server: dict, server_name: str, page: int = 0, size: int = 20) -> dict:
+    try:
+        response = requests.get(
+            f"{server['url'].rstrip('/')}/api/v1/books/ondeck",
+            headers=komga_headers(server), params={"page": page, "size": size}, timeout=15,
+        )
+        response.raise_for_status()
+    except requests.exceptions.ConnectionError:
+        return {"error": f"could not connect ({server['url']})", "items": []}
+    except requests.exceptions.HTTPError:
+        return {"error": f"HTTP error {response.status_code} - check API key", "items": []}
+    except requests.exceptions.RequestException as err:
+        return {"error": f"request failed: {err}", "items": []}
+
+    items = []
+    for b in response.json().get("content", []):
+        b_metadata = b.get("metadata") or {}
+        progress = b.get("readProgress") or {}
+        media = b.get("media") or {}
+        items.append({
+            "id": b.get("id"),
+            "series_id": b.get("seriesId"),
+            "series_title": b.get("seriesTitle", ""),
+            "title": b_metadata.get("title") or b.get("name", "(unknown)"),
+            "number": b_metadata.get("number") or b.get("number", ""),
+            "page": progress.get("page"),
+            "pages_total": media.get("pagesCount"),
+            "cover_url": f"/api/komga/cover/{server_name}/book/{b.get('id')}",
+            "open_url": f"{server['url'].rstrip('/')}/book/{b.get('id')}/read",
+        })
+    return {"error": None, "items": items}
+
+
+def fetch_komga_latest(server: dict, server_name: str, page: int = 0, size: int = 20) -> dict:
+    try:
+        response = requests.get(
+            f"{server['url'].rstrip('/')}/api/v1/series/latest",
+            headers=komga_headers(server), params={"page": page, "size": size}, timeout=15,
+        )
+        response.raise_for_status()
+    except requests.exceptions.ConnectionError:
+        return {"error": f"could not connect ({server['url']})", "items": []}
+    except requests.exceptions.HTTPError:
+        return {"error": f"HTTP error {response.status_code} - check API key", "items": []}
+    except requests.exceptions.RequestException as err:
+        return {"error": f"request failed: {err}", "items": []}
+
+    items = [get_komga_series_summary(r, server_name) for r in response.json().get("content", [])]
+    return {"error": None, "items": items}
+
+
 def fetch_plex_now_playing(server: dict) -> dict:
     try:
         response = requests.get(
@@ -3194,6 +3646,81 @@ def api_mediaserver_users(name):
     return _dispatch_media_server_fetch(name, fetch_plex_users, fetch_jellyfin_users)
 
 
+def get_komga_server(name: str):
+    server = get_media_server(name)
+    return server if server and server["type"] == "komga" else None
+
+
+@app.route("/api/komga/libraries/<name>")
+@login_required
+def api_komga_libraries(name):
+    server = get_komga_server(name)
+    if not server:
+        return jsonify({"error": "unknown Komga server"}), 404
+    return jsonify(fetch_komga_libraries(server))
+
+
+@app.route("/api/komga/series/<name>")
+@login_required
+def api_komga_series(name):
+    server = get_komga_server(name)
+    if not server:
+        return jsonify({"error": "unknown Komga server"}), 404
+    return jsonify(fetch_komga_series(
+        server, name,
+        library_id=request.args.get("library_id") or None,
+        search=request.args.get("search") or None,
+        page=request.args.get("page", 0, type=int),
+    ))
+
+
+@app.route("/api/komga/series/<name>/<series_id>")
+@login_required
+def api_komga_series_detail(name, series_id):
+    server = get_komga_server(name)
+    if not server:
+        return jsonify({"error": "unknown Komga server"}), 404
+    return jsonify(fetch_komga_series_detail(server, name, series_id))
+
+
+@app.route("/api/komga/ondeck/<name>")
+@login_required
+def api_komga_ondeck(name):
+    server = get_komga_server(name)
+    if not server:
+        return jsonify({"error": "unknown Komga server"}), 404
+    return jsonify(fetch_komga_ondeck(server, name, page=request.args.get("page", 0, type=int)))
+
+
+@app.route("/api/komga/latest/<name>")
+@login_required
+def api_komga_latest(name):
+    server = get_komga_server(name)
+    if not server:
+        return jsonify({"error": "unknown Komga server"}), 404
+    return jsonify(fetch_komga_latest(server, name, page=request.args.get("page", 0, type=int)))
+
+
+@app.route("/api/komga/cover/<name>/<kind>/<item_id>")
+@login_required
+def api_komga_cover(name, kind, item_id):
+    server = get_komga_server(name)
+    if not server or kind not in ("series", "book"):
+        return "", 404
+
+    path = f"/api/v1/series/{item_id}/thumbnail" if kind == "series" else f"/api/v1/books/{item_id}/thumbnail"
+    try:
+        response = requests.get(
+            f"{server['url'].rstrip('/')}{path}",
+            headers=komga_headers(server), timeout=10,
+        )
+        response.raise_for_status()
+    except requests.exceptions.RequestException:
+        return "", 502
+
+    return Response(response.content, mimetype=response.headers.get("Content-Type", "image/jpeg"))
+
+
 # ---------------------------------------------------------------------------
 # Tdarr - transcode automation stats. Separate from the arr instances
 # entirely, same reasoning as Downloaders/Indexers. Field names here
@@ -3601,7 +4128,14 @@ def api_settings_test():
         return jsonify({"ok": False, "error": "URL is required"})
 
     try:
-        if category == "instance":
+        if category == "instance" and kind_or_type == "comic":
+            # Kapowarr, unlike the Servarr-family kinds below: api_key is
+            # a query parameter, not an X-Api-Key header.
+            response = requests.get(
+                f"{url.rstrip('/')}/api/system/status",
+                params={"api_key": credential}, timeout=8,
+            )
+        elif category == "instance":
             meta = KIND_META.get(kind_or_type)
             if not meta:
                 return jsonify({"ok": False, "error": "unknown instance kind"})
@@ -3625,6 +4159,11 @@ def api_settings_test():
             response = requests.get(
                 f"{url.rstrip('/')}/System/Info",
                 headers={"X-Emby-Token": credential}, timeout=8,
+            )
+        elif category == "media_server" and kind_or_type == "komga":
+            response = requests.get(
+                f"{url.rstrip('/')}/api/v2/users/me",
+                headers={"X-API-Key": credential}, timeout=8,
             )
         elif category == "downloader" and kind_or_type == "qbittorrent":
             response = requests.get(

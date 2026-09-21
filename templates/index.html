@@ -350,6 +350,27 @@
         .request-btn { padding: 0.3rem 0.75rem; }
         .request-btn:disabled { background: var(--muted); cursor: default; }
 
+        /* --- Komga tab: library picker + pagination --- */
+
+        .komga-library-controls { display: flex; gap: 0.5rem; margin-bottom: 1rem; }
+        .komga-library-controls select {
+            background: var(--panel);
+            border: 1px solid var(--border);
+            border-radius: 6px;
+            padding: 0.5rem 0.75rem;
+            color: var(--text);
+            font-size: 0.9rem;
+        }
+        .komga-library-controls input { flex: 1; }
+
+        .komga-pagination {
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            gap: 0.75rem;
+            margin-top: 1.25rem;
+        }
+
         .search-result {
             display: flex;
             align-items: center;
@@ -1254,10 +1275,15 @@
         <div id="mediaservers-view" style="display:none;">
             <div class="topbar">
                 <div class="view-tabs">
-                    <button class="view-tab mediaserver-subtab active" data-mstab="now-playing" onclick="selectMediaServerTab('now-playing')">Now Playing</button>
-                    <button class="view-tab mediaserver-subtab" data-mstab="recently-added" onclick="selectMediaServerTab('recently-added')">Recently Added</button>
-                    <button class="view-tab mediaserver-subtab" data-mstab="watch-history" onclick="selectMediaServerTab('watch-history')">Watch History</button>
-                    <button class="view-tab mediaserver-subtab" data-mstab="users" onclick="selectMediaServerTab('users')">Users</button>
+                    <button class="view-tab mediaserver-subtab standard-mstab active" data-mstab="now-playing" onclick="selectMediaServerTab('now-playing')">Now Playing</button>
+                    <button class="view-tab mediaserver-subtab standard-mstab" data-mstab="recently-added" onclick="selectMediaServerTab('recently-added')">Recently Added</button>
+                    <button class="view-tab mediaserver-subtab standard-mstab" data-mstab="watch-history" onclick="selectMediaServerTab('watch-history')">Watch History</button>
+                    <button class="view-tab mediaserver-subtab standard-mstab" data-mstab="users" onclick="selectMediaServerTab('users')">Users</button>
+                    <!-- Komga has no live playback sessions to poll, so it gets its
+                         own tab set entirely rather than reusing the ones above. -->
+                    <button class="view-tab mediaserver-subtab komga-mstab" data-mstab="library" onclick="selectMediaServerTab('library')" style="display:none;">Library</button>
+                    <button class="view-tab mediaserver-subtab komga-mstab" data-mstab="ondeck" onclick="selectMediaServerTab('ondeck')" style="display:none;">On Deck</button>
+                    <button class="view-tab mediaserver-subtab komga-mstab" data-mstab="recent" onclick="selectMediaServerTab('recent')" style="display:none;">Recently Added</button>
                 </div>
                 <div class="topbar-right">
                     <button class="test-btn" onclick="refreshCurrentMediaServerTab()">Refresh</button>
@@ -1273,12 +1299,31 @@
             </div>
             <div class="content">
                 {% for ms in media_server_list %}
-                <div class="mediaserver-panel" data-mediaserver="{{ ms.name }}" style="display:none;">
+                <div class="mediaserver-panel" data-mediaserver="{{ ms.name }}" data-mediaserver-type="{{ ms.type }}" style="display:none;">
+                    {% if ms.type == 'komga' %}
+                    <div class="mediaserver-subpanel" data-mstab="library" style="display:block;">
+                        <div class="komga-library-controls">
+                            <select id="komga-library-select-{{ ms.name }}" onchange="selectKomgaLibrary('{{ ms.name }}', this.value)">
+                                <option value="">All Libraries</option>
+                            </select>
+                            <input type="search" id="komga-search-{{ ms.name }}" placeholder="Search series..." oninput="debounceKomgaSearch('{{ ms.name }}')">
+                        </div>
+                        <div id="mediaserver-library-{{ ms.name }}" class="modal-loading">Loading...</div>
+                        <div class="komga-pagination" id="komga-pagination-{{ ms.name }}"></div>
+                    </div>
+                    <div class="mediaserver-subpanel" data-mstab="ondeck" style="display:none;">
+                        <div id="mediaserver-ondeck-{{ ms.name }}" class="modal-loading">Loading...</div>
+                    </div>
+                    <div class="mediaserver-subpanel" data-mstab="recent" style="display:none;">
+                        <div id="mediaserver-recent-{{ ms.name }}" class="modal-loading">Loading...</div>
+                    </div>
+                    {% else %}
                     {% for tab in ["now-playing", "recently-added", "watch-history", "users"] %}
                     <div class="mediaserver-subpanel" data-mstab="{{ tab }}" style="display:{{ 'block' if tab == 'now-playing' else 'none' }};">
                         <div id="mediaserver-{{ tab }}-{{ ms.name }}" class="modal-loading">Loading...</div>
                     </div>
                     {% endfor %}
+                    {% endif %}
                 </div>
                 {% endfor %}
             </div>
@@ -1790,6 +1835,8 @@
         let currentMediaServerTab = 'now-playing';
         const loadedMediaServerTabs = new Set(); // "serverName:tab" - avoid re-fetching on every sub-tab click
 
+        const KOMGA_MS_TABS = ['library', 'ondeck', 'recent'];
+
         function selectMediaServer(name) {
             currentMediaServer = name;
             document.querySelectorAll('.instance-tab').forEach(el => {
@@ -1807,7 +1854,19 @@
                 el.style.display = el.dataset.mediaserver === name ? 'block' : 'none';
             });
 
-            loadMediaServerTabData(name, currentMediaServerTab);
+            const tabBtn = document.querySelector(`.instance-tab[data-mediaserver="${name}"]`);
+            const isKomga = tabBtn && tabBtn.dataset.mediaserverType === 'komga';
+            document.querySelectorAll('.standard-mstab').forEach(el => { el.style.display = isKomga ? 'none' : ''; });
+            document.querySelectorAll('.komga-mstab').forEach(el => { el.style.display = isKomga ? '' : 'none'; });
+
+            // Switching between a Komga server and a Plex/Jellyfin-style one
+            // needs the active tab to make sense for the type being shown -
+            // "now-playing" means nothing for Komga and vice versa.
+            const tabIsKomgaTab = KOMGA_MS_TABS.includes(currentMediaServerTab);
+            if (isKomga && !tabIsKomgaTab) currentMediaServerTab = 'library';
+            else if (!isKomga && tabIsKomgaTab) currentMediaServerTab = 'now-playing';
+
+            selectMediaServerTab(currentMediaServerTab);
         }
 
         function selectMediaServerTab(tab) {
@@ -1976,7 +2035,213 @@
             }
         }
 
+        // --- Komga (Library / On Deck / Recently Added) ---
+
+        const komgaState = {};  // per-server: {libraryId, search, page}
+
+        function getKomgaState(name) {
+            if (!komgaState[name]) komgaState[name] = {libraryId: '', search: '', page: 0};
+            return komgaState[name];
+        }
+
+        async function loadKomgaLibraries(name) {
+            const sel = document.getElementById(`komga-library-select-${name}`);
+            if (!sel || sel.dataset.loaded) return;
+            try {
+                const response = await fetch(`/api/komga/libraries/${name}`);
+                const data = await response.json();
+                if (data.error || !data.libraries) return;
+                data.libraries.forEach(lib => {
+                    const opt = document.createElement('option');
+                    opt.value = lib.id;
+                    opt.textContent = lib.name;
+                    sel.appendChild(opt);
+                });
+                sel.dataset.loaded = '1';
+            } catch (err) { /* library picker just stays at "All Libraries" */ }
+        }
+
+        function selectKomgaLibrary(name, libraryId) {
+            const state = getKomgaState(name);
+            state.libraryId = libraryId;
+            state.page = 0;
+            loadKomgaTabData(name, 'library', true);
+        }
+
+        let komgaSearchTimer = null;
+        function debounceKomgaSearch(name) {
+            clearTimeout(komgaSearchTimer);
+            komgaSearchTimer = setTimeout(() => {
+                const input = document.getElementById(`komga-search-${name}`);
+                const state = getKomgaState(name);
+                state.search = input.value.trim();
+                state.page = 0;
+                loadKomgaTabData(name, 'library', true);
+            }, 350);
+        }
+
+        function changeKomgaPage(name, page) {
+            getKomgaState(name).page = page;
+            loadKomgaTabData(name, 'library', true);
+        }
+
+        function renderKomgaPagination(name, page, totalPages) {
+            const el = document.getElementById(`komga-pagination-${name}`);
+            if (!el) return;
+            if (totalPages <= 1) { el.innerHTML = ''; return; }
+            el.innerHTML = `
+                <button class="test-btn" ${page <= 0 ? 'disabled' : ''} onclick="changeKomgaPage('${name}', ${page - 1})">&larr; Prev</button>
+                <span style="color: var(--muted); font-size: 0.8rem;">Page ${page + 1} of ${totalPages}</span>
+                <button class="test-btn" ${page >= totalPages - 1 ? 'disabled' : ''} onclick="changeKomgaPage('${name}', ${page + 1})">Next &rarr;</button>
+            `;
+        }
+
+        function komgaSeriesCardHTML(name, item) {
+            return `
+                <div class="library-card" data-title="${item.title.replace(/"/g, '&quot;')}">
+                    <div class="cover-wrap" onclick="openKomgaSeriesModal('${name}', '${item.id}')">
+                        ${item.cover_url ? `<img src="${item.cover_url}" alt="${escapeHtml(item.title)}" onerror="this.style.display='none'; this.nextElementSibling.style.display='flex';">` : ''}
+                        <div class="cover-fallback" ${item.cover_url ? 'style="display:none;"' : ''}>${escapeHtml(item.title)}</div>
+                        ${item.books_in_progress_count ? `<span class="status-badge status-downloaded">${item.books_in_progress_count} in progress</span>` : ''}
+                    </div>
+                    <div class="card-title">${escapeHtml(item.title)}</div>
+                    <div class="card-genre">${item.books_read_count}/${item.books_count} read${item.publisher ? ' &middot; ' + escapeHtml(item.publisher) : ''}</div>
+                </div>
+            `;
+        }
+
+        async function loadKomgaTabData(name, tab, forceReload) {
+            if (tab === 'library') loadKomgaLibraries(name);
+
+            const key = `${name}:${tab}`;
+            const isLibrary = tab === 'library';  // library tab reloads on every filter/page change, never cached
+            if (!isLibrary && loadedMediaServerTabs.has(key) && !forceReload) return;
+
+            const containerId = tab === 'library' ? `mediaserver-library-${name}`
+                : tab === 'ondeck' ? `mediaserver-ondeck-${name}`
+                : `mediaserver-recent-${name}`;
+            const listEl = document.getElementById(containerId);
+            if (!listEl) return;
+            listEl.innerHTML = '<div class="modal-loading">Loading...</div>';
+
+            const state = getKomgaState(name);
+            let url;
+            if (tab === 'library') {
+                const params = new URLSearchParams({page: state.page});
+                if (state.libraryId) params.set('library_id', state.libraryId);
+                if (state.search) params.set('search', state.search);
+                url = `/api/komga/series/${name}?${params.toString()}`;
+            } else if (tab === 'ondeck') {
+                url = `/api/komga/ondeck/${name}`;
+            } else {
+                url = `/api/komga/latest/${name}`;
+            }
+
+            try {
+                const response = await fetch(url);
+                const data = await response.json();
+
+                if (data.error) {
+                    listEl.innerHTML = `<div class="modal-empty">${escapeHtml(data.error)}</div>`;
+                    return;
+                }
+
+                const items = data.items || [];
+                if (!items.length) {
+                    listEl.innerHTML = '<div class="empty">Nothing to show here right now</div>';
+                } else if (tab === 'ondeck') {
+                    listEl.innerHTML = `<div class="library-grid">${items.map(item => `
+                        <div class="library-card" data-title="${item.title.replace(/"/g, '&quot;')}">
+                            <div class="cover-wrap" onclick="openKomgaSeriesModal('${name}', '${item.series_id}')">
+                                ${item.cover_url ? `<img src="${item.cover_url}" alt="${escapeHtml(item.title)}" onerror="this.style.display='none'; this.nextElementSibling.style.display='flex';">` : ''}
+                                <div class="cover-fallback" ${item.cover_url ? 'style="display:none;"' : ''}>${escapeHtml(item.title)}</div>
+                                ${item.page && item.pages_total ? `<span class="status-badge status-downloaded">${item.page}/${item.pages_total}</span>` : ''}
+                            </div>
+                            <div class="card-title">${escapeHtml(item.title)}</div>
+                            <div class="card-genre">${escapeHtml(item.series_title)}${item.number ? ' &middot; #' + escapeHtml(String(item.number)) : ''}</div>
+                        </div>
+                    `).join('')}</div>`;
+                } else {
+                    listEl.innerHTML = `<div class="library-grid">${items.map(item => komgaSeriesCardHTML(name, item)).join('')}</div>`;
+                }
+
+                if (tab === 'library') {
+                    renderKomgaPagination(name, data.page || 0, data.total_pages || 0);
+                }
+                loadedMediaServerTabs.add(key);
+            } catch (err) {
+                listEl.innerHTML = '<div class="modal-empty">Could not load this data.</div>';
+            }
+        }
+
+        async function openKomgaSeriesModal(serverName, seriesId) {
+            const overlay = document.getElementById('modal-overlay');
+            const header = document.getElementById('modal-header');
+            const body = document.getElementById('modal-body');
+
+            header.innerHTML = '<div class="modal-header"><div class="modal-header-text"><div class="modal-title">Loading...</div></div></div>';
+            body.innerHTML = '<div class="modal-loading">Loading...</div>';
+            overlay.classList.add('open');
+
+            try {
+                const response = await fetch(`/api/komga/series/${serverName}/${seriesId}`);
+                const data = await response.json();
+
+                if (data.error || !data.series) {
+                    body.innerHTML = `<div class="modal-empty">${escapeHtml(data.error || 'Could not load series')}</div>`;
+                    return;
+                }
+
+                const s = data.series;
+                header.innerHTML = `
+                    <div class="modal-header">
+                        <div class="modal-cover">
+                            ${s.cover_url
+                                ? `<img src="${s.cover_url}" alt="${escapeHtml(s.title)}" onerror="this.style.display='none'; this.nextElementSibling.style.display='flex';">
+                                   <div class="modal-cover-fallback" style="display:none;">${escapeHtml(s.title)}</div>`
+                                : `<div class="modal-cover-fallback">${escapeHtml(s.title)}</div>`
+                            }
+                        </div>
+                        <div class="modal-header-text">
+                            <div class="modal-title">${escapeHtml(s.title)}</div>
+                            <div style="color: var(--muted); font-size: 0.85rem; margin-top: 0.25rem;">
+                                ${[s.publisher, s.status, `${s.books_read_count}/${s.books_count} read`].filter(Boolean).map(escapeHtml).join(' &middot; ')}
+                            </div>
+                        </div>
+                    </div>
+                `;
+
+                let html = '';
+                if (s.summary) {
+                    html += `<p style="color: var(--muted); font-size: 0.88rem; margin-bottom: 1rem;">${escapeHtml(s.summary)}</p>`;
+                }
+                html += `<div style="margin-bottom: 1rem;"><a class="test-btn" style="text-decoration:none; display:inline-block;" href="${s.open_url}" target="_blank" rel="noopener">Open in Komga</a></div>`;
+                html += '<div class="modal-section-title">Books</div>';
+                html += (data.books || []).map(b => `
+                    <div class="health-item">
+                        <span class="inline-badge ${b.read ? 'badge-success' : (b.in_progress ? 'badge-warning' : 'badge-notice')}">
+                            ${b.read ? 'Read' : (b.in_progress ? 'In Progress' : 'Unread')}
+                        </span>
+                        <span style="flex:1;">
+                            <a href="${b.open_url}" target="_blank" rel="noopener" style="color: inherit;">
+                                ${b.number ? '#' + escapeHtml(String(b.number)) + ' - ' : ''}${escapeHtml(b.title)}
+                            </a>
+                            ${b.in_progress && b.pages_total ? `<span class="health-item-source">&middot; page ${b.page}/${b.pages_total}</span>` : ''}
+                        </span>
+                    </div>
+                `).join('');
+
+                body.innerHTML = html;
+            } catch (err) {
+                body.innerHTML = '<div class="modal-empty">Something went wrong loading this series.</div>';
+            }
+        }
+
         async function loadMediaServerTabData(name, tab, forceReload) {
+            if (KOMGA_MS_TABS.includes(tab)) {
+                return loadKomgaTabData(name, tab, forceReload);
+            }
+
             const key = `${name}:${tab}`;
             if (loadedMediaServerTabs.has(key) && !forceReload) return;
 
@@ -2643,7 +2908,7 @@
                 <p>It's still evolving — I'm actively using it myself and tweaking it as I go. Feel free to try it out, and open an issue if something breaks or you'd like to see a feature added.</p>
 
                 <div class="modal-section-title">Supported Integrations</div>
-                <p>Radarr, Sonarr, Lidarr, and Readarr-style book libraries · Plex, Jellyfin, and Emby · Overseerr and Jellyseerr · qBittorrent and SABnzbd · Prowlarr · Tautulli and Tracearr · Tdarr · TMDB, TVDB, Fanart.tv, and TheAudioDB</p>
+                <p>Radarr, Sonarr, Lidarr, and Readarr-style book libraries · Kapowarr-style comic libraries · Plex, Jellyfin, and Emby · Komga · Overseerr and Jellyseerr · qBittorrent and SABnzbd · Prowlarr · Tautulli and Tracearr · Tdarr · TMDB, TVDB, Fanart.tv, and TheAudioDB</p>
 
                 <div class="modal-section-title">Roadmap</div>
                 <p>Actively evolving — check the GitHub repo's issues for what's currently planned.</p>
