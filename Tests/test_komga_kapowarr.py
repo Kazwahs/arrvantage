@@ -182,6 +182,75 @@ class TestKapowarrLibrary:
         assert result["library_items"] == []
 
 
+class TestKapowarrIssueDetails:
+    """
+    Regression coverage for a bug found after delivery: clicking a
+    Kapowarr library item hit the generic /api/details route, which
+    only had branches for movie/series/artist/author and fell through
+    to "unsupported library kind" for comics.
+    """
+    def test_maps_volume_issues(self, app_module, requests_mock):
+        requests_mock.get(
+            "http://kapowarr.test:5656/api/volumes/1",
+            json={"error": None, "result": {
+                "id": 1, "title": "Batman", "description": "The Dark Knight.",
+                "issues": [
+                    {"id": 10, "issue_number": "1", "calculated_issue_number": 1.0,
+                     "title": "Issue One", "date": "2020-01-01", "files": [{"id": 1, "filepath": "x.cbz", "size": 100}]},
+                    {"id": 11, "issue_number": "2", "calculated_issue_number": 2.0,
+                     "title": "Issue Two", "date": "2020-02-01", "files": []},
+                ],
+            }},
+        )
+
+        result = app_module.fetch_kapowarr_issues(FAKE_KAPOWARR, 1)
+
+        assert result["overview"] == "The Dark Knight."
+        assert result["issues"] == [
+            {"issue_number": "1", "title": "Issue One", "date": "2020-01-01", "has_file": True},
+            {"issue_number": "2", "title": "Issue Two", "date": "2020-02-01", "has_file": False},
+        ]
+
+    def test_missing_description_falls_back(self, app_module, requests_mock):
+        requests_mock.get(
+            "http://kapowarr.test:5656/api/volumes/1",
+            json={"error": None, "result": {"id": 1, "issues": []}},
+        )
+
+        result = app_module.fetch_kapowarr_issues(FAKE_KAPOWARR, 1)
+
+        assert result["overview"] == "No description available."
+        assert result["issues"] == []
+
+    def test_soft_error_envelope_is_surfaced(self, app_module, requests_mock):
+        requests_mock.get(
+            "http://kapowarr.test:5656/api/volumes/999",
+            json={"error": "VolumeNotFound", "result": None},
+        )
+
+        result = app_module.fetch_kapowarr_issues(FAKE_KAPOWARR, 999)
+
+        assert result == {"error": "VolumeNotFound"}
+
+    def test_api_details_route_dispatches_comic_kind(self, app_module, client, requests_mock, admin_session):
+        app_module.APPS["Kapowarr"] = FAKE_KAPOWARR
+        requests_mock.get(
+            "http://kapowarr.test:5656/api/volumes/1",
+            json={"error": None, "result": {
+                "id": 1, "description": "The Dark Knight.",
+                "issues": [{"id": 10, "issue_number": "1", "title": "Issue One", "date": "2020-01-01", "files": []}],
+            }},
+        )
+
+        response = client.get("/api/details/Kapowarr/1")
+
+        assert response.status_code == 200
+        data = response.get_json()
+        assert "error" not in data or data["error"] is None
+        assert data["overview"] == "The Dark Knight."
+        assert data["issues"][0]["title"] == "Issue One"
+
+
 class TestKapowarrDispatch:
     """
     fetch_queue/fetch_history/fetch_health/fetch_diskspace/fetch_library

@@ -2873,8 +2873,9 @@
                 else if (kind === 'series') renderSeriesModal(instance, itemId, data);
                 else if (kind === 'artist') renderArtistModal(instance, data);
                 else if (kind === 'author') renderAuthorModal(data);
+                else if (kind === 'comic') renderComicModal(data);
 
-                loadPlayLinks(title, kind); // no-op for 'author' - books aren't playable
+                loadPlayLinks(title, kind); // no-op for 'author'/'comic' - books and comics aren't playable
             } catch (err) {
                 body.innerHTML = '<div class="modal-loading">Something went wrong loading details.</div>';
             }
@@ -3158,6 +3159,22 @@
             `;
         }
 
+        function renderComicModal(data) {
+            const content = document.getElementById('modal-body');
+            const issueRows = data.issues.map(i => `
+                <div class="item">
+                    <span>#${escapeHtml(String(i.issue_number))} &middot; ${escapeHtml(i.title)}</span>
+                    <span class="col-muted">${i.date || ''} &middot; ${i.has_file ? 'Downloaded' : 'Missing'}</span>
+                </div>
+            `).join('');
+
+            content.innerHTML = `
+                <div class="modal-overview">${data.overview}</div>
+                <div class="modal-section-title">Issues</div>
+                ${issueRows || '<div class="modal-empty">No issues found</div>'}
+            `;
+        }
+
         function renderCast(instance, cast, available) {
             if (!available) return '<div class="modal-empty">Cast info not available for this instance.</div>';
             if (!cast || cast.length === 0) return '<div class="modal-empty">No cast listed.</div>';
@@ -3241,7 +3258,7 @@
         // by title rather than reading arr's own data. ---
 
         async function loadPlayLinks(title, kind) {
-            if (kind === 'author') return; // books aren't playable
+            if (kind === 'author' || kind === 'comic') return; // books and comics aren't playable
 
             try {
                 const response = await fetch(`/api/play-links?title=${encodeURIComponent(title)}&kind=${kind}`);

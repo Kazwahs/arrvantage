@@ -928,6 +928,37 @@ def fetch_kapowarr_library(name: str, config: dict) -> dict:
     return {"error": None, "library_items": library_items, "status_options": status_options, "genre_options": genre_options}
 
 
+def fetch_kapowarr_issues(config: dict, volume_id: int) -> dict:
+    """
+    Volume detail for the item-details modal - GET /api/volumes/<id>
+    already embeds the full issue list on the volume payload
+    (Volume.get_public_data() in Kapowarr's own volumes.py), so this is
+    a single request rather than a separate issues endpoint. Connection
+    and HTTP errors are deliberately left to propagate to the caller
+    (the /api/details route already catches those the same way for
+    every other library kind); only Kapowarr's own soft
+    {"error": ...} envelope is handled here.
+    """
+    result, error = kapowarr_request(config, f"/api/volumes/{volume_id}")
+    if error:
+        return {"error": error}
+
+    result = result or {}
+    issues = [
+        {
+            "issue_number": issue.get("issue_number") or issue.get("calculated_issue_number") or "?",
+            "title": issue.get("title") or "(untitled)",
+            "date": issue.get("date") or "",
+            "has_file": bool(issue.get("files")),
+        }
+        for issue in result.get("issues") or []
+    ]
+    return {
+        "overview": result.get("description") or "No description available.",
+        "issues": issues,
+    }
+
+
 # ---------------------------------------------------------------------------
 # Library
 # ---------------------------------------------------------------------------
@@ -1428,6 +1459,8 @@ def api_details(instance_name, item_id):
             return jsonify(fetch_artist_albums(config, item_id))
         if kind == "author":
             return jsonify(fetch_author_books(config, item_id))
+        if kind == "comic":
+            return jsonify(fetch_kapowarr_issues(config, item_id))
         return jsonify({"error": "unsupported library kind"}), 400
     except requests.exceptions.RequestException as err:
         return jsonify({"error": str(err)}), 502
