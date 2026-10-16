@@ -5,823 +5,15 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>arrVantage</title>
     <link rel="icon" href="/static/icons/favicon.svg" type="image/svg+xml">
-    <style>
-        :root {
-            --bg: #0d1117;
-            --panel: #151b23;
-            --sidebar: #0a0e14;
-            --border: #262f3a;
-            --text: #e6e9ef;
-            --muted: #8891a0;
-            --accent: #4d8fdd;
-            --accent-amber: #e8a33d;
-            --mono: ui-monospace, "SF Mono", "Cascadia Code", "Roboto Mono", Consolas, monospace;
-            --error: #e5484d;
-            --success: #5fd97a;
-        }
-
-        * { box-sizing: border-box; }
-        html, body { height: 100%; margin: 0; }
-
-        body {
-            display: flex;
-            background: var(--bg);
-            color: var(--text);
-            font-family: -apple-system, "Segoe UI", Roboto, sans-serif;
-        }
-
-        /* --- Left sidebar: one tab per instance --- */
-
-        .sidebar {
-            width: 190px;
-            flex-shrink: 0;
-            background: var(--sidebar);
-            border-right: 1px solid var(--border);
-            padding: 1.25rem 0;
-            overflow-y: auto;
-        }
-
-        .sidebar-logo {
-            display: flex;
-            justify-content: center;
-            padding: 1.25rem 1rem 0.5rem 1rem;
-        }
-        .sidebar-logo img { width: 100%; max-width: 150px; }
-
-        .sidebar-divider {
-            border: none;
-            border-top: 1px solid rgba(255, 255, 255, 0.12);
-            margin: 0.75rem 1.25rem 1rem 1.25rem;
-        }
-
-        .sidebar-title {
-            font-size: 0.75rem;
-            text-transform: uppercase;
-            letter-spacing: 0.05em;
-            color: var(--muted);
-            padding: 0 1.25rem 0.75rem 1.25rem;
-        }
-
-        .instance-tab {
-            display: flex;
-            align-items: center;
-            gap: 0.65rem;
-            width: calc(100% - 1.5rem);
-            margin: 0 0.75rem 0.5rem 0.75rem;
-            text-align: left;
-            padding: 0.6rem 0.75rem;
-            background: var(--panel);
-            border: 1px solid var(--border);
-            border-radius: 8px;
-            color: var(--muted);
-            font-size: 0.9rem;
-            cursor: pointer;
-            transition: border-color 0.15s, color 0.15s, background 0.15s;
-        }
-
-        .instance-tab:hover { color: var(--text); border-color: var(--tab-color, var(--accent)); }
-
-        .instance-tab.active {
-            color: var(--text);
-            border-color: var(--tab-color, var(--accent));
-            background: rgba(77, 143, 221, 0.1);
-            box-shadow: inset 3px 0 0 var(--accent-amber), 0 0 14px -4px var(--accent-amber);
-        }
-
-        .tab-open-link {
-            margin-left: auto;
-            padding: 0.2rem;
-            border-radius: 4px;
-            opacity: 0;
-            flex-shrink: 0;
-            transition: opacity 0.15s, background 0.15s;
-        }
-        .instance-tab:hover .tab-open-link,
-        .downloader-tab:hover .tab-open-link,
-        .mediaserver-tab:hover .tab-open-link,
-        .indexer-tab:hover .tab-open-link { opacity: 0.6; }
-        .tab-open-link:hover { opacity: 1 !important; background: rgba(255,255,255,0.08); }
-
-        .instance-logo {
-            width: 22px;
-            height: 22px;
-            border-radius: 5px;
-            object-fit: contain;
-            flex-shrink: 0;
-            background: var(--sidebar);
-        }
-
-
-        /* --- Main area --- */
-
-        .main { flex: 1; display: flex; flex-direction: column; min-width: 0; }
-        .main.alpha-visible { padding-right: 40px; }
-
-        .topbar {
-            display: flex;
-            align-items: center;
-            justify-content: space-between;
-            gap: 1rem;
-            padding: 1rem 1.5rem 0 1.5rem;
-            border-bottom: 1px solid var(--border);
-        }
-
-        .view-tabs { display: flex; gap: 0.5rem; padding-bottom: 0.75rem; }
-
-        .topbar-right { display: flex; align-items: center; gap: 0.5rem; }
-
-        .topbar-search {
-            background: var(--panel);
-            border: 1px solid var(--border);
-            border-radius: 6px;
-            padding: 0.4rem 0.65rem;
-            color: var(--text);
-            font-size: 0.85rem;
-            width: 220px;
-            margin-bottom: 0.6rem;
-        }
-
-        .settings-link {
-            display: flex;
-            align-items: center;
-            justify-content: center;
-            width: 34px;
-            height: 34px;
-            flex-shrink: 0;
-            background: var(--panel);
-            border: 1px solid var(--border);
-            border-radius: 6px;
-            margin-bottom: 0.6rem;
-        }
-        .settings-link:hover { border-color: var(--accent); }
-        .settings-link img { width: 18px; height: 18px; }
-
-        .user-menu {
-            display: flex;
-            align-items: center;
-            gap: 0.5rem;
-            margin-bottom: 0.6rem;
-            padding-left: 0.5rem;
-            border-left: 1px solid var(--border);
-        }
-        .user-name { font-size: 0.82rem; color: var(--muted); }
-        .logout-link { font-size: 0.8rem; color: var(--muted); text-decoration: none; }
-        .logout-link:hover { color: var(--accent); }
-
-        .view-tab {
-            background: var(--panel);
-            border: 1px solid var(--border);
-            border-radius: 8px;
-            color: var(--muted);
-            font-size: 0.9rem;
-            padding: 0.5rem 1rem;
-            cursor: pointer;
-            transition: border-color 0.15s, color 0.15s, background 0.15s;
-        }
-
-        .view-tab:hover { color: var(--text); border-color: var(--accent); }
-        .view-tab.active {
-            color: var(--text);
-            border-color: var(--accent);
-            background: rgba(77, 143, 221, 0.1);
-        }
-        .view-tab.hidden { display: none; }
-        #queue-tab-count { font-family: var(--mono); }
-
-        .content { padding: 1.5rem; overflow-y: auto; }
-
-        .panel { display: none; }
-        .panel.active { display: block; }
-
-        .item {
-            padding: 0.6rem 0;
-            border-top: 1px solid var(--border);
-            font-size: 0.9rem;
-            display: flex;
-            justify-content: space-between;
-        }
-        .item:first-child { border-top: none; }
-
-        .item-time { color: var(--accent); font-size: 0.8rem; white-space: nowrap; margin-left: 1rem; }
-        .item-event { color: var(--muted); font-size: 0.8rem; white-space: nowrap; margin-left: 1rem; }
-        .item-date { color: var(--muted); font-size: 0.78rem; white-space: nowrap; margin-left: 0.75rem; }
-        .item-status { font-size: 0.78rem; white-space: nowrap; margin-left: 1rem; color: var(--muted); }
-
-        .empty, .placeholder {
-            color: var(--muted);
-            font-size: 0.9rem;
-            font-style: italic;
-            padding: 1rem 0;
-        }
-
-        .error { color: var(--error); font-size: 0.9rem; }
-
-        /* --- Queue tab: title/time row plus an optional progress bar
-               and status/error messages underneath --- */
-
-        .queue-item {
-            padding: 0.6rem 0;
-            border-top: 1px solid var(--border);
-        }
-        .queue-item:first-child { border-top: none; }
-
-        .queue-item-row {
-            font-size: 0.9rem;
-            display: flex;
-            justify-content: space-between;
-            align-items: baseline;
-        }
-        .queue-item-meta {
-            color: var(--muted);
-            font-size: 0.78rem;
-            margin-top: 0.2rem;
-        }
-
-        .queue-progress-track {
-            margin-top: 0.4rem;
-            height: 5px;
-            border-radius: 3px;
-            background: var(--border);
-            overflow: hidden;
-        }
-        .queue-progress-fill {
-            height: 100%;
-            background: var(--accent);
-            border-radius: 3px;
-        }
-        .queue-progress-fill.has-issue { background: var(--accent-amber); }
-
-        .queue-status-msg {
-            margin-top: 0.3rem;
-            font-size: 0.8rem;
-            color: var(--accent-amber);
-        }
-        .queue-status-msg.is-error { color: var(--error); }
-
-        /* --- Inline severity badges, for rows (not the absolutely
-               positioned cover-art .status-badge above) --- */
-
-        .inline-badge {
-            display: inline-block;
-            font-size: 0.68rem;
-            font-family: var(--mono);
-            padding: 0.1rem 0.4rem;
-            border-radius: 4px;
-            background: rgba(255, 255, 255, 0.08);
-        }
-        .inline-badge.badge-error { color: var(--error); }
-        .inline-badge.badge-warning { color: var(--accent-amber); }
-        .inline-badge.badge-notice { color: var(--muted); }
-        .inline-badge.badge-success { color: var(--success); }
-
-        /* --- System tab: health checks + disk space --- */
-
-        .health-item {
-            padding: 0.6rem 0;
-            border-top: 1px solid var(--border);
-            display: flex;
-            gap: 0.6rem;
-            align-items: baseline;
-            font-size: 0.88rem;
-        }
-        .health-item:first-child { border-top: none; }
-        .health-item-source { color: var(--muted); font-size: 0.78rem; white-space: nowrap; }
-
-        .diskspace-item { padding: 0.6rem 0; border-top: 1px solid var(--border); }
-        .diskspace-item:first-child { border-top: none; }
-        .diskspace-item-row {
-            display: flex;
-            justify-content: space-between;
-            font-size: 0.88rem;
-            margin-bottom: 0.35rem;
-        }
-        .diskspace-item-row .path { font-family: var(--mono); font-size: 0.82rem; }
-        .diskspace-item-row .free { color: var(--muted); }
-
-        .section-heading {
-            font-size: 0.78rem;
-            text-transform: uppercase;
-            letter-spacing: 0.05em;
-            color: var(--muted);
-            margin: 1.25rem 0 0.4rem 0;
-        }
-        .section-heading:first-child { margin-top: 0; }
-
-        /* Small red dot on an instance's sidebar tab when it has open
-           health warnings/errors - deliberately not a number, so it
-           doesn't compete with the queue count for attention. */
-        .instance-tab { position: relative; }
-        .health-dot {
-            position: absolute;
-            top: 0.5rem;
-            right: 0.6rem;
-            width: 7px;
-            height: 7px;
-            border-radius: 50%;
-            background: var(--error);
-        }
-
-        #system-tab-badge { font-family: var(--mono); color: var(--error); }
-
-        /* --- Request tab: search box + results --- */
-
-        .search-row { display: flex; gap: 0.5rem; margin-bottom: 1rem; }
-
-        .search-row input {
-            flex: 1;
-            background: var(--panel);
-            border: 1px solid var(--border);
-            border-radius: 6px;
-            padding: 0.5rem 0.75rem;
-            color: var(--text);
-            font-size: 0.9rem;
-        }
-
-        .search-row button, .request-btn {
-            background: var(--accent);
-            border: none;
-            border-radius: 6px;
-            color: white;
-            padding: 0.5rem 1rem;
-            font-size: 0.85rem;
-            cursor: pointer;
-        }
-
-        .request-btn { padding: 0.3rem 0.75rem; }
-        .request-btn:disabled { background: var(--muted); cursor: default; }
-
-        /* --- Komga tab: library picker + pagination --- */
-
-        .komga-library-controls { display: flex; gap: 0.5rem; margin-bottom: 1rem; }
-        .komga-library-controls select {
-            background: var(--panel);
-            border: 1px solid var(--border);
-            border-radius: 6px;
-            padding: 0.5rem 0.75rem;
-            color: var(--text);
-            font-size: 0.9rem;
-        }
-        .komga-library-controls input { flex: 1; }
-
-        .komga-pagination {
-            display: flex;
-            align-items: center;
-            justify-content: center;
-            gap: 0.75rem;
-            margin-top: 1.25rem;
-        }
-
-        .search-result {
-            display: flex;
-            align-items: center;
-            gap: 0.75rem;
-            padding: 0.5rem 0;
-            border-top: 1px solid var(--border);
-        }
-
-        .search-result-title { flex: 1; font-size: 0.9rem; }
-        .search-result:first-child { border-top: none; }
-
-        .request-row {
-            display: flex;
-            align-items: center;
-            gap: 0.75rem;
-            padding: 0.5rem 0;
-            border-top: 1px solid var(--border);
-        }
-        .request-row:first-child { border-top: none; }
-
-        .request-thumb {
-            width: 80px;
-            height: 120px;
-            flex-shrink: 0;
-            border-radius: 4px;
-            overflow: hidden;
-            background: var(--sidebar);
-            border: 1px solid var(--border);
-            position: relative;
-        }
-        .request-thumb img { width: 100%; height: 100%; object-fit: cover; display: block; }
-        .request-thumb-fallback { width: 100%; height: 100%; }
-
-        .request-info { min-width: 0; }
-        .request-title { font-size: 0.88rem; }
-        .request-meta { font-size: 0.78rem; color: var(--muted); margin-top: 0.15rem; }
-        .test-ok { color: var(--success); }
-        .test-fail { color: var(--error); }
-        .test-status { font-size: 0.78rem; margin-top: 0.15rem; }
-
-        .section-label {
-            font-size: 0.75rem;
-            text-transform: uppercase;
-            letter-spacing: 0.05em;
-            color: var(--muted);
-            margin: 1.5rem 0 0.5rem 0;
-        }
-        .section-label:first-child { margin-top: 0; }
-
-        /* --- Library: filters + poster card grid --- */
-
-        .filter-row { display: flex; gap: 0.5rem; margin-bottom: 1.25rem; }
-
-        .filter-row select {
-            background: var(--panel);
-            border: 1px solid var(--border);
-            border-radius: 6px;
-            padding: 0.4rem 0.6rem;
-            color: var(--text);
-            font-size: 0.85rem;
-        }
-
-        .sort-dir-btn {
-            background: var(--panel);
-            border: 1px solid var(--border);
-            border-radius: 6px;
-            padding: 0.4rem 0.7rem;
-            color: var(--text);
-            font-size: 0.9rem;
-            cursor: pointer;
-        }
-        .sort-dir-btn:hover { color: var(--accent); border-color: var(--accent); }
-
-        .library-grid {
-            display: grid;
-            grid-template-columns: repeat(auto-fill, minmax(140px, 1fr));
-            gap: 1rem;
-        }
-
-        /* --- Alphabet index (right side, Library tab only) --- */
-
-        .alpha-index {
-            width: 40px;
-            flex-shrink: 0;
-            display: flex;
-            flex-direction: column;
-            align-items: stretch;
-            justify-content: center;
-            gap: 1px;
-            padding: 0.5rem 0;
-            border-left: 1px solid var(--border);
-            background: var(--sidebar);
-            overflow-y: auto;
-            position: fixed;
-            top: 0;
-            right: 0;
-            height: 100vh;
-        }
-
-        .alpha-index.hidden { display: none; }
-
-        .alpha-index button {
-            background: none;
-            border: none;
-            color: var(--muted);
-            font-size: 1.3rem;
-            cursor: pointer;
-            padding: 1px 0;
-        }
-        .alpha-index button:hover { color: var(--accent); }
-
-        .library-card {
-            display: flex;
-            flex-direction: column;
-        }
-
-        .cover-wrap {
-            width: 100%;
-            aspect-ratio: 2 / 3;
-            border-radius: 8px;
-            overflow: hidden;
-            background: var(--panel);
-            border: 1px solid var(--border);
-            position: relative;
-            cursor: pointer;
-            transition: border-color 0.15s;
-        }
-
-        .cover-wrap:hover { border-color: var(--accent); }
-
-        .cover-wrap img {
-            width: 100%;
-            height: 100%;
-            object-fit: cover;
-            display: block;
-        }
-
-        .cover-fallback {
-            position: absolute;
-            top: 0; left: 0; right: 0; bottom: 0;
-            width: 100%;
-            height: 100%;
-            display: flex;
-            align-items: center;
-            justify-content: center;
-            color: var(--muted);
-            font-size: 0.75rem;
-            text-align: center;
-            padding: 0.5rem;
-        }
-
-        .status-badge {
-            position: absolute;
-            top: 0.4rem;
-            right: 0.4rem;
-            font-size: 0.68rem;
-            font-family: var(--mono);
-            padding: 0.15rem 0.4rem;
-            border-radius: 4px;
-            background: rgba(13, 17, 23, 0.85);
-            color: var(--text);
-        }
-
-        .status-badge.status-downloaded, .status-badge.status-complete { color: var(--success); }
-        .status-badge.status-missing { color: var(--error); }
-        .status-badge.status-partial { color: var(--accent); }
-
-        .card-title {
-            font-size: 0.85rem;
-            margin-top: 0.5rem;
-            line-height: 1.25;
-        }
-
-        .card-genre {
-            font-size: 0.75rem;
-            color: var(--muted);
-            margin-top: 0.15rem;
-        }
-
-        .card-actions { display: flex; gap: 0.35rem; margin-top: 0.5rem; }
-
-        .replace-btn-row { text-align: right; margin-top: 1.25rem; }
-
-        .replace-btn {
-            background: #ef4444;
-            color: #000;
-            border: none;
-            border-radius: 6px;
-            font-size: 1.05rem;
-            font-weight: 700;
-            padding: 0.45rem 0.9rem;
-            cursor: pointer;
-        }
-        .replace-btn:hover:not(:disabled) { background: #dc2626; }
-        .replace-btn:disabled { opacity: 0.6; cursor: default; }
-
-        .mini-btn {
-            flex: 1;
-            background: var(--sidebar);
-            border: 1px solid var(--border);
-            border-radius: 5px;
-            color: var(--text);
-            font-size: 0.7rem;
-            padding: 0.3rem 0.25rem;
-            cursor: pointer;
-        }
-        .mini-btn:hover { border-color: var(--accent); color: var(--accent); }
-        .mini-btn:disabled { opacity: 0.6; cursor: default; }
-
-        .release-row {
-            display: flex;
-            justify-content: space-between;
-            align-items: center;
-            gap: 0.75rem;
-            padding: 0.6rem 0;
-            border-top: 1px solid var(--border);
-        }
-        .release-row:first-child { border-top: none; }
-        .release-row.release-rejected { opacity: 0.5; }
-
-        .release-info { min-width: 0; }
-        .release-title {
-            font-size: 0.85rem;
-            overflow: hidden;
-            text-overflow: ellipsis;
-            white-space: nowrap;
-        }
-        .release-meta { font-size: 0.75rem; color: var(--muted); margin-top: 0.15rem; }
-
-        /* --- Detail modal --- */
-
-        .modal-overlay {
-            display: none;
-            position: fixed;
-            top: 0; left: 0; right: 0; bottom: 0;
-            background: rgba(0, 0, 0, 0.6);
-            z-index: 100;
-            align-items: center;
-            justify-content: center;
-            padding: 2rem;
-        }
-
-        .modal-overlay.open { display: flex; }
-
-        .modal-box {
-            background: var(--panel);
-            border: 1px solid var(--border);
-            border-radius: 10px;
-            max-width: 640px;
-            width: 100%;
-            max-height: 85vh;
-            overflow-y: auto;
-            padding: 1.5rem;
-            position: relative;
-        }
-
-        .modal-close { position: absolute; top: 1rem; right: 1rem; background: none; border: none; color: var(--muted); font-size: 1.3rem; cursor: pointer; line-height: 1; }
-        .modal-close:hover { color: var(--text); }
-
-        .modal-header {
-            display: flex;
-            gap: 1rem;
-            margin-bottom: 1.25rem;
-            padding-right: 2rem;
-        }
-
-        .modal-cover {
-            width: 100px;
-            flex-shrink: 0;
-            aspect-ratio: 2 / 3;
-            border-radius: 8px;
-            overflow: hidden;
-            background: var(--sidebar);
-            border: 1px solid var(--border);
-        }
-
-        .modal-cover img { width: 100%; height: 100%; object-fit: cover; display: block; }
-
-        .modal-cover-fallback {
-            width: 100%;
-            height: 100%;
-            display: flex;
-            align-items: center;
-            justify-content: center;
-            color: var(--muted);
-            font-size: 0.7rem;
-            text-align: center;
-            padding: 0.4rem;
-        }
-
-        .modal-header-text { display: flex; flex-direction: column; justify-content: center; }
-        .modal-title { font-size: 1.2rem; font-weight: 600; margin: 0; line-height: 1.3; }
-        .modal-rating { color: var(--accent); font-size: 0.85rem; margin-top: 0.4rem; }
-
-        .modal-overview { font-size: 0.9rem; color: var(--text); line-height: 1.5; margin-bottom: 1.25rem; }
-
-        .modal-section-title {
-            font-size: 0.75rem;
-            text-transform: uppercase;
-            letter-spacing: 0.05em;
-            color: var(--muted);
-            margin: 1.25rem 0 0.5rem 0;
-        }
-        #modal-body p { line-height: 1.55; font-size: 0.9rem; margin: 0 0 0.5rem 0; }
-        #modal-body p a { color: var(--accent); }
-        .modal-section-title:first-of-type { margin-top: 0; }
-
-        .cast-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(105px, 1fr)); gap: 0.5rem; }
-        .cast-entry { font-size: 0.82rem; }
-
-        .cast-photo {
-            width: 100%;
-            aspect-ratio: 1 / 1;
-            border-radius: 8px;
-            overflow: hidden;
-            background: var(--sidebar);
-            margin-bottom: 0.4rem;
-        }
-        .cast-photo img { width: 100%; height: 100%; object-fit: cover; display: block; }
-        .cast-photo-clickable { cursor: pointer; transition: opacity 0.15s; }
-        .cast-photo-clickable:hover { opacity: 0.75; }
-        .cast-name { display: block; }
-        .cast-name-clickable { color: var(--accent); cursor: pointer; }
-        .cast-name-clickable:hover { text-decoration: underline; }
-        .cast-role { color: var(--muted); font-size: 0.78rem; }
-
-        .back-to-cast-btn {
-            background: none;
-            border: none;
-            color: var(--accent);
-            font-size: 0.85rem;
-            cursor: pointer;
-            padding: 0;
-            margin-bottom: 1rem;
-        }
-        .back-to-cast-btn:hover { text-decoration: underline; }
-
-        .expandable-row {
-            padding: 0.6rem 0;
-            border-top: 1px solid var(--border);
-            cursor: pointer;
-            font-size: 0.9rem;
-            display: flex;
-            justify-content: space-between;
-        }
-        .expandable-row:first-child { border-top: none; }
-
-        .collection-badge { font-size: 0.68rem; }
-        .expandable-row:hover { color: var(--accent); }
-
-        .sub-list { padding: 0.4rem 0 0.6rem 1rem; }
-        .sub-list .item { padding: 0.3rem 0; font-size: 0.85rem; border-top: none; }
-
-        .episode-row {
-            padding: 0.5rem 0;
-            border-top: 1px solid var(--border);
-            font-size: 0.85rem;
-        }
-        .episode-row:first-child { border-top: none; }
-        .episode-main { display: flex; justify-content: space-between; gap: 0.75rem; }
-
-        .modal-loading, .modal-empty { color: var(--muted); font-size: 0.9rem; padding: 1rem 0; }
-
-        .play-links-row { display: flex; flex-wrap: wrap; gap: 0.6rem; margin-bottom: 1.25rem; }
-
-        .play-btn {
-            flex: 1;
-            min-width: 120px;
-            text-align: center;
-            padding: 0.55rem;
-            border-radius: 6px;
-            font-size: 0.85rem;
-            font-weight: 600;
-            text-decoration: none;
-            color: white;
-            background: var(--accent);
-        }
-        .play-btn:hover { filter: brightness(1.1); }
-
-        .play-btn-plex { background: #f5c518; color: #1a1a1a; }
-        .play-btn-jellyfin { background: #8b5cf6; }
-        .play-btn-emby { background: #52c41a; }
-        /* --- Mobile layout (phones / narrow windows) --- */
-
-        @media (max-width: 768px) {
-            body { flex-direction: column; height: auto; min-height: 100%; }
-
-            .sidebar {
-                width: 100%;
-                display: flex;
-                flex-direction: row;
-                gap: 0.5rem;
-                padding: 0.75rem;
-                overflow-x: auto;
-                border-right: none;
-                border-bottom: 1px solid var(--border);
-            }
-            .sidebar-logo { display: none; }
-            .sidebar-divider { display: none; }
-            .sidebar-title { display: none; }
-            .instance-tab {
-                width: auto;
-                flex-shrink: 0;
-                margin: 0;
-                white-space: nowrap;
-            }
-
-            .alpha-index { display: none; }
-
-            .main { min-width: 0; }
-            .main.alpha-visible { padding-right: 0; }
-
-            .topbar {
-                flex-wrap: wrap;
-                gap: 0.5rem;
-                padding: 0.75rem 0.75rem 0 0.75rem;
-            }
-            .view-tabs { flex-wrap: wrap; gap: 0.4rem; padding-bottom: 0.5rem; }
-            .view-tab { padding: 0.45rem 0.75rem; font-size: 0.82rem; }
-
-            .topbar-right { width: 100%; flex-wrap: wrap; }
-            .topbar-search { width: 100%; flex: 1; min-width: 0; }
-            .user-menu { margin-bottom: 0.6rem; }
-
-            .content { padding: 1rem; }
-
-            .library-grid { grid-template-columns: repeat(auto-fill, minmax(105px, 1fr)); gap: 0.75rem; }
-            .card-title { font-size: 0.8rem; }
-            .card-actions { flex-direction: column; }
-
-            .filter-row { flex-wrap: wrap; }
-            .filter-row select { flex: 1; min-width: 45%; }
-
-            .modal-overlay { padding: 0.75rem; align-items: flex-end; }
-            .modal-box { max-height: 92vh; padding: 1.25rem; }
-            .modal-header { gap: 0.75rem; }
-            .modal-cover { width: 80px; }
-
-            .play-links-row { flex-direction: column; }
-            .play-btn { min-width: 0; }
-
-            .search-row { flex-direction: column; }
-
-            .request-row, .search-result { flex-wrap: wrap; }
-        }
-    </style>
+    <meta name="theme-color" content="#0d1117">
+    <link rel="preload" href="{{ url_for('static', filename='fonts/Geist-Variable.woff2') }}" as="font" type="font/woff2" crossorigin>
+    <link rel="stylesheet" href="{{ asset_url('css/app.css') }}">
+    <link rel="stylesheet" href="{{ asset_url('css/dashboard.css') }}">
 </head>
 <body>
 
-    <div class="sidebar">
-        <div class="sidebar-logo" onclick="selectHome()" style="cursor: pointer;" title="Home">
+    <nav class="sidebar" aria-label="Services">
+        <div class="sidebar-logo" role="button" tabindex="0" aria-label="Home" onclick="selectHome()" title="Home">
             <img src="/static/icons/logo.svg" alt="arrVantage">
         </div>
         <hr class="sidebar-divider">
@@ -841,7 +33,7 @@
             {% endif %}
             <img class="instance-logo" src="{{ instance.logo_url }}" alt="" onerror="this.style.display='none';">
             {{ instance.name }}
-            <span class="tab-open-link" title="Open {{ instance.name }} directly"
+            <span class="tab-open-link" role="link" tabindex="0" aria-label="Open {{ instance.name }} directly" title="Open {{ instance.name }} directly"
                   onclick="event.stopPropagation(); openDirectly('{{ instance.url }}');">
                 <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
                     <path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6"></path>
@@ -863,7 +55,7 @@
                 onclick="selectDownloader('{{ dl.name }}')">
             <img class="instance-logo" src="{{ dl.logo_url }}" alt="" onerror="this.style.display='none';">
             {{ dl.name }}
-            <span class="tab-open-link" title="Open {{ dl.name }} directly"
+            <span class="tab-open-link" role="link" tabindex="0" aria-label="Open {{ dl.name }} directly" title="Open {{ dl.name }} directly"
                   onclick="event.stopPropagation(); openDirectly('{{ dl.url }}');">
                 <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
                     <path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6"></path>
@@ -886,7 +78,7 @@
                 onclick="selectMediaServer('{{ ms.name }}')">
             <img class="instance-logo" src="{{ ms.logo_url }}" alt="" onerror="this.style.display='none';">
             {{ ms.name }}
-            <span class="tab-open-link" title="Open {{ ms.name }} directly"
+            <span class="tab-open-link" role="link" tabindex="0" aria-label="Open {{ ms.name }} directly" title="Open {{ ms.name }} directly"
                   onclick="event.stopPropagation(); openDirectly('{{ ms.open_url }}');">
                 <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
                     <path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6"></path>
@@ -909,7 +101,7 @@
                 onclick="selectIndexerService('{{ idx.name }}')">
             <img class="instance-logo" src="{{ idx.logo_url }}" alt="" onerror="this.style.display='none';">
             {{ idx.name }}
-            <span class="tab-open-link" title="Open {{ idx.name }} directly"
+            <span class="tab-open-link" role="link" tabindex="0" aria-label="Open {{ idx.name }} directly" title="Open {{ idx.name }} directly"
                   onclick="event.stopPropagation(); openDirectly('{{ idx.url }}');">
                 <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
                     <path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6"></path>
@@ -935,13 +127,14 @@
         </button>
         {% endfor %}
         {% endif %}
-    </div>
+    </nav>
 
-    <div class="main">
+    <main class="main">
+        <h1 class="sr-only">arrVantage</h1>
         <div id="home-view">
             <div class="topbar">
                 <div class="view-tabs">
-                    <span style="padding: 0.5rem 0.25rem; font-weight: 600;">Home</span>
+                    <span class="view-title">Home</span>
                     <input type="text" id="cross-instance-search" class="topbar-search"
                            placeholder="Search across all your libraries..."
                            onkeydown="if (event.key === 'Enter') runCrossInstanceSearch();">
@@ -954,9 +147,9 @@
                         <img src="/static/icons/settings.svg" alt="Settings">
                     </a>
                     {% endif %}
-                    <a class="settings-link" href="javascript:void(0)" onclick="showAbout()" title="About arrVantage">
-                        <img src="/static/icons/about.svg" alt="About">
-                    </a>
+                    <button type="button" class="settings-link" onclick="showAbout()" title="About arrVantage" aria-label="About arrVantage">
+                        <img src="/static/icons/about.svg" alt="">
+                    </button>
                 </div>
             </div>
             <div class="content">
@@ -975,16 +168,16 @@
                 <button class="view-tab" data-view="system" onclick="selectView('system')">System <span id="system-tab-badge"></span></button>
             </div>
             <div class="topbar-right">
-                <a class="test-btn" id="open-instance-link" href="#" target="_blank" rel="noopener" style="text-decoration: none; display: inline-block;">Open</a>
+                <a class="test-btn" id="open-instance-link" href="#" target="_blank" rel="noopener">Open</a>
                 <input type="text" id="global-search" class="topbar-search" placeholder="Search this tab..." oninput="applyGlobalSearch()">
                 {% if is_admin %}
                 <a class="settings-link" href="/settings" title="Settings">
                     <img src="/static/icons/settings.svg" alt="Settings">
                 </a>
                 {% endif %}
-                <a class="settings-link" href="javascript:void(0)" onclick="showAbout()" title="About arrVantage">
-                    <img src="/static/icons/about.svg" alt="About">
-                </a>
+                <button type="button" class="settings-link" onclick="showAbout()" title="About arrVantage" aria-label="About arrVantage">
+                        <img src="/static/icons/about.svg" alt="">
+                    </button>
                 <div class="user-menu">
                     <span class="user-name">{{ username }}</span>
                     <a class="logout-link" href="/logout">Log out</a>
@@ -1037,7 +230,7 @@
                              data-cover="{{ item.cover_url }}"
                              data-release-date="{{ item.release_date }}"
                              data-date-added="{{ item.date_added }}">
-                            <div class="cover-wrap" onclick="openDetails(this, '{{ instance.name }}', {{ item.item_id }})">
+                            <div class="cover-wrap" role="button" tabindex="0" onclick="openDetails(this, '{{ instance.name }}', {{ item.item_id }})">
                                 {% if item.cover_url %}
                                     <img src="{{ item.cover_url }}" alt="{{ item.title }}" loading="lazy"
                                          onerror="this.style.display='none'; this.nextElementSibling.style.display='flex';">
@@ -1064,7 +257,7 @@
                         {% else %}
                             {% for col in instance.collections %}
                             <div class="library-card" data-title="{{ col.title }}">
-                                <div class="cover-wrap" onclick="openCollectionModal('{{ instance.name }}', {{ col.collection_id }})">
+                                <div class="cover-wrap" role="button" tabindex="0" onclick="openCollectionModal('{{ instance.name }}', {{ col.collection_id }})">
                                     {% if col.cover_url %}
                                         <img src="{{ col.cover_url }}" alt="{{ col.title }}" loading="lazy"
                                              onerror="this.style.display='none'; this.nextElementSibling.style.display='flex';">
@@ -1186,7 +379,7 @@
                     <div class="health-item">
                         <span class="inline-badge badge-{{ h.type }}">{{ h.type }}</span>
                         <span>
-                            {% if h.wiki_url %}<a href="{{ h.wiki_url }}" target="_blank" rel="noopener" style="color: inherit;">{{ h.message }}</a>{% else %}{{ h.message }}{% endif %}
+                            {% if h.wiki_url %}<a href="{{ h.wiki_url }}" target="_blank" rel="noopener" class="link-inherit">{{ h.message }}</a>{% else %}{{ h.message }}{% endif %}
                             {% if h.source %}<span class="health-item-source">&middot; {{ h.source }}</span>{% endif %}
                         </span>
                     </div>
@@ -1200,14 +393,19 @@
                     <div class="empty">No root folders reported</div>
                 {% else %}
                     {% for d in instance.diskspace_items %}
+                    {# Low/critical thresholds: under 15% free is "low", under 7% is "critical".
+                       Shown as a word as well as a color, never color alone. #}
+                    {% set disk_tier = '' if d.percent_free is none else ('critical' if d.percent_free < 7 else ('low' if d.percent_free < 15 else '')) %}
                     <div class="diskspace-item">
                         <div class="diskspace-item-row">
                             <span class="path">{{ d.path }}{% if d.label %} ({{ d.label }}){% endif %}</span>
-                            <span class="free">{{ d.free_human }} free of {{ d.total_human }}</span>
+                            <span class="free{% if disk_tier %} is-{{ disk_tier }}{% endif %}">
+                                {% if disk_tier == 'critical' %}Critically low &middot; {% elif disk_tier == 'low' %}Low &middot; {% endif %}{{ d.free_human }} free of {{ d.total_human }}{% if d.percent_free is not none %} ({{ d.percent_free }}%){% endif %}
+                            </span>
                         </div>
                         {% if d.percent_free is not none %}
-                        <div class="queue-progress-track">
-                            <div class="queue-progress-fill {% if d.percent_free < 10 %}has-issue{% endif %}" style="width: {{ 100 - d.percent_free }}%;"></div>
+                        <div class="queue-progress-track" role="progressbar" aria-label="Space used on {{ d.path }}" aria-valuemin="0" aria-valuemax="100" aria-valuenow="{{ 100 - d.percent_free }}">
+                            <div class="queue-progress-fill{% if disk_tier == 'critical' %} is-critical{% elif disk_tier == 'low' %} has-issue{% endif %}" style="width: {{ 100 - d.percent_free }}%;"></div>
                         </div>
                         {% endif %}
                     </div>
@@ -1222,7 +420,7 @@
         <div id="downloaders-view" style="display:none;">
             <div class="topbar">
                 <div class="view-tabs">
-                    <span id="downloader-title-label" style="padding: 0.5rem 0.25rem; font-weight: 600;"></span>
+                    <span id="downloader-title-label" class="view-title"></span>
                 </div>
                 <div class="topbar-right">
                     <button class="test-btn" onclick="refreshCurrentDownloader()">Refresh</button>
@@ -1231,9 +429,9 @@
                         <img src="/static/icons/settings.svg" alt="Settings">
                     </a>
                     {% endif %}
-                    <a class="settings-link" href="javascript:void(0)" onclick="showAbout()" title="About arrVantage">
-                        <img src="/static/icons/about.svg" alt="About">
-                    </a>
+                    <button type="button" class="settings-link" onclick="showAbout()" title="About arrVantage" aria-label="About arrVantage">
+                        <img src="/static/icons/about.svg" alt="">
+                    </button>
                 </div>
             </div>
             <div class="content">
@@ -1248,7 +446,7 @@
         <div id="indexers-view" style="display:none;">
             <div class="topbar">
                 <div class="view-tabs">
-                    <span id="indexer-service-title-label" style="padding: 0.5rem 0.25rem; font-weight: 600;"></span>
+                    <span id="indexer-service-title-label" class="view-title"></span>
                 </div>
                 <div class="topbar-right">
                     <button class="test-btn" id="test-all-btn" onclick="testAllIndexers(currentIndexerService)">Test All</button>
@@ -1258,9 +456,9 @@
                         <img src="/static/icons/settings.svg" alt="Settings">
                     </a>
                     {% endif %}
-                    <a class="settings-link" href="javascript:void(0)" onclick="showAbout()" title="About arrVantage">
-                        <img src="/static/icons/about.svg" alt="About">
-                    </a>
+                    <button type="button" class="settings-link" onclick="showAbout()" title="About arrVantage" aria-label="About arrVantage">
+                        <img src="/static/icons/about.svg" alt="">
+                    </button>
                 </div>
             </div>
             <div class="content">
@@ -1292,9 +490,9 @@
                         <img src="/static/icons/settings.svg" alt="Settings">
                     </a>
                     {% endif %}
-                    <a class="settings-link" href="javascript:void(0)" onclick="showAbout()" title="About arrVantage">
-                        <img src="/static/icons/about.svg" alt="About">
-                    </a>
+                    <button type="button" class="settings-link" onclick="showAbout()" title="About arrVantage" aria-label="About arrVantage">
+                        <img src="/static/icons/about.svg" alt="">
+                    </button>
                 </div>
             </div>
             <div class="content">
@@ -1332,7 +530,7 @@
         <div id="transcoders-view" style="display:none;">
             <div class="topbar">
                 <div class="view-tabs">
-                    <span id="transcoder-title-label" style="padding: 0.5rem 0.25rem; font-weight: 600;"></span>
+                    <span id="transcoder-title-label" class="view-title"></span>
                 </div>
                 <div class="topbar-right">
                     <button class="test-btn" onclick="refreshCurrentTranscoder()">Refresh</button>
@@ -1341,9 +539,9 @@
                         <img src="/static/icons/settings.svg" alt="Settings">
                     </a>
                     {% endif %}
-                    <a class="settings-link" href="javascript:void(0)" onclick="showAbout()" title="About arrVantage">
-                        <img src="/static/icons/about.svg" alt="About">
-                    </a>
+                    <button type="button" class="settings-link" onclick="showAbout()" title="About arrVantage" aria-label="About arrVantage">
+                        <img src="/static/icons/about.svg" alt="">
+                    </button>
                 </div>
             </div>
             <div class="content">
@@ -1354,9 +552,9 @@
                 {% endfor %}
             </div>
         </div>
-    </div>
+    </main>
 
-    <div class="alpha-index" id="alpha-index">
+    <div class="alpha-index hidden" id="alpha-index" role="group" aria-label="Jump to letter">
         <button onclick="jumpToLetter('#')">#</button>
         {% for letter in "ABCDEFGHIJKLMNOPQRSTUVWXYZ" %}
         <button onclick="jumpToLetter('{{ letter }}')">{{ letter }}</button>
@@ -1364,8 +562,8 @@
     </div>
 
     <div class="modal-overlay" id="modal-overlay" onclick="if(event.target === this) closeDetails()">
-        <div class="modal-box">
-            <button class="modal-close" onclick="closeDetails()">&times;</button>
+        <div class="modal-box" role="dialog" aria-modal="true" aria-label="Details">
+            <button class="modal-close" onclick="closeDetails()" aria-label="Close">&times;</button>
             <div id="modal-header"></div>
             <div id="modal-body"></div>
         </div>
@@ -1435,6 +633,68 @@
             {% endfor %}
         };
 
+        // --- Keyboard support -------------------------------------------------
+        // Anything marked role="button"/"link" that isn't a real <button>/<a>
+        // (cover cards, the logo, "open directly" icons) activates on
+        // Enter/Space. Escape closes the detail modal.
+        document.addEventListener('keydown', (e) => {
+            if (e.key === 'Escape') {
+                const overlay = document.getElementById('modal-overlay');
+                if (overlay && overlay.classList.contains('open')) closeDetails();
+                return;
+            }
+            if (e.key === 'Tab') {
+                trapModalFocus(e);
+                return;
+            }
+            if (e.key !== 'Enter' && e.key !== ' ') return;
+            const el = e.target;
+            if (!el || !el.matches || !el.matches('[role="button"], [role="link"]')) return;
+            if (el.tagName === 'BUTTON' || el.tagName === 'A') return;
+            e.preventDefault();
+            el.click();
+        });
+
+        // Keep Tab inside the detail modal while it's open.
+        function trapModalFocus(e) {
+            const overlay = document.getElementById('modal-overlay');
+            if (!overlay || !overlay.classList.contains('open')) return;
+            const focusable = Array.from(overlay.querySelectorAll(
+                'a[href], button:not([disabled]), input, select, textarea, [tabindex]:not([tabindex="-1"])'
+            )).filter(el => el.offsetParent !== null);
+            if (!focusable.length) return;
+            const first = focusable[0];
+            const last = focusable[focusable.length - 1];
+            if (e.shiftKey && (document.activeElement === first || !overlay.contains(document.activeElement))) {
+                e.preventDefault();
+                last.focus();
+            } else if (!e.shiftKey && (document.activeElement === last || !overlay.contains(document.activeElement))) {
+                e.preventDefault();
+                first.focus();
+            }
+        }
+
+        // Move focus into the modal when it opens, and back to whatever
+        // opened it when it closes. Watching the class (rather than
+        // patching every opener) keeps this to one place.
+        (function watchModalFocus() {
+            const overlay = document.getElementById('modal-overlay');
+            if (!overlay) return;
+            let lastFocus = null;
+            let wasOpen = false;
+            new MutationObserver(() => {
+                const isOpen = overlay.classList.contains('open');
+                if (isOpen && !wasOpen) {
+                    lastFocus = document.activeElement;
+                    const closeBtn = overlay.querySelector('.modal-close');
+                    if (closeBtn) closeBtn.focus();
+                } else if (!isOpen && wasOpen && lastFocus && lastFocus.focus) {
+                    lastFocus.focus();
+                }
+                wasOpen = isOpen;
+            }).observe(overlay, { attributes: true, attributeFilter: ['class'] });
+        })();
+
         function selectHome() {
             document.querySelectorAll('.instance-tab').forEach(el => el.classList.remove('active'));
 
@@ -1444,6 +704,7 @@
             document.getElementById('mediaservers-view').style.display = 'none';
             document.getElementById('transcoders-view').style.display = 'none';
             document.getElementById('home-view').style.display = 'block';
+            updateAlphaIndexVisibility();
 
             loadHomeStats();
         }
@@ -1460,25 +721,25 @@
 
                 if (data.instances && data.instances.length) {
                     html += '<div class="modal-section-title">Libraries</div>';
-                    html += '<div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 0.75rem; margin-bottom: 1.5rem;">';
+                    html += '<div class="stat-grid">';
                     html += data.instances.map(inst => inst.error ? `
-                        <div style="background: var(--panel); border: 1px solid var(--border); border-radius: 8px; padding: 0.9rem;">
-                            <div style="font-weight: 600; margin-bottom: 0.5rem;">${escapeHtml(inst.name)}</div>
-                            <div class="test-fail" style="font-size: 0.8rem;">${escapeHtml(inst.error)}</div>
+                        <div class="stat-card">
+                            <div class="stat-card-name stat-card-name--solo">${escapeHtml(inst.name)}</div>
+                            <div class="test-fail stat-error">${escapeHtml(inst.error)}</div>
                         </div>
                     ` : `
-                        <div style="background: var(--panel); border: 1px solid var(--border); border-radius: 8px; padding: 0.9rem;">
-                            <div style="display: flex; align-items: center; gap: 0.5rem; margin-bottom: 0.6rem;">
-                                <img src="${inst.icon_url}" alt="" style="width: 20px; height: 20px;" onerror="this.style.display='none';">
-                                <span style="font-weight: 600;">${escapeHtml(inst.name)}</span>
+                        <div class="stat-card">
+                            <div class="stat-card-head">
+                                <img class="stat-icon" src="${inst.icon_url}" alt="" onerror="this.style.display='none';">
+                                <span class="stat-card-name">${escapeHtml(inst.name)}</span>
                             </div>
-                            <div style="font-family: var(--mono); font-size: 1.4rem; font-weight: 700;">${inst.total.toLocaleString()}</div>
-                            <div style="font-size: 0.78rem; color: var(--muted); margin-bottom: 0.4rem;">${escapeHtml(inst.unit)} in library</div>
-                            <div style="font-size: 0.82rem; margin-bottom: 0.4rem;">
+                            <div class="stat-value">${inst.total.toLocaleString()}</div>
+                            <div class="stat-label">${escapeHtml(inst.unit)} in library</div>
+                            <div class="stat-detail">
                                 <span class="test-ok">${inst.downloaded.toLocaleString()} downloaded</span>
                                 &middot; <span class="test-fail">${inst.missing.toLocaleString()} missing</span>
                             </div>
-                            <div style="font-family: var(--mono); font-size: 0.78rem; color: var(--muted);">${escapeHtml(inst.size_display)} on disk</div>
+                            <div class="stat-foot">${escapeHtml(inst.size_display)} on disk</div>
                         </div>
                     `).join('');
                     html += '</div>';
@@ -1486,15 +747,15 @@
 
                 if (data.media_servers && data.media_servers.length) {
                     html += '<div class="modal-section-title">Media Servers</div>';
-                    html += '<div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 0.75rem; margin-bottom: 1.5rem;">';
+                    html += '<div class="stat-grid">';
                     html += data.media_servers.map(ms => `
-                        <div style="background: var(--panel); border: 1px solid var(--border); border-radius: 8px; padding: 0.9rem;">
-                            <div style="display: flex; align-items: center; gap: 0.5rem; margin-bottom: 0.75rem;">
-                                <img src="${ms.icon_url}" alt="" style="width: 22px; height: 22px;" onerror="this.style.display='none';">
-                                <span style="font-weight: 600;">${escapeHtml(ms.name)}</span>
+                        <div class="stat-card">
+                            <div class="stat-card-head">
+                                <img class="stat-icon" src="${ms.icon_url}" alt="" onerror="this.style.display='none';">
+                                <span class="stat-card-name">${escapeHtml(ms.name)}</span>
                             </div>
-                            <div style="display: flex; gap: 0.5rem;">
-                                <a href="${ms.open_url}" target="_blank" rel="noopener" class="mini-btn" style="text-decoration: none; text-align: center;">Open</a>
+                            <div class="stat-actions">
+                                <a href="${ms.open_url}" target="_blank" rel="noopener" class="mini-btn">Open</a>
                                 <button class="mini-btn" onclick="rescanMediaServer('${ms.name}', this)">Rescan Library</button>
                             </div>
                         </div>
@@ -1504,25 +765,25 @@
 
                 if (data.indexers && data.indexers.length) {
                     html += '<div class="modal-section-title">Indexers</div>';
-                    html += '<div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 0.75rem; margin-bottom: 1.5rem;">';
+                    html += '<div class="stat-grid">';
                     html += data.indexers.map(svc => svc.error ? `
-                        <div style="background: var(--panel); border: 1px solid var(--border); border-radius: 8px; padding: 0.9rem;">
-                            <div style="display: flex; align-items: center; gap: 0.5rem; margin-bottom: 0.5rem;">
-                                <img src="${svc.icon_url}" alt="" style="width: 22px; height: 22px;" onerror="this.style.display='none';">
-                                <span style="font-weight: 600;">${escapeHtml(svc.name)}</span>
+                        <div class="stat-card">
+                            <div class="stat-card-head">
+                                <img class="stat-icon" src="${svc.icon_url}" alt="" onerror="this.style.display='none';">
+                                <span class="stat-card-name">${escapeHtml(svc.name)}</span>
                             </div>
-                            <div class="test-fail" style="font-size: 0.8rem;">${escapeHtml(svc.error)}</div>
+                            <div class="test-fail stat-error">${escapeHtml(svc.error)}</div>
                         </div>
                     ` : `
-                        <div style="background: var(--panel); border: 1px solid var(--border); border-radius: 8px; padding: 0.9rem;">
-                            <div style="display: flex; align-items: center; gap: 0.5rem; margin-bottom: 0.1rem;">
-                                <img src="${svc.icon_url}" alt="" style="width: 22px; height: 22px;" onerror="this.style.display='none';">
-                                <span style="font-weight: 600;">${escapeHtml(svc.name)}</span>
+                        <div class="stat-card">
+                            <div class="stat-card-head stat-card-head--tight">
+                                <img class="stat-icon" src="${svc.icon_url}" alt="" onerror="this.style.display='none';">
+                                <span class="stat-card-name">${escapeHtml(svc.name)}</span>
                             </div>
-                            <div style="font-size: 0.72rem; color: var(--muted); margin-bottom: 0.5rem;">${escapeHtml(svc.type)}</div>
-                            <div style="font-family: var(--mono); font-size: 1.4rem; font-weight: 700;">${svc.total.toLocaleString()}</div>
-                            <div style="font-size: 0.78rem; color: var(--muted); margin-bottom: 0.4rem;">total indexers</div>
-                            <div style="font-size: 0.82rem;">
+                            <div class="stat-caption stat-caption--gap">${escapeHtml(svc.type)}</div>
+                            <div class="stat-value">${svc.total.toLocaleString()}</div>
+                            <div class="stat-label">total indexers</div>
+                            <div class="stat-detail stat-detail--flush">
                                 <span class="test-ok">${svc.healthy.toLocaleString()} healthy</span>
                                 &middot; <span class="test-fail">${svc.unhealthy.toLocaleString()} unhealthy</span>
                             </div>
@@ -1533,21 +794,21 @@
 
                 if (data.transcoders && data.transcoders.length) {
                     html += '<div class="modal-section-title">Transcoders</div>';
-                    html += '<div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 0.75rem; margin-bottom: 1.5rem;">';
+                    html += '<div class="stat-grid">';
                     html += data.transcoders.map(tc => `
-                        <div style="background: var(--panel); border: 1px solid var(--border); border-radius: 8px; padding: 0.9rem;">
-                            <div style="display: flex; align-items: center; gap: 0.5rem; margin-bottom: 0.6rem;">
-                                <img src="${tc.icon_url}" alt="" style="width: 22px; height: 22px;" onerror="this.style.display='none';">
-                                <span style="font-weight: 600;">${escapeHtml(tc.name)}</span>
+                        <div class="stat-card">
+                            <div class="stat-card-head">
+                                <img class="stat-icon" src="${tc.icon_url}" alt="" onerror="this.style.display='none';">
+                                <span class="stat-card-name">${escapeHtml(tc.name)}</span>
                             </div>
-                            <div style="display: flex; gap: 1.5rem;">
+                            <div class="stat-row">
                                 <div>
-                                    <div style="font-family: var(--mono); font-size: 1.2rem; font-weight: 700;">${tc.total_transcodes.toLocaleString()}</div>
-                                    <div style="font-size: 0.72rem; color: var(--muted);">total transcoded</div>
+                                    <div class="stat-value stat-value--sm">${tc.total_transcodes.toLocaleString()}</div>
+                                    <div class="stat-caption">total transcoded</div>
                                 </div>
                                 <div>
-                                    <div style="font-family: var(--mono); font-size: 1.2rem; font-weight: 700;">${tc.space_saved_gb.toLocaleString()} GB</div>
-                                    <div style="font-size: 0.72rem; color: var(--muted);">space saved</div>
+                                    <div class="stat-value stat-value--sm">${tc.space_saved_gb.toLocaleString()} GB</div>
+                                    <div class="stat-caption">space saved</div>
                                 </div>
                             </div>
                         </div>
@@ -1593,7 +854,7 @@
                     <div class="modal-section-title">Search Results (${data.results.length})</div>
                     <div class="library-grid">${data.results.map(r => `
                         <div class="library-card" data-title="${r.title.replace(/"/g, '&quot;')}" data-cover="${r.cover_url}">
-                            <div class="cover-wrap" onclick="openDetails(this, '${r.instance}', ${r.item_id})">
+                            <div class="cover-wrap" role="button" tabindex="0" onclick="openDetails(this, '${r.instance}', ${r.item_id})">
                                 ${r.cover_url
                                     ? `<img src="${r.cover_url}" alt="${escapeHtml(r.title)}" loading="lazy" onerror="this.style.display='none'; this.nextElementSibling.style.display='flex';">`
                                     : ''
@@ -1673,6 +934,7 @@
             document.getElementById('mediaservers-view').style.display = 'none';
             document.getElementById('transcoders-view').style.display = 'none';
             document.getElementById('downloaders-view').style.display = 'block';
+            updateAlphaIndexVisibility();
 
             document.querySelectorAll('.downloader-panel').forEach(el => {
                 el.style.display = el.dataset.downloader === name ? 'block' : 'none';
@@ -1704,6 +966,7 @@
             document.getElementById('mediaservers-view').style.display = 'none';
             document.getElementById('transcoders-view').style.display = 'none';
             document.getElementById('indexers-view').style.display = 'block';
+            updateAlphaIndexVisibility();
 
             document.querySelectorAll('.indexer-service-panel').forEach(el => {
                 el.style.display = el.dataset.indexerService === name ? 'block' : 'none';
@@ -1743,7 +1006,7 @@
                         <div class="health-item">
                             <span class="inline-badge badge-${h.type}">${escapeHtml(h.type)}</span>
                             <span>
-                                ${h.wiki_url ? `<a href="${h.wiki_url}" target="_blank" rel="noopener" style="color: inherit;">${escapeHtml(h.message)}</a>` : escapeHtml(h.message)}
+                                ${h.wiki_url ? `<a href="${h.wiki_url}" target="_blank" rel="noopener" class="link-inherit">${escapeHtml(h.message)}</a>` : escapeHtml(h.message)}
                                 ${h.source ? `<span class="health-item-source">&middot; ${escapeHtml(h.source)}</span>` : ''}
                             </span>
                         </div>
@@ -1753,7 +1016,7 @@
 
                 listEl.innerHTML = healthHtml + data.indexers.map(idx => `
                     <div class="request-row">
-                        <div class="request-info" style="flex: 1;">
+                        <div class="request-info">
                             <div class="request-title">${escapeHtml(idx.name)}</div>
                             <div class="request-meta">
                                 ${escapeHtml(idx.protocol) || ''}${idx.enabled ? '' : ' &middot; Disabled'}
@@ -1763,7 +1026,7 @@
                             <div class="test-status" id="indexer-test-result-${idx.id}"></div>
                         </div>
                         ${!idx.healthy ? `
-                        <div class="card-actions" style="margin-top: 0;">
+                        <div class="card-actions card-actions--flush">
                             <button class="mini-btn" data-indexer-id="${idx.id}" onclick="testIndexer('${name}', ${idx.id}, this)">Test</button>
                         </div>
                         ` : ''}
@@ -1849,6 +1112,7 @@
             document.getElementById('indexers-view').style.display = 'none';
             document.getElementById('transcoders-view').style.display = 'none';
             document.getElementById('mediaservers-view').style.display = 'block';
+            updateAlphaIndexVisibility();
 
             document.querySelectorAll('.mediaserver-panel').forEach(el => {
                 el.style.display = el.dataset.mediaserver === name ? 'block' : 'none';
@@ -1905,6 +1169,7 @@
             document.getElementById('indexers-view').style.display = 'none';
             document.getElementById('mediaservers-view').style.display = 'none';
             document.getElementById('transcoders-view').style.display = 'block';
+            updateAlphaIndexVisibility();
 
             document.querySelectorAll('.transcoder-panel').forEach(el => {
                 el.style.display = el.dataset.transcoder === name ? 'block' : 'none';
@@ -1931,9 +1196,9 @@
 
         function statBox(value, label) {
             return `
-                <div style="background: var(--panel); border: 1px solid var(--border); border-radius: 8px; padding: 0.75rem;">
-                    <div style="font-family: var(--mono); font-size: 1.3rem; font-weight: 700; letter-spacing: -0.02em;">${value}</div>
-                    <div style="font-size: 0.72rem; color: var(--muted); margin-top: 0.15rem;">${label}</div>
+                <div class="stat-card stat-card--compact">
+                    <div class="stat-value stat-value--md">${value}</div>
+                    <div class="stat-caption stat-caption--below">${label}</div>
                 </div>
             `;
         }
@@ -1958,7 +1223,7 @@
 
                 let html = `
                     <div class="modal-section-title">Overview${versionLine ? ' — ' + versionLine : ''}</div>
-                    <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(120px, 1fr)); gap: 0.75rem; margin-bottom: 1.5rem;">
+                    <div class="stat-grid stat-grid--narrow">
                         ${statBox(data.total_files.toLocaleString(), 'Total Files')}
                         ${statBox(data.total_transcodes.toLocaleString(), 'Total Transcodes')}
                         ${statBox(data.space_saved_gb + ' GB', 'Space Saved')}
@@ -1966,14 +1231,14 @@
                     </div>
 
                     <div class="modal-section-title">Transcode Status</div>
-                    <div style="display: flex; gap: 1.5rem; margin-bottom: 1.5rem; font-size: 0.85rem;">
+                    <div class="info-row">
                         <span class="test-ok">${data.transcode_success.toLocaleString()} succeeded</span>
                         <span class="test-fail">${data.transcode_error.toLocaleString()} failed</span>
-                        <span style="color: var(--muted);">${data.transcode_not_required.toLocaleString()} not required</span>
+                        <span class="muted-text">${data.transcode_not_required.toLocaleString()} not required</span>
                     </div>
 
                     <div class="modal-section-title">Health Check Status</div>
-                    <div style="display: flex; gap: 1.5rem; margin-bottom: 1.5rem; font-size: 0.85rem;">
+                    <div class="info-row">
                         <span class="test-ok">${data.healthcheck_success.toLocaleString()} succeeded</span>
                         <span class="test-fail">${data.healthcheck_error.toLocaleString()} failed</span>
                     </div>
@@ -1986,7 +1251,7 @@
                 } else {
                     html += data.nodes.map(node => `
                         <div class="request-row">
-                            <div class="request-info" style="flex: 1;">
+                            <div class="request-info">
                                 <div class="request-title">${escapeHtml(node.name)}${node.paused ? ' (Paused)' : ''}</div>
                                 <div class="request-meta">
                                     ${node.cpu_percent ? 'CPU ' + node.cpu_percent + '%' : ''}${node.mem_used_gb ? ' · Mem ' + node.mem_used_gb + '/' + node.mem_total_gb + ' GB' : ''}
@@ -2012,7 +1277,7 @@
             // native Plex/Jellyfin/Tautulli items won't be clickable
             // until those are wired up the same way.
             if (!item.tmdb_id && !item.tvdb_id) return '';
-            return `onclick="openMediaServerItem(this, ${item.tmdb_id || 'null'}, ${item.tvdb_id || 'null'}, '${item.media_type || ''}')"`;
+            return `role="button" tabindex="0" onclick="openMediaServerItem(this, ${item.tmdb_id || 'null'}, ${item.tvdb_id || 'null'}, '${item.media_type || ''}')"`;
         }
 
         async function openMediaServerItem(coverEl, tmdbId, tvdbId, mediaType) {
@@ -2091,7 +1356,7 @@
             if (totalPages <= 1) { el.innerHTML = ''; return; }
             el.innerHTML = `
                 <button class="test-btn" ${page <= 0 ? 'disabled' : ''} onclick="changeKomgaPage('${name}', ${page - 1})">&larr; Prev</button>
-                <span style="color: var(--muted); font-size: 0.8rem;">Page ${page + 1} of ${totalPages}</span>
+                <span class="muted-text--sm">Page ${page + 1} of ${totalPages}</span>
                 <button class="test-btn" ${page >= totalPages - 1 ? 'disabled' : ''} onclick="changeKomgaPage('${name}', ${page + 1})">Next &rarr;</button>
             `;
         }
@@ -2099,7 +1364,7 @@
         function komgaSeriesCardHTML(name, item) {
             return `
                 <div class="library-card" data-title="${item.title.replace(/"/g, '&quot;')}">
-                    <div class="cover-wrap" onclick="openKomgaSeriesModal('${name}', '${item.id}')">
+                    <div class="cover-wrap" role="button" tabindex="0" onclick="openKomgaSeriesModal('${name}', '${item.id}')">
                         ${item.cover_url ? `<img src="${item.cover_url}" alt="${escapeHtml(item.title)}" onerror="this.style.display='none'; this.nextElementSibling.style.display='flex';">` : ''}
                         <div class="cover-fallback" ${item.cover_url ? 'style="display:none;"' : ''}>${escapeHtml(item.title)}</div>
                         ${item.books_in_progress_count ? `<span class="status-badge status-downloaded">${item.books_in_progress_count} in progress</span>` : ''}
@@ -2152,7 +1417,7 @@
                 } else if (tab === 'ondeck') {
                     listEl.innerHTML = `<div class="library-grid">${items.map(item => `
                         <div class="library-card" data-title="${item.title.replace(/"/g, '&quot;')}">
-                            <div class="cover-wrap" onclick="openKomgaSeriesModal('${name}', '${item.series_id}')">
+                            <div class="cover-wrap" role="button" tabindex="0" onclick="openKomgaSeriesModal('${name}', '${item.series_id}')">
                                 ${item.cover_url ? `<img src="${item.cover_url}" alt="${escapeHtml(item.title)}" onerror="this.style.display='none'; this.nextElementSibling.style.display='flex';">` : ''}
                                 <div class="cover-fallback" ${item.cover_url ? 'style="display:none;"' : ''}>${escapeHtml(item.title)}</div>
                                 ${item.page && item.pages_total ? `<span class="status-badge status-downloaded">${item.page}/${item.pages_total}</span>` : ''}
@@ -2204,7 +1469,7 @@
                         </div>
                         <div class="modal-header-text">
                             <div class="modal-title">${escapeHtml(s.title)}</div>
-                            <div style="color: var(--muted); font-size: 0.85rem; margin-top: 0.25rem;">
+                            <div class="muted-text--md muted-block">
                                 ${[s.publisher, s.status, `${s.books_read_count}/${s.books_count} read`].filter(Boolean).map(escapeHtml).join(' &middot; ')}
                             </div>
                         </div>
@@ -2213,17 +1478,17 @@
 
                 let html = '';
                 if (s.summary) {
-                    html += `<p style="color: var(--muted); font-size: 0.88rem; margin-bottom: 1rem;">${escapeHtml(s.summary)}</p>`;
+                    html += `<p class="muted-text--lg spaced-block">${escapeHtml(s.summary)}</p>`;
                 }
-                html += `<div style="margin-bottom: 1rem;"><a class="test-btn" style="text-decoration:none; display:inline-block;" href="${s.open_url}" target="_blank" rel="noopener">Open in Komga</a></div>`;
+                html += `<div class="spaced-block"><a class="test-btn link-button" href="${s.open_url}" target="_blank" rel="noopener">Open in Komga</a></div>`;
                 html += '<div class="modal-section-title">Books</div>';
                 html += (data.books || []).map(b => `
                     <div class="health-item">
                         <span class="inline-badge ${b.read ? 'badge-success' : (b.in_progress ? 'badge-warning' : 'badge-notice')}">
                             ${b.read ? 'Read' : (b.in_progress ? 'In Progress' : 'Unread')}
                         </span>
-                        <span style="flex:1;">
-                            <a href="${b.open_url}" target="_blank" rel="noopener" style="color: inherit;">
+                        <span class="flex-1">
+                            <a href="${b.open_url}" target="_blank" rel="noopener" class="link-inherit">
                                 ${b.number ? '#' + escapeHtml(String(b.number)) + ' - ' : ''}${escapeHtml(b.title)}
                             </a>
                             ${b.in_progress && b.pages_total ? `<span class="health-item-source">&middot; page ${b.page}/${b.pages_total}</span>` : ''}
@@ -2357,7 +1622,7 @@
                 : summary.connection_status === 'firewalled' ? 'badge-warning'
                 : summary.connection_status ? 'badge-error' : 'badge-notice';
             return `
-                <div class="queue-item-meta" style="margin-bottom: 0.75rem;">
+                <div class="queue-item-meta queue-item-meta--spaced">
                     ${summary.connection_status ? `<span class="inline-badge ${statusClass}">${escapeHtml(summary.connection_status)}</span> &middot; ` : ''}
                     &darr;${formatBytesPerSec(summary.dl_speed)} &middot; &uarr;${formatBytesPerSec(summary.up_speed)}
                 </div>
@@ -2373,7 +1638,7 @@
             if (summary.have_warnings) parts.push(`<span class="inline-badge badge-warning">${summary.have_warnings} warning(s)</span>`);
             if (summary.diskspace_temp_free) parts.push(`${escapeHtml(summary.diskspace_temp_free)} GB free (temp)`);
             if (summary.diskspace_complete_free) parts.push(`${escapeHtml(summary.diskspace_complete_free)} GB free (complete)`);
-            return parts.length ? `<div class="queue-item-meta" style="margin-bottom: 0.75rem;">${parts.join(' &middot; ')}</div>` : '';
+            return parts.length ? `<div class="queue-item-meta queue-item-meta--spaced">${parts.join(' &middot; ')}</div>` : '';
         }
 
         function formatBytesPerSec(bytes) {
@@ -2396,7 +1661,7 @@
         function renderQbittorrentTorrents(name, torrents) {
             return torrents.map(t => `
                 <div class="request-row">
-                    <div class="request-info" style="flex: 1;">
+                    <div class="request-info">
                         <div class="request-title">${escapeHtml(t.name)}</div>
                         <div class="request-meta">
                             ${escapeHtml(t.state)} &middot; ${t.progress_pct}% &middot; &darr;${formatBytesPerSec(t.dlspeed)} &middot; &uarr;${formatBytesPerSec(t.upspeed)}
@@ -2406,7 +1671,7 @@
                             ${t.tags ? ' &middot; ' + escapeHtml(t.tags) : ''}
                         </div>
                     </div>
-                    <div class="card-actions" style="margin-top: 0;">
+                    <div class="card-actions card-actions--flush">
                         <button class="mini-btn" onclick="downloaderAction('${name}', 'pause', '${t.hash}', this)">Pause</button>
                         <button class="mini-btn" onclick="downloaderAction('${name}', 'resume', '${t.hash}', this)">Resume</button>
                         <button class="mini-btn" onclick="downloaderAction('${name}', 'delete', '${t.hash}', this)">Delete</button>
@@ -2418,14 +1683,14 @@
         function renderSabnzbdQueue(name, items) {
             return items.map(item => `
                 <div class="request-row">
-                    <div class="request-info" style="flex: 1;">
+                    <div class="request-info">
                         <div class="request-title">${escapeHtml(item.name)}</div>
                         <div class="request-meta">
                             ${escapeHtml(item.status)} &middot; ${item.percentage}% &middot; ${item.size_left_mb} MB left of ${item.size_mb} MB
                             &middot; ${escapeHtml(item.time_left) || 'ETA unknown'}${item.category ? ' &middot; ' + escapeHtml(item.category) : ''}
                         </div>
                     </div>
-                    <div class="card-actions" style="margin-top: 0;">
+                    <div class="card-actions card-actions--flush">
                         <button class="mini-btn" onclick="downloaderAction('${name}', 'pause', '${item.nzo_id}', this)">Pause</button>
                         <button class="mini-btn" onclick="downloaderAction('${name}', 'resume', '${item.nzo_id}', this)">Resume</button>
                         <button class="mini-btn" onclick="downloaderAction('${name}', 'delete', '${item.nzo_id}', this)">Delete</button>
@@ -2646,7 +1911,8 @@
         function updateAlphaIndexVisibility() {
             const sortSelect = document.getElementById(`sort-${currentInstance}`);
             const isAlphabetical = !sortSelect || sortSelect.value === 'title';
-            const shouldShow = currentView === 'library' && isAlphabetical;
+            const onInstancePage = document.getElementById('instances-view').style.display === 'block';
+            const shouldShow = onInstancePage && currentView === 'library' && isAlphabetical;
             document.getElementById('alpha-index').classList.toggle('hidden', !shouldShow);
             document.querySelector('.main').classList.toggle('alpha-visible', shouldShow);
         }
@@ -2679,7 +1945,7 @@
                 const safeTitleForJs = m.title.replace(/\\/g, '\\\\').replace(/'/g, "\\'").replace(/"/g, '&quot;');
                 return `
                 <div class="library-card" data-title="${m.title.replace(/"/g, '&quot;')}" data-cover="${m.cover_url}">
-                    <div class="cover-wrap" onclick="${m.owned
+                    <div class="cover-wrap" role="button" tabindex="0" onclick="${m.owned
                         ? `openDetails(this, '${instance}', ${m.item_id})`
                         : `showMissingMovieInfo(this, ${m.tmdb_id}, '${safeTitleForJs}', '${m.cover_url}')`
                     }">
@@ -2709,7 +1975,7 @@
 
             body.innerHTML = `
                 <button class="back-to-cast-btn" onclick="restoreCastView()">&larr; Back</button>
-                <div class="modal-header" style="margin-bottom: 1rem;">
+                <div class="modal-header modal-header--tight">
                     <div class="modal-cover">
                         ${coverUrl
                             ? `<img src="${coverUrl}" alt="${escapeHtml(title)}" onerror="this.style.display='none'; this.nextElementSibling.style.display='flex';">
@@ -2891,8 +2157,8 @@
 
             header.innerHTML = `
                 <div class="modal-header">
-                    <div class="modal-cover" style="display: flex; align-items: center; justify-content: center; padding: 1rem;">
-                        <img src="/static/icons/logo.svg" alt="arrVantage" style="width: 100%; height: auto;">
+                    <div class="modal-cover modal-cover--logo">
+                        <img src="/static/icons/logo.svg" alt="arrVantage">
                     </div>
                     <div class="modal-header-text">
                         <div class="modal-title">About arrVantage</div>
@@ -2923,9 +2189,9 @@
                 <div class="modal-section-title">Acknowledgments</div>
                 <p>Built with the help of <a href="https://claude.ai/" target="_blank" rel="noopener">Claude</a>.</p>
 
-                <div style="margin-top: 1.5rem; text-align: center;">
+                <div class="about-actions">
                     <a href="https://www.buymeacoffee.com/kazwahs" target="_blank" rel="noopener"
-                       style="display: inline-block; background: #FFDD00; color: #000; font-weight: 600; padding: 0.6rem 1.4rem; border-radius: 8px; text-decoration: none;">
+                       class="coffee-btn">
                         ☕ Buy me a coffee
                     </a>
                 </div>
@@ -3080,7 +2346,7 @@
                 // shown once whenever anything in it is still missing.
                 const hasMissing = tracks.some(t => !t.has_file);
                 const searchButtons = (hasMissing && CAN_SEARCH) ? `
-                    <div class="card-actions" style="margin-top: 0.5rem;">
+                    <div class="card-actions">
                         <button class="mini-btn" onclick="triggerAlbumAutoSearch(this, '${instance}', ${albumId})">Auto Search Album</button>
                         <button class="mini-btn" onclick="openAlbumInteractiveSearch('${instance}', ${albumId})">Find Releases</button>
                     </div>
@@ -3231,7 +2497,7 @@
 
                 listEl.outerHTML = `<div class="library-grid">${data.results.map(r => `
                     <div class="library-card" data-title="${r.title.replace(/"/g, '&quot;')}" data-cover="${r.poster_url}">
-                        <div class="cover-wrap" onclick="openDetails(this, '${instance}', ${r.item_id})">
+                        <div class="cover-wrap" role="button" tabindex="0" onclick="openDetails(this, '${instance}', ${r.item_id})">
                             ${r.poster_url
                                 ? `<img src="${r.poster_url}" alt="${escapeHtml(r.title)}" loading="lazy" onerror="this.style.display='none'; this.nextElementSibling.style.display='flex';">`
                                 : ''

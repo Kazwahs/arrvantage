@@ -5,21 +5,10 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Set up - arrVantage</title>
     <link rel="icon" href="/static/icons/favicon.svg" type="image/svg+xml">
+    <meta name="theme-color" content="#0d1117">
+    <link rel="preload" href="{{ url_for('static', filename='fonts/Geist-Variable.woff2') }}" as="font" type="font/woff2" crossorigin>
+    <link rel="stylesheet" href="{{ asset_url('css/app.css') }}">
     <style>
-        :root {
-            --bg: #0d1117;
-            --panel: #151b23;
-            --sidebar: #0a0e14;
-            --border: #262f3a;
-            --text: #e6e9ef;
-            --muted: #8891a0;
-            --accent: #4d8fdd;
-            --accent-amber: #e8a33d;
-            --mono: ui-monospace, "SF Mono", "Cascadia Code", "Roboto Mono", Consolas, monospace;
-            --success: #5fd97a;
-            --error: #e5484d;
-        }
-        * { box-sizing: border-box; }
         html, body { min-height: 100%; margin: 0; }
         body {
             display: flex;
@@ -27,7 +16,6 @@
             justify-content: center;
             background: var(--bg);
             color: var(--text);
-            font-family: -apple-system, "Segoe UI", Roboto, sans-serif;
             padding: 2rem 1rem;
         }
         .box {
@@ -126,18 +114,6 @@
             padding-top: 0.9rem;
             border-top: 1px solid var(--border);
         }
-        .test-btn {
-            background: var(--panel);
-            border: 1px solid var(--border);
-            border-radius: 6px;
-            color: var(--text);
-            font-size: 0.8rem;
-            padding: 0.4rem 0.9rem;
-            cursor: pointer;
-        }
-        .test-btn:hover:not(:disabled) { border-color: var(--accent); }
-        .test-btn:disabled { opacity: 0.6; cursor: default; }
-
         .test-status { font-size: 0.8rem; }
         .test-status.test-ok { color: var(--success); }
         .test-status.test-fail { color: var(--error); }
@@ -220,7 +196,7 @@
                     <label for="confirm">Confirm Password</label>
                     <input type="password" id="confirm" name="confirm" autocomplete="new-password">
                 </div>
-                <div class="error" id="step1-error" style="display:none;"></div>
+                <div class="error" id="step1-error" hidden></div>
                 <div class="nav-row">
                     <span></span>
                     <button type="button" class="nav-btn primary" onclick="goToStep2()">Next</button>

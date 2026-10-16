@@ -5,19 +5,10 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Log in - arrVantage</title>
     <link rel="icon" href="/static/icons/favicon.svg" type="image/svg+xml">
+    <meta name="theme-color" content="#0d1117">
+    <link rel="preload" href="{{ url_for('static', filename='fonts/Geist-Variable.woff2') }}" as="font" type="font/woff2" crossorigin>
+    <link rel="stylesheet" href="{{ asset_url('css/app.css') }}">
     <style>
-        :root {
-            --bg: #0d1117;
-            --panel: #151b23;
-            --border: #262f3a;
-            --text: #e6e9ef;
-            --muted: #8891a0;
-            --accent: #4d8fdd;
-            --accent-amber: #e8a33d;
-            --mono: ui-monospace, "SF Mono", "Cascadia Code", "Roboto Mono", Consolas, monospace;
-            --error: #e5484d;
-        }
-        * { box-sizing: border-box; }
         html, body { height: 100%; margin: 0; }
         body {
             display: flex;
@@ -25,7 +16,6 @@
             justify-content: center;
             background: var(--bg);
             color: var(--text);
-            font-family: -apple-system, "Segoe UI", Roboto, sans-serif;
         }
         .box {
             background: var(--panel);

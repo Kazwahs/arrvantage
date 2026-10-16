@@ -340,6 +340,24 @@ def ensure_csrf_token() -> str:
     return session["csrf_token"]
 
 
+@app.context_processor
+def inject_asset_helpers():
+    """
+    Gives every template asset_url('css/app.css'), which is the normal
+    static URL plus ?v=<file mtime>. Browsers cache static files hard;
+    this makes a redeployed stylesheet get re-fetched without anyone
+    having to clear their cache (the fonts are left unversioned on
+    purpose - they never change in place).
+    """
+    def asset_url(filename):
+        try:
+            version = int(os.path.getmtime(os.path.join(app.static_folder, filename)))
+        except OSError:
+            version = 0
+        return url_for("static", filename=filename, v=version)
+    return {"asset_url": asset_url}
+
+
 @app.before_request
 def csrf_protect():
     """

@@ -5,28 +5,15 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Settings - arrVantage</title>
     <link rel="icon" href="/static/icons/favicon.svg" type="image/svg+xml">
+    <meta name="theme-color" content="#0d1117">
+    <link rel="preload" href="{{ url_for('static', filename='fonts/Geist-Variable.woff2') }}" as="font" type="font/woff2" crossorigin>
+    <link rel="stylesheet" href="{{ asset_url('css/app.css') }}">
     <style>
-        :root {
-            --bg: #0d1117;
-            --panel: #151b23;
-            --sidebar: #0a0e14;
-            --border: #262f3a;
-            --text: #e6e9ef;
-            --muted: #8891a0;
-            --accent: #4d8fdd;
-            --accent-amber: #e8a33d;
-            --mono: ui-monospace, "SF Mono", "Cascadia Code", "Roboto Mono", Consolas, monospace;
-            --success: #5fd97a;
-            --error: #e5484d;
-        }
-
-        * { box-sizing: border-box; }
         body {
             margin: 0;
             padding: 2rem 1.5rem 4rem 1.5rem;
             background: var(--bg);
             color: var(--text);
-            font-family: -apple-system, "Segoe UI", Roboto, sans-serif;
         }
 
         .page { max-width: 640px; margin: 0 auto; }
@@ -223,18 +210,7 @@
             border-top: 1px solid var(--border);
         }
 
-        .test-btn {
-            background: var(--panel);
-            border: 1px solid var(--border);
-            border-radius: 6px;
-            color: var(--text);
-            font-size: 0.8rem;
-            padding: 0.4rem 0.9rem;
-            cursor: pointer;
-        }
-        .test-btn:hover:not(:disabled) { border-color: var(--accent); }
-        .test-btn:disabled { opacity: 0.6; cursor: default; }
-
+        .save-hint--flush { margin: 0.5rem 0 0 0; }
         .test-status { font-size: 0.8rem; }
         .test-status.test-ok { color: var(--success); }
         .test-status.test-fail { color: var(--error); }
@@ -857,7 +833,7 @@
                             </label>
                         </div>
                     </div>
-                    ` : `<div class="save-hint" style="margin: 0.5rem 0 0 0;">Administrators always have every permission.</div>`}
+                    ` : `<div class="save-hint save-hint--flush">Administrators always have every permission.</div>`}
                 </div>
             `;
         }
