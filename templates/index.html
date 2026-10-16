@@ -12,56 +12,80 @@
 </head>
 <body>
 
+{# Shared pieces of the navigation, so every section of the sidebar and every top bar is built the same way. #}
+{% macro open_link(name, url) %}
+<a class="tab-open-link" href="{{ url|external_url }}" target="_blank" rel="noopener"
+   aria-label="Open {{ name }} directly" title="Open {{ name }} directly">
+    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+        <path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6"></path>
+        <polyline points="15 3 21 3 21 9"></polyline>
+        <line x1="10" y1="14" x2="21" y2="3"></line>
+    </svg>
+</a>
+{% endmacro %}
+
+{# Settings, About and who's signed in - identical in every view's top bar. #}
+{% macro topbar_tools() %}
+{% if is_admin %}
+<a class="settings-link" href="/settings" title="Settings">
+    <img src="/static/icons/settings.svg" alt="Settings">
+</a>
+{% endif %}
+<button type="button" class="settings-link" onclick="showAbout()" title="About arrVantage" aria-label="About arrVantage">
+    <img src="/static/icons/about.svg" alt="">
+</button>
+<div class="user-menu">
+    <span class="user-name">{{ username }}</span>
+    <a class="logout-link" href="/logout">Log out</a>
+</div>
+{% endmacro %}
+
+    <a class="skip-link" href="#main-content">Skip to content</a>
+
     <nav class="sidebar" aria-label="Services">
-        <div class="sidebar-logo" role="button" tabindex="0" aria-label="Home" onclick="selectHome()" title="Home">
-            <img src="/static/icons/logo.svg" alt="arrVantage">
-        </div>
+        <button type="button" class="sidebar-logo" onclick="selectHome()" aria-label="Home" title="Home">
+            <img src="/static/icons/logo.svg" alt="">
+            <span class="sidebar-home-chip" aria-hidden="true">
+                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 11l9-8 9 8"></path><path d="M5 10v10h14V10"></path></svg>
+                Home
+            </span>
+        </button>
         <hr class="sidebar-divider">
         <div class="sidebar-title">Instances</div>
         {% for instance in instances %}
-        <button class="instance-tab"
-                data-instance="{{ instance.name }}"
-                data-seerr-type="{{ instance.seerr_media_type or '' }}"
-                data-kind="{{ instance.library_kind }}"
-                data-queue-count="0"
-                data-health-count="0"
-                data-url="{{ instance.url }}"
-                style="--tab-color: {{ instance.color }};"
-                onclick="selectInstance('{{ instance.name }}')">
-            {# the red/amber status dot is added by applyAttentionToSidebar() #}
-            <img class="instance-logo" src="{{ instance.logo_url }}" alt="" onerror="this.style.display='none';">
-            {{ instance.name }}
-            <span class="tab-open-link" role="link" tabindex="0" aria-label="Open {{ instance.name }} directly" title="Open {{ instance.name }} directly"
-                  onclick="event.stopPropagation(); openDirectly('{{ instance.url }}');">
-                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-                    <path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6"></path>
-                    <polyline points="15 3 21 3 21 9"></polyline>
-                    <line x1="10" y1="14" x2="21" y2="3"></line>
-                </svg>
-            </span>
-        </button>
+        <div class="nav-item nav-item--app">
+            <button class="instance-tab"
+                    data-instance="{{ instance.name }}"
+                    data-seerr-type="{{ instance.seerr_media_type or '' }}"
+                    data-kind="{{ instance.library_kind }}"
+                    data-queue-count="0"
+                    data-health-count="0"
+                    data-url="{{ instance.url }}"
+                    style="--tab-color: {{ instance.color }};"
+                    onclick="selectInstance('{{ instance.name }}')">
+                {# the red/amber status dot is added by applyAttentionToSidebar() #}
+                <img class="instance-logo" src="{{ instance.logo_url }}" alt="" onerror="this.style.display='none';">
+                {{ instance.name }}
+            </button>
+            {{ open_link(instance.name, instance.url) }}
+        </div>
         {% endfor %}
 
         {% if downloaders|length > 0 %}
         <hr class="sidebar-divider">
         <div class="sidebar-title">Downloaders</div>
         {% for dl in downloaders %}
-        <button class="instance-tab downloader-tab"
-                data-downloader="{{ dl.name }}"
-                data-downloader-type="{{ dl.type }}"
-                style="--tab-color: {{ dl.color }};"
-                onclick="selectDownloader('{{ dl.name }}')">
-            <img class="instance-logo" src="{{ dl.logo_url }}" alt="" onerror="this.style.display='none';">
-            {{ dl.name }}
-            <span class="tab-open-link" role="link" tabindex="0" aria-label="Open {{ dl.name }} directly" title="Open {{ dl.name }} directly"
-                  onclick="event.stopPropagation(); openDirectly('{{ dl.url }}');">
-                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-                    <path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6"></path>
-                    <polyline points="15 3 21 3 21 9"></polyline>
-                    <line x1="10" y1="14" x2="21" y2="3"></line>
-                </svg>
-            </span>
-        </button>
+        <div class="nav-item">
+            <button class="instance-tab downloader-tab"
+                    data-downloader="{{ dl.name }}"
+                    data-downloader-type="{{ dl.type }}"
+                    style="--tab-color: {{ dl.color }};"
+                    onclick="selectDownloader('{{ dl.name }}')">
+                <img class="instance-logo" src="{{ dl.logo_url }}" alt="" onerror="this.style.display='none';">
+                {{ dl.name }}
+            </button>
+            {{ open_link(dl.name, dl.url) }}
+        </div>
         {% endfor %}
         {% endif %}
 
@@ -69,22 +93,17 @@
         <hr class="sidebar-divider">
         <div class="sidebar-title">Media Servers</div>
         {% for ms in media_server_list %}
-        <button class="instance-tab mediaserver-tab"
-                data-mediaserver="{{ ms.name }}"
-                data-mediaserver-type="{{ ms.type }}"
-                style="--tab-color: {{ ms.color }};"
-                onclick="selectMediaServer('{{ ms.name }}')">
-            <img class="instance-logo" src="{{ ms.logo_url }}" alt="" onerror="this.style.display='none';">
-            {{ ms.name }}
-            <span class="tab-open-link" role="link" tabindex="0" aria-label="Open {{ ms.name }} directly" title="Open {{ ms.name }} directly"
-                  onclick="event.stopPropagation(); openDirectly('{{ ms.open_url }}');">
-                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-                    <path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6"></path>
-                    <polyline points="15 3 21 3 21 9"></polyline>
-                    <line x1="10" y1="14" x2="21" y2="3"></line>
-                </svg>
-            </span>
-        </button>
+        <div class="nav-item">
+            <button class="instance-tab mediaserver-tab"
+                    data-mediaserver="{{ ms.name }}"
+                    data-mediaserver-type="{{ ms.type }}"
+                    style="--tab-color: {{ ms.color }};"
+                    onclick="selectMediaServer('{{ ms.name }}')">
+                <img class="instance-logo" src="{{ ms.logo_url }}" alt="" onerror="this.style.display='none';">
+                {{ ms.name }}
+            </button>
+            {{ open_link(ms.name, ms.open_url) }}
+        </div>
         {% endfor %}
         {% endif %}
 
@@ -92,22 +111,17 @@
         <hr class="sidebar-divider">
         <div class="sidebar-title">Indexers</div>
         {% for idx in indexer_services %}
-        <button class="instance-tab indexer-tab"
-                data-indexer-service="{{ idx.name }}"
-                data-indexer-type="{{ idx.type }}"
-                style="--tab-color: {{ idx.color }};"
-                onclick="selectIndexerService('{{ idx.name }}')">
-            <img class="instance-logo" src="{{ idx.logo_url }}" alt="" onerror="this.style.display='none';">
-            {{ idx.name }}
-            <span class="tab-open-link" role="link" tabindex="0" aria-label="Open {{ idx.name }} directly" title="Open {{ idx.name }} directly"
-                  onclick="event.stopPropagation(); openDirectly('{{ idx.url }}');">
-                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-                    <path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6"></path>
-                    <polyline points="15 3 21 3 21 9"></polyline>
-                    <line x1="10" y1="14" x2="21" y2="3"></line>
-                </svg>
-            </span>
-        </button>
+        <div class="nav-item">
+            <button class="instance-tab indexer-tab"
+                    data-indexer-service="{{ idx.name }}"
+                    data-indexer-type="{{ idx.type }}"
+                    style="--tab-color: {{ idx.color }};"
+                    onclick="selectIndexerService('{{ idx.name }}')">
+                <img class="instance-logo" src="{{ idx.logo_url }}" alt="" onerror="this.style.display='none';">
+                {{ idx.name }}
+            </button>
+            {{ open_link(idx.name, idx.url) }}
+        </div>
         {% endfor %}
         {% endif %}
 
@@ -115,40 +129,35 @@
         <hr class="sidebar-divider">
         <div class="sidebar-title">Transcoders</div>
         {% for tc in transcoders %}
-        <button class="instance-tab transcoder-tab"
-                data-transcoder="{{ tc.name }}"
-                data-transcoder-type="{{ tc.type }}"
-                style="--tab-color: {{ tc.color }};"
-                onclick="selectTranscoder('{{ tc.name }}')">
-            <img class="instance-logo" src="{{ tc.logo_url }}" alt="" onerror="this.style.display='none';">
-            {{ tc.name }}
-        </button>
+        <div class="nav-item">
+            <button class="instance-tab transcoder-tab"
+                    data-transcoder="{{ tc.name }}"
+                    data-transcoder-type="{{ tc.type }}"
+                    style="--tab-color: {{ tc.color }};"
+                    onclick="selectTranscoder('{{ tc.name }}')">
+                <img class="instance-logo" src="{{ tc.logo_url }}" alt="" onerror="this.style.display='none';">
+                {{ tc.name }}
+            </button>
+        </div>
         {% endfor %}
         {% endif %}
     </nav>
 
-    <main class="main">
+    <main class="main" id="main-content" tabindex="-1">
         <h1 class="sr-only">arrVantage</h1>
         <div id="home-view">
             <div class="topbar">
                 <div class="view-tabs">
                     <span class="view-title">Home</span>
                     <input type="text" id="cross-instance-search" class="topbar-search"
-                           placeholder="Search across all your libraries..."
+                           placeholder="Search across all your libraries..." aria-label="Search across all your libraries"
                            onkeydown="if (event.key === 'Enter') runCrossInstanceSearch();">
                     <button class="test-btn" onclick="runCrossInstanceSearch()">Search</button>
                 </div>
                 <div class="topbar-right">
                     <button type="button" class="test-btn" id="home-customise" aria-pressed="false">Customise</button>
                     <button class="test-btn" onclick="refreshHome()">Refresh</button>
-                    {% if is_admin %}
-                    <a class="settings-link" href="/settings" title="Settings">
-                        <img src="/static/icons/settings.svg" alt="Settings">
-                    </a>
-                    {% endif %}
-                    <button type="button" class="settings-link" onclick="showAbout()" title="About arrVantage" aria-label="About arrVantage">
-                        <img src="/static/icons/about.svg" alt="">
-                    </button>
+                {{ topbar_tools() }}
                 </div>
             </div>
             <div class="content">
@@ -212,19 +221,8 @@
             </div>
             <div class="topbar-right">
                 <a class="test-btn" id="open-instance-link" href="#" target="_blank" rel="noopener">Open</a>
-                <input type="text" id="global-search" class="topbar-search" placeholder="Search this tab..." oninput="applyGlobalSearch()">
-                {% if is_admin %}
-                <a class="settings-link" href="/settings" title="Settings">
-                    <img src="/static/icons/settings.svg" alt="Settings">
-                </a>
-                {% endif %}
-                <button type="button" class="settings-link" onclick="showAbout()" title="About arrVantage" aria-label="About arrVantage">
-                        <img src="/static/icons/about.svg" alt="">
-                    </button>
-                <div class="user-menu">
-                    <span class="user-name">{{ username }}</span>
-                    <a class="logout-link" href="/logout">Log out</a>
-                </div>
+                <input type="text" id="global-search" class="topbar-search" placeholder="Search this tab..." aria-label="Search this tab" oninput="applyGlobalSearch()">
+                {{ topbar_tools() }}
             </div>
         </div>
 
@@ -245,14 +243,7 @@
                 </div>
                 <div class="topbar-right">
                     <button class="test-btn" onclick="refreshCurrentDownloader()">Refresh</button>
-                    {% if is_admin %}
-                    <a class="settings-link" href="/settings" title="Settings">
-                        <img src="/static/icons/settings.svg" alt="Settings">
-                    </a>
-                    {% endif %}
-                    <button type="button" class="settings-link" onclick="showAbout()" title="About arrVantage" aria-label="About arrVantage">
-                        <img src="/static/icons/about.svg" alt="">
-                    </button>
+                {{ topbar_tools() }}
                 </div>
             </div>
             <div class="content">
@@ -272,14 +263,7 @@
                 <div class="topbar-right">
                     <button class="test-btn" id="test-all-btn" onclick="testAllIndexers(currentIndexerService)">Test All</button>
                     <button class="test-btn" onclick="refreshCurrentIndexerService()">Refresh</button>
-                    {% if is_admin %}
-                    <a class="settings-link" href="/settings" title="Settings">
-                        <img src="/static/icons/settings.svg" alt="Settings">
-                    </a>
-                    {% endif %}
-                    <button type="button" class="settings-link" onclick="showAbout()" title="About arrVantage" aria-label="About arrVantage">
-                        <img src="/static/icons/about.svg" alt="">
-                    </button>
+                {{ topbar_tools() }}
                 </div>
             </div>
             <div class="content">
@@ -306,14 +290,7 @@
                 </div>
                 <div class="topbar-right">
                     <button class="test-btn" onclick="refreshCurrentMediaServerTab()">Refresh</button>
-                    {% if is_admin %}
-                    <a class="settings-link" href="/settings" title="Settings">
-                        <img src="/static/icons/settings.svg" alt="Settings">
-                    </a>
-                    {% endif %}
-                    <button type="button" class="settings-link" onclick="showAbout()" title="About arrVantage" aria-label="About arrVantage">
-                        <img src="/static/icons/about.svg" alt="">
-                    </button>
+                {{ topbar_tools() }}
                 </div>
             </div>
             <div class="content">
@@ -355,14 +332,7 @@
                 </div>
                 <div class="topbar-right">
                     <button class="test-btn" onclick="refreshCurrentTranscoder()">Refresh</button>
-                    {% if is_admin %}
-                    <a class="settings-link" href="/settings" title="Settings">
-                        <img src="/static/icons/settings.svg" alt="Settings">
-                    </a>
-                    {% endif %}
-                    <button type="button" class="settings-link" onclick="showAbout()" title="About arrVantage" aria-label="About arrVantage">
-                        <img src="/static/icons/about.svg" alt="">
-                    </button>
+                {{ topbar_tools() }}
                 </div>
             </div>
             <div class="content">
@@ -375,7 +345,7 @@
         </div>
     </main>
 
-    <div class="alpha-index hidden" id="alpha-index" role="group" aria-label="Jump to letter">
+    <div class="alpha-index hidden" id="alpha-index" role="navigation" aria-label="Jump to letter">
         <button onclick="jumpToLetter('#')">#</button>
         {% for letter in "ABCDEFGHIJKLMNOPQRSTUVWXYZ" %}
         <button onclick="jumpToLetter('{{ letter }}')">{{ letter }}</button>
@@ -515,6 +485,36 @@
                 }
                 wasOpen = isOpen;
             }).observe(overlay, { attributes: true, attributeFilter: ['class'] });
+        })();
+
+        // Keep aria-current in step with the visual "active" state, so a screen
+        // reader announces which service, view tab and page is current. The
+        // select*() functions only toggle the .active class; this observes it.
+        (function () {
+            const phone = window.matchMedia('(max-width: 768px)');
+            function syncCurrent(el) {
+                const active = el.classList.contains('active');
+                if (active) el.setAttribute('aria-current', el.classList.contains('view-tab') ? 'true' : 'page');
+                else el.removeAttribute('aria-current');
+                // On a phone the sidebar is a scrolling row of chips: bring the new one into view.
+                if (active && phone.matches && el.classList.contains('instance-tab')) {
+                    el.scrollIntoView({ inline: 'center', block: 'nearest' });
+                }
+            }
+            const observer = new MutationObserver(records => records.forEach(r => syncCurrent(r.target)));
+            document.querySelectorAll('.instance-tab, .view-tab').forEach(el => {
+                syncCurrent(el);
+                observer.observe(el, { attributes: true, attributeFilter: ['class'] });
+            });
+
+            const homeButton = document.querySelector('.sidebar-logo');
+            const homeEl = document.getElementById('home-view');
+            function syncHome() {
+                if (homeEl.style.display === 'none') homeButton.removeAttribute('aria-current');
+                else homeButton.setAttribute('aria-current', 'page');
+            }
+            new MutationObserver(syncHome).observe(homeEl, { attributes: true, attributeFilter: ['style'] });
+            syncHome();
         })();
 
         function selectHome() {
@@ -962,7 +962,10 @@
             if (!drag) return;
             // The page itself scrolls; nudge it when the pointer nears the top or bottom edge.
             const edge = 56;
-            const top = 0, bottom = window.innerHeight;
+            // On a phone the pinned chip row covers the top of the screen.
+            const top = window.matchMedia('(max-width: 768px)').matches
+                ? document.querySelector('.sidebar').getBoundingClientRect().bottom : 0;
+            const bottom = window.innerHeight;
             let delta = 0;
             if (drag.lastY < top + edge) delta = -Math.ceil((top + edge - drag.lastY) / 4);
             else if (drag.lastY > bottom - edge) delta = Math.ceil((drag.lastY - (bottom - edge)) / 4);

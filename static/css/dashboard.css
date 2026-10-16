@@ -3,7 +3,10 @@
  * Shared tokens, fonts and base rules live in app.css, which loads first.
  */
 
-html, body { height: 100%; margin: 0; }
+html { height: 100%; }
+/* body grows with the page (rather than being exactly one screen tall) so
+   the sticky sidebar has the whole page's height to stay pinned within. */
+body { min-height: 100%; margin: 0; }
 
 body {
     display: flex;
@@ -11,24 +14,54 @@ body {
     color: var(--text);
 }
 
-/* --- Left sidebar: one tab per instance --- */
+/* --- Left sidebar: one tab per service --- */
 
+/* The page itself scrolls (not .content), so the sidebar is sticky: the
+   navigation stays on screen however far down a library you are. */
 .sidebar {
     width: 190px;
     flex-shrink: 0;
+    position: sticky;
+    top: 0;
+    align-self: flex-start;
+    height: 100vh;
+    height: 100dvh;
     background: var(--sidebar);
     border-right: 1px solid var(--border);
     padding: 1.25rem 0;
     overflow-y: auto;
 }
 
+.skip-link {
+    position: absolute;
+    left: 0.75rem;
+    top: 0.75rem;
+    z-index: var(--z-modal);
+    padding: 0.5rem 0.85rem;
+    background: var(--panel);
+    border: 1px solid var(--accent);
+    border-radius: var(--radius-sm);
+    color: var(--text);
+    font-size: var(--text-md);
+    text-decoration: none;
+    transform: translateY(-300%);
+}
+.skip-link:focus { transform: none; }
+.main:focus { outline: none; }
+
 .sidebar-logo {
     display: flex;
     justify-content: center;
+    width: 100%;
     padding: 1.25rem 1rem 0.5rem 1rem;
+    background: none;
+    border: 0;
+    color: inherit;
+    font: inherit;
     cursor: pointer;
 }
 .sidebar-logo img { width: 100%; max-width: 150px; }
+.sidebar-home-chip { display: none; }
 
 .sidebar-divider {
     border: none;
@@ -44,14 +77,20 @@ body {
     padding: 0 1.25rem 0.75rem 1.25rem;
 }
 
+/* One row per service: the tab itself, plus a separate "open it directly"
+   link beside it (a link can't live inside a button). */
+.nav-item {
+    position: relative;
+    margin: 0 0.75rem 0.5rem 0.75rem;
+}
+
 .instance-tab {
     display: flex;
     align-items: center;
     gap: 0.65rem;
-    width: calc(100% - 1.5rem);
-    margin: 0 0.75rem 0.5rem 0.75rem;
+    width: 100%;
     text-align: left;
-    padding: 0.6rem 0.75rem;
+    padding: 0.6rem 2.1rem 0.6rem 0.75rem;
     background: var(--panel);
     border: 1px solid var(--border);
     border-radius: 8px;
@@ -71,20 +110,23 @@ body {
 }
 
 .tab-open-link {
-    margin-left: auto;
-    padding: 0.2rem;
+    position: absolute;
+    top: 50%;
+    right: 0.35rem;
+    transform: translateY(-50%);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    width: 1.75rem;
+    height: 1.75rem;
     border-radius: 4px;
+    color: var(--muted);
     opacity: 0;
-    flex-shrink: 0;
     transition: opacity var(--dur-fast) var(--ease-out), background var(--dur-fast) var(--ease-out);
 }
-.instance-tab:hover .tab-open-link,
-.downloader-tab:hover .tab-open-link,
-.mediaserver-tab:hover .tab-open-link,
-.indexer-tab:hover .tab-open-link { opacity: 0.6; }
-.tab-open-link:hover { opacity: 1 !important; background: rgba(255,255,255,0.08); }
-.instance-tab:focus-within .tab-open-link,
-.tab-open-link:focus-visible { opacity: 0.8; }
+.nav-item:hover .tab-open-link,
+.nav-item:focus-within .tab-open-link { opacity: 0.7; }
+.tab-open-link:hover, .tab-open-link:focus-visible { opacity: 1; color: var(--text); background: rgba(255,255,255,0.08); }
 @media (hover: none) {
     .tab-open-link { opacity: 0.6; }
 }
@@ -916,25 +958,64 @@ body {
 @media (max-width: 768px) {
     body { flex-direction: column; height: auto; min-height: 100%; }
 
+    /* The sidebar becomes a row of chips pinned to the top of the screen:
+       Home first, then every service, with a thin rule between groups. */
     .sidebar {
+        --mobile-nav-h: 4.25rem;
         width: 100%;
+        height: var(--mobile-nav-h);
+        align-self: stretch;
+        z-index: var(--z-rail);
         display: flex;
         flex-direction: row;
+        align-items: center;
         gap: 0.5rem;
-        padding: 0.75rem;
+        padding: 0 0.75rem;
         overflow-x: auto;
+        overflow-y: hidden;
+        scrollbar-width: none;
         border-right: none;
         border-bottom: 1px solid var(--border);
     }
-    .sidebar-logo { display: none; }
-    .sidebar-divider { display: none; }
+    .sidebar::-webkit-scrollbar { display: none; }
     .sidebar-title { display: none; }
+    .sidebar-divider {
+        flex: none;
+        width: 0;
+        height: 1.5rem;
+        margin: 0 0.15rem;
+        border: 0;
+        border-left: 1px solid var(--border);
+    }
+    .nav-item { flex: none; margin: 0; }
+    .nav-item--app .tab-open-link { display: none; }  /* an instance's own top bar has an Open link */
     .instance-tab {
         width: auto;
-        flex-shrink: 0;
-        margin: 0;
+        min-height: 2.5rem;
+        padding: 0.5rem 0.75rem;
         white-space: nowrap;
     }
+    .nav-item:not(.nav-item--app) .instance-tab { padding-right: 2.1rem; }
+    .sidebar-logo {
+        flex: none;
+        width: auto;
+        min-height: 2.5rem;
+        padding: 0.5rem 0.75rem;
+        background: var(--panel);
+        border: 1px solid var(--border);
+        border-radius: 8px;
+        color: var(--muted);
+        font-size: 0.9rem;
+    }
+    .sidebar-logo img { display: none; }
+    .sidebar-logo[aria-current="page"] {
+        color: var(--text);
+        border-color: var(--accent);
+        background: rgba(77, 143, 221, 0.1);
+        box-shadow: inset 3px 0 0 var(--accent-amber), 0 0 14px -4px var(--accent-amber);
+    }
+    .sidebar-home-chip { display: inline-flex; align-items: center; gap: 0.45rem; }
+    .arrange-bar { top: calc(var(--mobile-nav-h, 4.25rem) + var(--space-2)); }
 
     .alpha-index { display: none; }
 
@@ -946,12 +1027,28 @@ body {
         gap: 0.5rem;
         padding: 0.75rem 0.75rem 0 0.75rem;
     }
-    .view-tabs { flex-wrap: wrap; gap: 0.4rem; padding-bottom: 0.5rem; }
-    .view-tab { padding: 0.45rem 0.75rem; font-size: 0.82rem; }
+    /* Row one: the view tabs on a single swipeable line (Home: its search).
+       Row two: the actions, with who's signed in pushed to the right. */
+    .view-tabs {
+        width: 100%;
+        flex-wrap: nowrap;
+        gap: 0.4rem;
+        padding: 0.15rem 0.15rem 0.5rem;
+        overflow-x: auto;
+        scrollbar-width: none;
+    }
+    .view-tabs::-webkit-scrollbar { display: none; }
+    .view-tab { flex: none; white-space: nowrap; padding: 0.45rem 0.65rem; font-size: 0.8rem; }
+    .view-tab:focus-visible { outline-offset: -2px; }
+    #home-view .view-title {
+        position: absolute; width: 1px; height: 1px; overflow: hidden;
+        clip: rect(0 0 0 0); white-space: nowrap;
+    }
+    #home-view .view-tabs { overflow: visible; }
 
     .topbar-right { width: 100%; flex-wrap: wrap; }
-    .topbar-search { width: 100%; flex: 1; min-width: 0; }
-    .user-menu { margin-bottom: 0.6rem; }
+    .topbar-search { width: auto; flex: 1; min-width: 0; }
+    .user-menu { margin-left: auto; margin-bottom: 0.6rem; }
 
     .content { padding: 1rem; }
 

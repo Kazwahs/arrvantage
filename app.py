@@ -363,6 +363,19 @@ def inject_asset_helpers():
     }
 
 
+@app.template_filter("external_url")
+def external_url(url) -> str:
+    """
+    Makes a saved service URL safe to use as a link: one saved without a
+    scheme gets http:// (same default the JS openDirectly() always used),
+    and anything that isn't http(s) can't become a javascript: link.
+    """
+    url = (url or "").strip()
+    if not url:
+        return ""
+    return url if re.match(r"^https?://", url, re.IGNORECASE) else f"http://{url}"
+
+
 @app.before_request
 def csrf_protect():
     """

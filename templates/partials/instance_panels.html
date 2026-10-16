@@ -14,15 +14,15 @@
         <div class="empty">Nothing in the library yet</div>
     {% else %}
         <div class="filter-row">
-            <select id="status-filter-{{ instance.name }}" onchange="filterLibrary('{{ instance.name }}')">
+            <select id="status-filter-{{ instance.name }}" aria-label="Filter by status" onchange="filterLibrary('{{ instance.name }}')">
                 <option value="all">All statuses</option>
                 {% for s in instance.status_options %}<option value="{{ s }}">{{ s }}</option>{% endfor %}
             </select>
-            <select id="genre-filter-{{ instance.name }}" onchange="filterLibrary('{{ instance.name }}')">
+            <select id="genre-filter-{{ instance.name }}" aria-label="Filter by genre" onchange="filterLibrary('{{ instance.name }}')">
                 <option value="all">All genres</option>
                 {% for g in instance.genre_options %}<option value="{{ g }}">{{ g }}</option>{% endfor %}
             </select>
-            <select id="sort-{{ instance.name }}" onchange="sortLibrary('{{ instance.name }}')">
+            <select id="sort-{{ instance.name }}" aria-label="Sort by" onchange="sortLibrary('{{ instance.name }}')">
                 <option value="title">Sort: Alphabetical</option>
                 {% if instance.library_kind in ("movie", "series") %}
                 <option value="release">Sort: Release Date</option>
@@ -30,9 +30,9 @@
                 <option value="added">Sort: Date Added</option>
             </select>
             <button type="button" class="sort-dir-btn" id="sort-dir-{{ instance.name }}" data-direction="asc"
-                    onclick="toggleSortDirection('{{ instance.name }}')" title="Toggle ascending/descending">&uarr;</button>
+                    onclick="toggleSortDirection('{{ instance.name }}')" title="Toggle ascending/descending" aria-label="Toggle ascending or descending order">&uarr;</button>
             {% if instance.library_kind == "movie" %}
-            <select id="view-mode-{{ instance.name }}" onchange="toggleLibraryViewMode('{{ instance.name }}')">
+            <select id="view-mode-{{ instance.name }}" aria-label="Show movies or collections" onchange="toggleLibraryViewMode('{{ instance.name }}')">
                 <option value="movies">All Movies</option>
                 <option value="collections">Collections</option>
             </select>
