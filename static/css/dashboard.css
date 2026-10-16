@@ -315,7 +315,102 @@ body {
 
 /* --- Home: needs attention --- */
 
-.attention { margin-bottom: 1.75rem; }
+/* --- Home: arrangeable panels ---
+   Home is a stack of .home-panel blocks. Normally they are just content;
+   while #home-view has .is-arranging each one shows its move controls and
+   its contents go inert so nothing is triggered by accident. */
+
+.home-panels { display: flex; flex-direction: column; gap: 1.75rem; }
+.home-panel[hidden], .home-panel.is-user-hidden { display: none; }
+.home-panel .stat-grid { margin-bottom: 0; }
+
+.panel-tools { display: none; }
+.is-arranging .home-panel {
+    border: 1px dashed var(--border);
+    border-radius: var(--radius-md);
+    padding: var(--space-3);
+}
+.is-arranging .home-panel.is-user-hidden { display: block; opacity: 0.65; }
+.is-arranging .home-panel.is-user-hidden > .home-panel-body { display: none; }
+.is-arranging .home-panel.is-user-hidden > .modal-section-title::after {
+    content: "Hidden";
+    margin-left: var(--space-2);
+    padding: 0 0.4rem;
+    border: 1px solid var(--border);
+    border-radius: var(--radius-sm);
+    font-size: var(--text-xs);
+    letter-spacing: 0;
+    text-transform: none;
+}
+.is-arranging .panel-tools {
+    display: flex;
+    align-items: center;
+    gap: var(--space-2);
+    margin-bottom: var(--space-3);
+}
+.panel-tools-spacer { flex: 1; }
+.panel-handle, .panel-tool {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    gap: 0.35rem;
+    min-width: 2.25rem;
+    min-height: 2.25rem;
+    padding: 0 0.6rem;
+    background: var(--panel);
+    border: 1px solid var(--border);
+    border-radius: var(--radius-sm);
+    color: var(--text);
+    font: inherit;
+    font-size: var(--text-sm);
+    cursor: pointer;
+    transition: border-color var(--dur-fast) var(--ease-out);
+}
+.panel-handle { color: var(--muted); cursor: grab; touch-action: none; }
+.panel-handle:hover, .panel-tool:hover { border-color: var(--accent); color: var(--text); }
+.panel-tool[aria-disabled="true"] { opacity: 0.4; cursor: default; }
+.panel-tool[aria-disabled="true"]:hover { border-color: var(--border); }
+.home-panel.is-dragging {
+    background: var(--bg);
+    border-color: var(--accent);
+    border-style: solid;
+    opacity: 0.92;
+    user-select: none;
+}
+.home-panel.is-dragging .panel-handle { cursor: grabbing; }
+.home-panel.drop-before { box-shadow: 0 -4px 0 -1px var(--accent); }
+.home-panel.drop-after { box-shadow: 0 4px 0 -1px var(--accent); }
+
+.arrange-bar {
+    position: sticky;
+    top: var(--space-2);
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: var(--space-2) var(--space-3);
+    margin-bottom: var(--space-5);
+    padding: var(--space-3);
+    background: var(--panel);
+    border: 1px solid var(--accent);
+    border-radius: var(--radius-md);
+}
+.arrange-bar[hidden] { display: none; }
+/* .content is an overflow container, which would stop the bar sticking to the viewport. */
+.is-arranging .content { overflow: visible; }
+.arrange-text { flex: 1 1 16rem; min-width: 0; font-size: var(--text-sm); color: var(--muted); }
+.arrange-text strong { color: var(--text); font-weight: 500; }
+.arrange-status { font-size: var(--text-xs); color: var(--muted); min-height: 1em; flex-basis: 100%; }
+.arrange-status:empty { position: absolute; width: 1px; height: 1px; overflow: hidden; }  /* stays in the accessibility tree so announcements still land */
+.arrange-status.is-error { color: var(--error-text); }
+.arrange-actions { display: flex; gap: var(--space-2); }
+.home-all-hidden { display: flex; flex-wrap: wrap; align-items: center; gap: var(--space-3); padding: var(--space-4) 0; color: var(--muted); font-size: var(--text-base); }
+.home-all-hidden[hidden] { display: none; }
+#home-customise[aria-pressed="true"] { border-color: var(--accent); background: rgba(77, 143, 221, 0.1); }
+
+@media (pointer: coarse) {
+    .panel-handle, .panel-tool { min-width: 2.75rem; min-height: 2.75rem; }
+}
+
 .attention-heading { display: flex; align-items: center; gap: 0.5rem; margin: 0 0 0.6rem 0; font-weight: 500; }
 .attention-count {
     font-family: var(--mono);

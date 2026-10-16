@@ -4350,6 +4350,50 @@ def api_home_stats():
     return jsonify(fetch_home_stats())
 
 
+# The Home page is a stack of these panels. Each user can reorder them and
+# hide the ones they don't use; that choice is stored on their own user
+# record in config.json, so it follows them to every browser and device.
+HOME_PANELS = ("attention", "libraries", "mediaservers", "indexers", "transcoders")
+
+
+def normalize_home_layout(raw) -> dict:
+    """
+    Turns whatever was saved (or posted) into a layout that is always safe
+    to render: every known panel appears exactly once in `order`, unknown or
+    repeated names are dropped, and a panel added in a later release simply
+    lands at the end for people who saved a layout before it existed.
+    """
+    order, wanted_hidden = [], set()
+    if isinstance(raw, dict):
+        for key in raw.get("order") if isinstance(raw.get("order"), list) else []:
+            if isinstance(key, str) and key in HOME_PANELS and key not in order:
+                order.append(key)
+        for key in raw.get("hidden") if isinstance(raw.get("hidden"), list) else []:
+            if isinstance(key, str) and key in HOME_PANELS:
+                wanted_hidden.add(key)
+    order += [key for key in HOME_PANELS if key not in order]
+    return {"order": order, "hidden": [key for key in order if key in wanted_hidden]}
+
+
+@app.route("/api/home/layout", methods=["POST"])
+@login_required
+def api_home_layout():
+    """Saves (or, with {"reset": true}, clears) the signed-in user's Home layout."""
+    user = current_user()
+    payload = request.get_json(silent=True)
+    if not isinstance(payload, dict):
+        return jsonify({"ok": False, "error": "Expected a JSON object."}), 400
+
+    if payload.get("reset"):
+        user.pop("home_layout", None)
+        layout = normalize_home_layout(None)
+    else:
+        layout = normalize_home_layout(payload)
+        user["home_layout"] = layout
+    save_config(CONFIG)
+    return jsonify({"ok": True, "layout": layout})
+
+
 @app.route("/api/search/cross-instance")
 @login_required
 def api_search_cross_instance():
@@ -4703,10 +4747,15 @@ def parse_users(form, existing_users: list) -> list:
                 "searching": form.get(f"user_perm_searching_{suffix}") == "on",
             }
 
-        users.append({
+        entry = {
             "username": username, "password_hash": password_hash,
             "role": role, "permissions": permissions,
-        })
+        }
+        # Saving Settings rebuilds every user from the form, which has no
+        # field for the Home layout - carry it forward so it isn't wiped.
+        if existing and existing.get("home_layout"):
+            entry["home_layout"] = existing["home_layout"]
+        users.append(entry)
 
     # Guarantee an admin always survives, even if the form somehow
     # didn't include one - avoids ever locking yourself out entirely.
@@ -4892,6 +4941,7 @@ def index():
         username=user["username"], is_admin=is_admin,
         can_request=perms["requesting"], can_search=perms["searching"],
         csrf_token=ensure_csrf_token(),
+        home_layout=normalize_home_layout(user.get("home_layout")),
     )
 
 

@@ -139,6 +139,7 @@
                     <button class="test-btn" onclick="runCrossInstanceSearch()">Search</button>
                 </div>
                 <div class="topbar-right">
+                    <button type="button" class="test-btn" id="home-customise" aria-pressed="false">Customise</button>
                     <button class="test-btn" onclick="refreshHome()">Refresh</button>
                     {% if is_admin %}
                     <a class="settings-link" href="/settings" title="Settings">
@@ -153,16 +154,50 @@
             <div class="content">
                 <div id="cross-instance-search-results" style="display:none; margin-bottom: 1.5rem;"></div>
 
-                <section class="attention" id="attention-panel" aria-labelledby="attention-heading">
-                    <h2 class="modal-section-title attention-heading" id="attention-heading">
-                        Needs attention <span class="attention-count" id="attention-count" hidden></span>
-                    </h2>
-                    <div id="attention-body" aria-live="polite" aria-busy="true">
-                        <div class="attention-loading">Checking your services&hellip;</div>
+                <div class="arrange-bar" id="home-arrange-bar" hidden>
+                    <div class="arrange-text">
+                        <strong>Arranging Home.</strong>
+                        Drag a panel by its grip, or use the arrow buttons. Hide the ones you don't use. Changes save to your account automatically.
                     </div>
-                </section>
+                    <div class="arrange-actions">
+                        <button type="button" class="test-btn" id="home-layout-reset">Reset to default</button>
+                        <button type="button" class="test-btn" id="home-layout-done">Done</button>
+                    </div>
+                    <div class="arrange-status" id="home-arrange-status" role="status" aria-live="polite"></div>
+                </div>
 
-                <div id="home-stats-content" class="modal-loading">Loading...</div>
+                <div class="home-panels" id="home-panels">
+                    <section class="home-panel attention" id="attention-panel" data-panel="attention" data-label="Needs attention" aria-labelledby="attention-heading">
+                        <h2 class="modal-section-title attention-heading" id="attention-heading">
+                            Needs attention <span class="attention-count" id="attention-count" hidden></span>
+                        </h2>
+                        <div class="home-panel-body" id="attention-body" aria-live="polite" aria-busy="true">
+                            <div class="attention-loading">Checking your services&hellip;</div>
+                        </div>
+                    </section>
+                    <section class="home-panel" data-panel="libraries" data-label="Libraries" aria-labelledby="home-libraries-heading" hidden>
+                        <h2 class="modal-section-title" id="home-libraries-heading">Libraries</h2>
+                        <div class="home-panel-body stat-grid" id="home-libraries-body"></div>
+                    </section>
+                    <section class="home-panel" data-panel="mediaservers" data-label="Media Servers" aria-labelledby="home-mediaservers-heading" hidden>
+                        <h2 class="modal-section-title" id="home-mediaservers-heading">Media Servers</h2>
+                        <div class="home-panel-body stat-grid" id="home-mediaservers-body"></div>
+                    </section>
+                    <section class="home-panel" data-panel="indexers" data-label="Indexers" aria-labelledby="home-indexers-heading" hidden>
+                        <h2 class="modal-section-title" id="home-indexers-heading">Indexers</h2>
+                        <div class="home-panel-body stat-grid" id="home-indexers-body"></div>
+                    </section>
+                    <section class="home-panel" data-panel="transcoders" data-label="Transcoders" aria-labelledby="home-transcoders-heading" hidden>
+                        <h2 class="modal-section-title" id="home-transcoders-heading">Transcoders</h2>
+                        <div class="home-panel-body stat-grid" id="home-transcoders-body"></div>
+                    </section>
+                </div>
+
+                <div id="home-stats-status" class="modal-loading">Loading...</div>
+                <div class="home-all-hidden" id="home-all-hidden" hidden>
+                    <span>Every Home panel is hidden.</span>
+                    <button type="button" class="test-btn" id="home-show-panels">Customise Home</button>
+                </div>
             </div>
         </div>
 
@@ -355,6 +390,7 @@
         </div>
     </div>
 
+    <script type="application/json" id="home-layout-data">{{ home_layout|tojson }}</script>
     <script>
         // Automatically attaches the CSRF token to every POST fetch()
         // call in this page, so the many individual calls throughout
@@ -623,20 +659,13 @@
             loadAttention();
         }, 60000);
 
-        async function loadHomeStats() {
-            const el = document.getElementById('home-stats-content');
-            el.innerHTML = '<div class="modal-loading">Loading...</div>';
+        // Each Home panel is its own block (see #home-panels), so the order a
+        // person chose survives every refresh: this only fills the bodies.
+        let homeStatsLoaded = false;
 
-            try {
-                const response = await fetch('/api/home/stats');
-                const data = await response.json();
-
-                let html = '';
-
-                if (data.instances && data.instances.length) {
-                    html += '<div class="modal-section-title">Libraries</div>';
-                    html += '<div class="stat-grid">';
-                    html += data.instances.map(inst => inst.error ? `
+        function statCardsHTML(key, items) {
+            if (key === 'libraries') {
+                return items.map(inst => inst.error ? `
                         <div class="stat-card">
                             <div class="stat-card-name stat-card-name--solo">${escapeHtml(inst.name)}</div>
                             <div class="test-fail stat-error">${escapeHtml(inst.error)}</div>
@@ -656,13 +685,9 @@
                             <div class="stat-foot">${escapeHtml(inst.size_display)} on disk</div>
                         </div>
                     `).join('');
-                    html += '</div>';
-                }
-
-                if (data.media_servers && data.media_servers.length) {
-                    html += '<div class="modal-section-title">Media Servers</div>';
-                    html += '<div class="stat-grid">';
-                    html += data.media_servers.map(ms => `
+            }
+            if (key === 'mediaservers') {
+                return items.map(ms => `
                         <div class="stat-card">
                             <div class="stat-card-head">
                                 <img class="stat-icon" src="${ms.icon_url}" alt="" onerror="this.style.display='none';">
@@ -674,13 +699,9 @@
                             </div>
                         </div>
                     `).join('');
-                    html += '</div>';
-                }
-
-                if (data.indexers && data.indexers.length) {
-                    html += '<div class="modal-section-title">Indexers</div>';
-                    html += '<div class="stat-grid">';
-                    html += data.indexers.map(svc => svc.error ? `
+            }
+            if (key === 'indexers') {
+                return items.map(svc => svc.error ? `
                         <div class="stat-card">
                             <div class="stat-card-head">
                                 <img class="stat-icon" src="${svc.icon_url}" alt="" onerror="this.style.display='none';">
@@ -703,13 +724,8 @@
                             </div>
                         </div>
                     `).join('');
-                    html += '</div>';
-                }
-
-                if (data.transcoders && data.transcoders.length) {
-                    html += '<div class="modal-section-title">Transcoders</div>';
-                    html += '<div class="stat-grid">';
-                    html += data.transcoders.map(tc => `
+            }
+            return items.map(tc => `
                         <div class="stat-card">
                             <div class="stat-card-head">
                                 <img class="stat-icon" src="${tc.icon_url}" alt="" onerror="this.style.display='none';">
@@ -727,32 +743,362 @@
                             </div>
                         </div>
                     `).join('');
-                    html += '</div>';
-                }
+        }
 
-                if (!html) {
-                    html = '<div class="empty">Nothing configured yet - add instances, media servers, indexers, or transcoders in Settings.</div>';
-                }
+        async function loadHomeStats() {
+            const status = document.getElementById('home-stats-status');
+            // Only show "Loading" the first time; on a refresh keep what's there.
+            if (!homeStatsLoaded) {
+                status.hidden = false;
+                status.className = 'modal-loading';
+                status.textContent = 'Loading...';
+            }
 
-                el.innerHTML = html;
+            try {
+                const response = await fetch('/api/home/stats');
+                if (!response.ok) throw new Error(`HTTP ${response.status}`);
+                const data = await response.json();
+
+                const sources = {
+                    libraries: data.instances,
+                    mediaservers: data.media_servers,
+                    indexers: data.indexers,
+                    transcoders: data.transcoders,
+                };
+                let any = false;
+                Object.keys(sources).forEach(key => {
+                    const items = sources[key] || [];
+                    const panel = document.querySelector(`.home-panel[data-panel="${key}"]`);
+                    document.getElementById(`home-${key}-body`).innerHTML = items.length ? statCardsHTML(key, items) : '';
+                    panel.hidden = !items.length;
+                    if (items.length) any = true;
+                });
+                homeStatsLoaded = true;
+
+                if (any) {
+                    status.hidden = true;
+                } else {
+                    status.hidden = false;
+                    status.className = 'empty';
+                    status.textContent = 'No libraries, media servers, indexers or transcoders are set up yet - add them in Settings.';
+                }
+                refreshPanelTools();
             } catch (err) {
-                el.innerHTML = '<div class="modal-empty">Could not load Home stats.</div>';
+                if (!homeStatsLoaded) {
+                    status.hidden = false;
+                    status.className = 'modal-empty';
+                    status.textContent = 'Could not load Home stats.';
+                }
             }
         }
+
+        // --- Arrange Home --------------------------------------------------
+        // Per-user layout: the order of the Home panels and which are hidden.
+        // It's embedded in the page (no flash of the default order), applied
+        // here, and saved to /api/home/layout whenever it changes.
+
+        const homeView = document.getElementById('home-view');
+        const homePanelsEl = document.getElementById('home-panels');
+        const arrangeStatusEl = document.getElementById('home-arrange-status');
+        let arranging = false;
+        let saveTimer = null;
+
+        function allPanels() {
+            return Array.from(homePanelsEl.querySelectorAll(':scope > .home-panel'));
+        }
+        // Panels with something to show (a stat panel with nothing configured is `hidden`).
+        function movablePanels() {
+            return allPanels().filter(p => !p.hidden);
+        }
+        function panelLabel(panel) { return panel.dataset.label; }
+
+        function announceLayout(message, isError) {
+            arrangeStatusEl.textContent = message || '';
+            arrangeStatusEl.classList.toggle('is-error', !!isError);
+        }
+
+        function currentLayout() {
+            const panels = allPanels();
+            return {
+                order: panels.map(p => p.dataset.panel),
+                hidden: panels.filter(p => p.classList.contains('is-user-hidden')).map(p => p.dataset.panel),
+            };
+        }
+
+        function applyHomeLayout(layout) {
+            const byKey = {};
+            allPanels().forEach(p => { byKey[p.dataset.panel] = p; });
+            (layout.order || []).forEach(key => { if (byKey[key]) homePanelsEl.appendChild(byKey[key]); });
+            const hidden = new Set(layout.hidden || []);
+            allPanels().forEach(p => p.classList.toggle('is-user-hidden', hidden.has(p.dataset.panel)));
+            refreshPanelTools();
+        }
+
+        function queueLayoutSave() {
+            clearTimeout(saveTimer);
+            saveTimer = setTimeout(saveHomeLayout, 400);
+        }
+
+        async function saveHomeLayout() {
+            try {
+                const response = await fetch('/api/home/layout', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify(currentLayout()),
+                });
+                if (!response.ok) throw new Error(`HTTP ${response.status}`);
+                announceLayout('Layout saved.');
+            } catch (err) {
+                announceLayout("Couldn't save your layout. It will reset when you reload the page.", true);
+            }
+        }
+
+        // Builds the grip / up / down / hide controls once per panel.
+        function buildPanelTools() {
+            const arrowUp = '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><polyline points="18 15 12 9 6 15"></polyline></svg>';
+            const arrowDown = '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><polyline points="6 9 12 15 18 9"></polyline></svg>';
+            const grip = '<svg width="14" height="14" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><circle cx="9" cy="6" r="1.7"/><circle cx="15" cy="6" r="1.7"/><circle cx="9" cy="12" r="1.7"/><circle cx="15" cy="12" r="1.7"/><circle cx="9" cy="18" r="1.7"/><circle cx="15" cy="18" r="1.7"/></svg>';
+            allPanels().forEach(panel => {
+                const label = escapeAttr(panelLabel(panel));
+                const tools = document.createElement('div');
+                tools.className = 'panel-tools';
+                tools.setAttribute('role', 'group');
+                tools.setAttribute('aria-label', `Arrange ${panelLabel(panel)}`);
+                tools.innerHTML = `
+                    <button type="button" class="panel-handle" data-act="drag" aria-label="Drag ${label} (or press the up and down arrow keys)">${grip}</button>
+                    <span class="panel-tools-spacer"></span>
+                    <button type="button" class="panel-tool" data-act="up" aria-label="Move ${label} up">${arrowUp}</button>
+                    <button type="button" class="panel-tool" data-act="down" aria-label="Move ${label} down">${arrowDown}</button>
+                    <button type="button" class="panel-tool" data-act="toggle"></button>`;
+                panel.prepend(tools);
+            });
+        }
+
+        // Keeps every control's state (disabled arrows, Hide/Show label) and
+        // the "everything is hidden" notice in step with the layout.
+        function refreshPanelTools() {
+            const movable = movablePanels();
+            allPanels().forEach(panel => {
+                const tools = panel.querySelector(':scope > .panel-tools');
+                if (!tools) return;
+                const idx = movable.indexOf(panel);
+                tools.querySelector('[data-act="up"]').setAttribute('aria-disabled', idx <= 0 ? 'true' : 'false');
+                tools.querySelector('[data-act="down"]').setAttribute('aria-disabled', idx === -1 || idx === movable.length - 1 ? 'true' : 'false');
+                const toggle = tools.querySelector('[data-act="toggle"]');
+                const isHidden = panel.classList.contains('is-user-hidden');
+                toggle.textContent = isHidden ? 'Show' : 'Hide';
+                toggle.setAttribute('aria-label', `${isHidden ? 'Show' : 'Hide'} ${panelLabel(panel)}`);
+            });
+            const everythingHidden = movable.length > 0 && movable.every(p => p.classList.contains('is-user-hidden'));
+            document.getElementById('home-all-hidden').hidden = arranging || !everythingHidden;
+        }
+
+        function movePanel(panel, direction) {
+            const movable = movablePanels();
+            const idx = movable.indexOf(panel);
+            const swapWith = movable[idx + direction];
+            if (idx === -1 || !swapWith) return false;
+            if (direction < 0) homePanelsEl.insertBefore(panel, swapWith);
+            else homePanelsEl.insertBefore(panel, swapWith.nextSibling);
+            refreshPanelTools();
+            queueLayoutSave();
+            announceLayout(`${panelLabel(panel)} moved ${direction < 0 ? 'up' : 'down'}. Position ${movablePanels().indexOf(panel) + 1} of ${movable.length}.`);
+            return true;
+        }
+
+        function setArranging(on) {
+            if (on === arranging) return;
+            arranging = on;
+            homeView.classList.toggle('is-arranging', on);
+            document.getElementById('home-arrange-bar').hidden = !on;
+            const button = document.getElementById('home-customise');
+            button.setAttribute('aria-pressed', on ? 'true' : 'false');
+            // Panel contents shouldn't be clickable or tabbable while moving things around.
+            homePanelsEl.querySelectorAll('.home-panel-body').forEach(body => { body.inert = on; });
+            announceLayout('');
+            if (on) {
+                // A search replaces the panels; arranging needs them back.
+                if (document.getElementById('cross-instance-search').value.trim()) {
+                    document.getElementById('cross-instance-search').value = '';
+                    runCrossInstanceSearch();
+                }
+                const first = homePanelsEl.querySelector('.home-panel:not([hidden]) .panel-handle');
+                if (first) first.focus();
+            } else {
+                button.focus();
+            }
+            refreshPanelTools();
+        }
+
+        // Drag with pointer events so it works with a mouse, a pen and a finger.
+        // The panel follows the pointer visually; the DOM is only reordered on
+        // release, so the handle that owns the pointer is never moved mid-drag.
+        let drag = null;
+
+        function dragTargetIndex(clientY) {
+            const others = movablePanels().filter(p => p !== drag.panel);
+            let index = 0;
+            others.forEach(p => {
+                const rect = p.getBoundingClientRect();
+                if (clientY > rect.top + rect.height / 2) index += 1;
+            });
+            return { others, index };
+        }
+
+        function updateDrag() {
+            if (!drag) return;
+            const scroller = drag.scroller;
+            drag.panel.style.transform =
+                `translateY(${drag.lastY - drag.startY + (scroller.scrollTop - drag.startScroll)}px)`;
+            const { others, index } = dragTargetIndex(drag.lastY);
+            others.forEach(p => p.classList.remove('drop-before', 'drop-after'));
+            drag.insert = { others, index };
+            if (!others.length) return;
+            if (index < others.length) others[index].classList.add('drop-before');
+            else others[others.length - 1].classList.add('drop-after');
+        }
+
+        function dragAutoScroll() {
+            if (!drag) return;
+            // The page itself scrolls; nudge it when the pointer nears the top or bottom edge.
+            const edge = 56;
+            const top = 0, bottom = window.innerHeight;
+            let delta = 0;
+            if (drag.lastY < top + edge) delta = -Math.ceil((top + edge - drag.lastY) / 4);
+            else if (drag.lastY > bottom - edge) delta = Math.ceil((drag.lastY - (bottom - edge)) / 4);
+            if (delta) {
+                drag.scroller.scrollTop += delta;
+                updateDrag();
+            }
+            drag.raf = requestAnimationFrame(dragAutoScroll);
+        }
+
+        function endDrag(commit) {
+            if (!drag) return;
+            const d = drag;
+            drag = null;
+            cancelAnimationFrame(d.raf);
+            d.handle.removeEventListener('pointermove', onDragMove);
+            d.handle.removeEventListener('pointerup', onDragUp);
+            d.handle.removeEventListener('pointercancel', onDragCancel);
+            d.handle.removeEventListener('lostpointercapture', onDragCancel);
+            try { d.handle.releasePointerCapture(d.pointerId); } catch (e) { /* already released */ }
+            document.removeEventListener('keydown', onDragKey, true);
+            d.panel.classList.remove('is-dragging');
+            d.panel.style.transform = '';
+            d.insert && d.insert.others.forEach(p => p.classList.remove('drop-before', 'drop-after'));
+
+            if (commit && d.insert && d.insert.others.length) {
+                const { others, index } = d.insert;
+                const previousOrder = currentLayout().order.join();
+                if (index < others.length) homePanelsEl.insertBefore(d.panel, others[index]);
+                else homePanelsEl.insertBefore(d.panel, others[others.length - 1].nextSibling);
+                if (currentLayout().order.join() !== previousOrder) {
+                    queueLayoutSave();
+                    announceLayout(`${panelLabel(d.panel)} moved. Position ${movablePanels().indexOf(d.panel) + 1} of ${movablePanels().length}.`);
+                }
+            }
+            refreshPanelTools();
+            d.handle.focus();
+        }
+
+        function onDragMove(e) { if (drag) { drag.lastY = e.clientY; updateDrag(); } }
+        function onDragUp() { endDrag(true); }
+        function onDragCancel() { endDrag(false); }
+        function onDragKey(e) {
+            if (e.key === 'Escape') { e.preventDefault(); e.stopPropagation(); endDrag(false); }
+        }
+
+        homePanelsEl.addEventListener('pointerdown', (e) => {
+            const handle = e.target.closest('.panel-handle');
+            if (!handle || !arranging || e.button > 0) return;
+            const panel = handle.closest('.home-panel');
+            const scroller = document.scrollingElement;
+            e.preventDefault();
+            handle.setPointerCapture(e.pointerId);
+            drag = {
+                panel, handle, scroller, pointerId: e.pointerId,
+                startY: e.clientY, lastY: e.clientY, startScroll: scroller.scrollTop, raf: 0, insert: null,
+            };
+            panel.classList.add('is-dragging');
+            handle.addEventListener('pointermove', onDragMove);
+            handle.addEventListener('pointerup', onDragUp);
+            handle.addEventListener('pointercancel', onDragCancel);
+            handle.addEventListener('lostpointercapture', onDragCancel);
+            document.addEventListener('keydown', onDragKey, true);
+            drag.raf = requestAnimationFrame(dragAutoScroll);
+        });
+
+        // Buttons: move up / down / hide, plus arrow keys on the grip.
+        homePanelsEl.addEventListener('click', (e) => {
+            const btn = e.target.closest('.panel-tool');
+            if (!btn || !arranging) return;
+            const panel = btn.closest('.home-panel');
+            const act = btn.dataset.act;
+            if (act === 'toggle') {
+                const nowHidden = !panel.classList.contains('is-user-hidden');
+                panel.classList.toggle('is-user-hidden', nowHidden);
+                refreshPanelTools();
+                queueLayoutSave();
+                announceLayout(`${panelLabel(panel)} ${nowHidden ? 'hidden' : 'shown'}.`);
+                return;
+            }
+            if (btn.getAttribute('aria-disabled') === 'true') return;
+            movePanel(panel, act === 'up' ? -1 : 1);
+            btn.focus();
+        });
+
+        homePanelsEl.addEventListener('keydown', (e) => {
+            const handle = e.target.closest('.panel-handle');
+            if (!handle || !arranging) return;
+            if (e.key !== 'ArrowUp' && e.key !== 'ArrowDown') return;
+            e.preventDefault();
+            movePanel(handle.closest('.home-panel'), e.key === 'ArrowUp' ? -1 : 1);
+            handle.focus();
+        });
+
+        document.getElementById('home-customise').addEventListener('click', () => setArranging(!arranging));
+        document.getElementById('home-layout-done').addEventListener('click', () => setArranging(false));
+        document.getElementById('home-show-panels').addEventListener('click', () => setArranging(true));
+        document.getElementById('home-layout-reset').addEventListener('click', async () => {
+            try {
+                const response = await fetch('/api/home/layout', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ reset: true }),
+                });
+                if (!response.ok) throw new Error(`HTTP ${response.status}`);
+                const data = await response.json();
+                applyHomeLayout(data.layout);
+                announceLayout('Home is back to the default layout.');
+            } catch (err) {
+                announceLayout("Couldn't reset your layout. Try again.", true);
+            }
+        });
+
+        buildPanelTools();
+        try {
+            applyHomeLayout(JSON.parse(document.getElementById('home-layout-data').textContent));
+        } catch (err) { /* keep the default order */ }
 
         async function runCrossInstanceSearch() {
             const query = document.getElementById('cross-instance-search').value.trim();
             const resultsEl = document.getElementById('cross-instance-search-results');
-            const statsEl = document.getElementById('home-stats-content');
+            const panelsEl = document.getElementById('home-panels');
+            const statusEl = document.getElementById('home-stats-status');
 
             if (!query) {
                 resultsEl.style.display = 'none';
-                statsEl.style.display = 'block';
+                panelsEl.style.display = '';
+                statusEl.style.display = '';
+                refreshPanelTools();
                 return;
             }
 
             resultsEl.style.display = 'block';
-            statsEl.style.display = 'none';
+            panelsEl.style.display = 'none';
+            statusEl.style.display = 'none';
+            document.getElementById('home-all-hidden').hidden = true;
             resultsEl.innerHTML = '<div class="modal-loading">Searching...</div>';
 
             try {
