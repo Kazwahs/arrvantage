@@ -25,6 +25,7 @@ import re
 import secrets
 import requests
 import concurrent.futures
+import threading
 import time
 
 app = Flask(__name__)
@@ -355,7 +356,11 @@ def inject_asset_helpers():
         except OSError:
             version = 0
         return url_for("static", filename=filename, v=version)
-    return {"asset_url": asset_url}
+    return {
+        "asset_url": asset_url,
+        "disk_low_pct": DISK_LOW_PCT,
+        "disk_critical_pct": DISK_CRITICAL_PCT,
+    }
 
 
 @app.before_request
@@ -3870,12 +3875,25 @@ def format_size_gb(size_bytes: int) -> str:
 
 
 def fetch_home_stats() -> dict:
+    # Every external call here (one library per instance, Prowlarr, Tdarr)
+    # is independent of the others, so they all run at once. One slow or
+    # unreachable service now costs its own timeout, not everyone's.
+    jobs = {}
+    for name, config in APPS.items():
+        jobs[("library", name)] = lambda name=name, config=config: fetch_library_cached(name, config)
+    for service in INDEXERS:
+        if service.get("enabled", True):
+            jobs[("indexer", service["name"])] = lambda service=service: fetch_prowlarr_indexers(service)
+    for server in TRANSCODERS:
+        if server.get("enabled", True):
+            jobs[("transcoder", server["name"])] = lambda server=server: fetch_tdarr_status(server)
+    results = run_concurrently(jobs)
+
     instance_stats = []
     for name, config in APPS.items():
-        try:
-            library = fetch_library(name, config)
-        except requests.exceptions.RequestException:
-            continue
+        ok, library = results[("library", name)]
+        if not ok:
+            continue  # a failed request just leaves this instance out of Home
         if library.get("error"):
             instance_stats.append({"name": name, "kind": config["library_kind"], "error": library["error"]})
             continue
@@ -3931,7 +3949,9 @@ def fetch_home_stats() -> dict:
     for service in INDEXERS:
         if not service.get("enabled", True):
             continue
-        result = fetch_prowlarr_indexers(service)
+        ok, result = results[("indexer", service["name"])]
+        if not ok:
+            result = {"error": result}
         if result.get("error"):
             indexer_service_stats.append({
                 "name": service["name"], "type": service["type"], "error": result["error"],
@@ -3953,8 +3973,8 @@ def fetch_home_stats() -> dict:
     for server in TRANSCODERS:
         if not server.get("enabled", True):
             continue
-        status = fetch_tdarr_status(server)
-        if status.get("error"):
+        ok, status = results[("transcoder", server["name"])]
+        if not ok or status.get("error"):
             continue
         transcoder_stats.append({
             "name": server["name"],
@@ -3969,6 +3989,359 @@ def fetch_home_stats() -> dict:
         "indexers": indexer_service_stats,
         "transcoders": transcoder_stats,
     }
+
+
+# ---------------------------------------------------------------------------
+# Concurrent fetching, short-lived caches, and "needs attention"
+#
+# The dashboard used to fetch every instance's queue, history, library,
+# health, disk space and requests - one call after another - before it
+# would send a single byte, and then fetch every library a second time
+# for Home. These helpers are what replaced that: independent calls run
+# at once, the heavy per-instance data loads only when an instance is
+# opened, and Home is driven by a small summary instead.
+# ---------------------------------------------------------------------------
+
+DISK_LOW_PCT = 15       # under this much free space: "Low"
+DISK_CRITICAL_PCT = 7   # under this much free space: "Critically low"
+
+FETCH_POOL = concurrent.futures.ThreadPoolExecutor(max_workers=16, thread_name_prefix="arrv-fetch")
+FETCH_TIMEOUT_SECONDS = 25  # overall ceiling for one batch of parallel calls
+
+
+def run_concurrently(jobs: dict, timeout: float = FETCH_TIMEOUT_SECONDS) -> dict:
+    """
+    Runs {key: zero-arg callable} at once on the shared pool and returns
+    {key: (ok, value)}. ok is False when the call raised or didn't finish
+    in time, and value is then a short error string - so one bad service
+    can never take the whole batch (or the page) down with it.
+    """
+    futures = {key: FETCH_POOL.submit(fn) for key, fn in jobs.items()}
+    deadline = time.monotonic() + timeout
+    results = {}
+    for key, future in futures.items():
+        try:
+            results[key] = (True, future.result(timeout=max(0.0, deadline - time.monotonic())))
+        except concurrent.futures.TimeoutError:
+            future.cancel()
+            results[key] = (False, "timed out")
+        except Exception as err:  # noqa: BLE001 - a failed call must not escape
+            results[key] = (False, str(err) or err.__class__.__name__)
+    return results
+
+
+# A library can be large (Sonarr's is thousands of shows), and Home only
+# needs its totals, so a library fetched in the last minute is reused
+# rather than downloaded again. Errors are never cached.
+LIBRARY_CACHE_SECONDS = 60
+_LIBRARY_CACHE: dict = {}
+_LIBRARY_CACHE_LOCK = threading.Lock()
+
+
+def _library_cache_key(name: str, config: dict) -> tuple:
+    return (name, config.get("url"), config.get("library_kind"))
+
+
+def store_library_in_cache(name: str, config: dict, library: dict) -> None:
+    if library.get("error"):
+        return
+    with _LIBRARY_CACHE_LOCK:
+        _LIBRARY_CACHE[_library_cache_key(name, config)] = (time.monotonic(), library)
+
+
+def fetch_library_cached(name: str, config: dict, max_age: float = LIBRARY_CACHE_SECONDS) -> dict:
+    key = _library_cache_key(name, config)
+    with _LIBRARY_CACHE_LOCK:
+        entry = _LIBRARY_CACHE.get(key)
+    if entry and time.monotonic() - entry[0] <= max_age:
+        return entry[1]
+    library = fetch_library(name, config)
+    store_library_in_cache(name, config, library)
+    return library
+
+
+def instance_seerr_type(config: dict, perms: dict):
+    """Which Overseerr/Jellyseerr media type this instance can request,
+    or None when there's no active requester or this account can't request."""
+    return config["seerr_media_type"] if (get_active_requester() and perms["requesting"]) else None
+
+
+def build_instance_view(name: str, config: dict, perms: dict) -> dict:
+    """
+    Everything the dashboard shows for one instance (library, queue,
+    history, requests, system). The six underlying calls are independent
+    so they run together. This is what the lazy-loaded instance panels
+    are rendered from.
+    """
+    active_requester = get_active_requester()
+    seerr_type = instance_seerr_type(config, perms)
+
+    results = run_concurrently({
+        "queue": lambda: fetch_queue(name, config),
+        "history": lambda: fetch_history(name, config),
+        "library": lambda: fetch_library(name, config),
+        "health": lambda: fetch_health(name, config),
+        "diskspace": lambda: fetch_diskspace(name, config),
+        "seerr": lambda: fetch_seerr_requests(active_requester, seerr_type),
+    })
+
+    def pick(key, empty):
+        ok, value = results[key]
+        return value if ok else {"error": value, **empty}
+
+    queue = pick("queue", {"queue_items": []})
+    history = pick("history", {"history_items": []})
+    library = pick("library", {"library_items": [], "status_options": [], "genre_options": []})
+    health = pick("health", {"health_items": []})
+    diskspace = pick("diskspace", {"diskspace_items": []})
+    seerr = pick("seerr", {"request_items": []})
+
+    store_library_in_cache(name, config, library)
+
+    # Only "warning" and "error" are actual problems worth badging -
+    # "notice" is informational (e.g. "you're on a pre-release branch").
+    health_issue_count = sum(
+        1 for item in health["health_items"] if item["type"] in ("warning", "error")
+    )
+
+    collections = []
+    if config["library_kind"] == "movie":
+        owned_tmdb_lookup = {
+            item["tmdb_id"]: item["item_id"]
+            for item in library["library_items"] if item.get("tmdb_id")
+        }
+        try:
+            collections = fetch_collections(config, owned_tmdb_lookup)
+        except Exception:  # noqa: BLE001 - collections are a nicety, never fatal
+            collections = []
+
+    return {
+        "name": name,
+        "logo_url": INSTANCE_ICONS.get(config["library_kind"], ""),
+        "color": config.get("color", "#5b8cff"),
+        "library_kind": config["library_kind"],
+        "url": config["url"],
+        "seerr_media_type": seerr_type,
+        "error": queue["error"],
+        "queue_items": queue["queue_items"],
+        "history_items": history["history_items"],
+        "history_error": history["error"],
+        "library_items": library["library_items"],
+        "library_error": library["error"],
+        "status_options": library["status_options"],
+        "genre_options": library["genre_options"],
+        "request_items": seerr["request_items"],
+        "collections": collections,
+        "health_items": health["health_items"],
+        "health_error": health["error"],
+        "health_issue_count": health_issue_count,
+        "diskspace_items": diskspace["diskspace_items"],
+        "diskspace_error": diskspace["error"],
+    }
+
+
+# --- Needs attention ---------------------------------------------------
+
+ATTENTION_CACHE_SECONDS = 30
+_ATTENTION_CACHE: dict = {"at": 0.0, "data": None}
+_ATTENTION_LOCK = threading.Lock()
+
+_SEVERITY_RANK = {"critical": 0, "warning": 1}
+_KIND_RANK = {"unreachable": 0, "disk": 1, "queue": 2, "health": 3}
+_BAD_QUEUE_STATUSES = {"warning", "failed", "error"}
+
+
+def _health_group_title(source: str, messages: list) -> str:
+    """
+    Titles one merged health warning. Arr apps word the same underlying
+    problem slightly differently (each lists its own failing indexers),
+    so for indexer checks the names are merged across apps; anything
+    else just uses the first message.
+    """
+    if "indexer" in source.lower() and all(": " in m for m in messages):
+        prefix = messages[0].split(": ", 1)[0]
+        names = []
+        for message in messages:
+            for entry in message.split(": ", 1)[1].split(", "):
+                entry = entry.strip()
+                if entry and entry not in names:
+                    names.append(entry)
+        return f"{prefix}: {', '.join(names)}"
+    return messages[0]
+
+
+def summarize_attention(signals: dict) -> dict:
+    """
+    Pure function: turns {instance: {"queue": {...}, "health": {...},
+    "diskspace": {...}}} (each the dict its fetch_* returned, or an
+    {"error": ...} stand-in) into the grouped, severity-ranked list Home
+    shows. Kept free of any I/O so it can be tested directly.
+    """
+    items = []
+    per_instance = {}
+    health_groups: dict = {}
+    disk_groups: dict = {}
+
+    for name, sig in signals.items():
+        queue = sig.get("queue") or {"error": "no data", "queue_items": []}
+        health = sig.get("health") or {"error": "no data", "health_items": []}
+        disk = sig.get("diskspace") or {"error": "no data", "diskspace_items": []}
+
+        state = {"health_issues": 0, "queue_count": 0, "queue_issues": 0, "unreachable": False, "dot": None}
+        per_instance[name] = state
+
+        # Every call failing means the service itself is down or
+        # rejecting us - one clear item, instead of three error lines.
+        if queue.get("error") and health.get("error") and disk.get("error"):
+            state["unreachable"] = True
+            state["dot"] = "critical"
+            items.append({
+                "id": f"unreachable:{name}", "severity": "critical", "kind": "unreachable",
+                "title": f"{name} can't be reached", "detail": queue["error"],
+                "services": [name], "view": None,
+            })
+            continue
+
+        queue_items = queue.get("queue_items") or []
+        state["queue_count"] = len(queue_items)
+        bad = [q for q in queue_items
+               if (q.get("status") or "").lower() in _BAD_QUEUE_STATUSES or q.get("status_messages")]
+        state["queue_issues"] = len(bad)
+        if bad:
+            first = bad[0]
+            reason = (first.get("status_messages") or [""])[0]
+            detail = first.get("title") or ""
+            if reason:
+                detail = f"{detail} - {reason}" if detail else reason
+            items.append({
+                "id": f"queue:{name}", "severity": "warning", "kind": "queue",
+                "title": f"{len(bad)} download{'s' if len(bad) != 1 else ''} stalled or failing in {name}",
+                "detail": detail, "services": [name], "view": "queue",
+            })
+            state["dot"] = state["dot"] or "warning"
+
+        for h in health.get("health_items") or []:
+            if h.get("type") not in ("warning", "error"):
+                continue
+            state["health_issues"] += 1
+            key = h.get("source") or h.get("message")
+            group = health_groups.setdefault(key, {"source": h.get("source") or "", "messages": [], "services": [], "error": False})
+            if h["message"] not in group["messages"]:
+                group["messages"].append(h["message"])
+            if name not in group["services"]:
+                group["services"].append(name)
+            if h["type"] == "error":
+                group["error"] = True
+                state["dot"] = "critical"
+
+        for d in disk.get("diskspace_items") or []:
+            pct = d.get("percent_free")
+            if pct is None or pct >= DISK_LOW_PCT:
+                continue
+            critical = pct < DISK_CRITICAL_PCT
+            # Several apps usually report the very same disk (a shared
+            # volume), so identical readings collapse into one item.
+            key = (d.get("total_human"), d.get("free_human"), pct)
+            group = disk_groups.setdefault(key, {"d": d, "critical": critical, "services": []})
+            if name not in group["services"]:
+                group["services"].append(name)
+            if critical:
+                state["dot"] = "critical"
+
+    for key, group in health_groups.items():
+        items.append({
+            "id": f"health:{key}",
+            "severity": "critical" if group["error"] else "warning",
+            "kind": "health",
+            "title": _health_group_title(group["source"], group["messages"]),
+            "detail": "", "services": group["services"], "view": "system",
+        })
+
+    for key, group in disk_groups.items():
+        d = group["d"]
+        items.append({
+            "id": f"disk:{key[0]}:{key[1]}:{key[2]}",
+            "severity": "critical" if group["critical"] else "warning",
+            "kind": "disk",
+            "title": f"{'Critically low' if group['critical'] else 'Low'} disk space: {d.get('path') or 'unknown path'}",
+            "detail": f"{d.get('free_human')} free of {d.get('total_human')} ({d.get('percent_free')}%)",
+            "services": group["services"], "view": "system",
+        })
+
+    # Within a kind, what affects the most services comes first - a warning
+    # shared by five apps matters more than a one-app config tip.
+    items.sort(key=lambda i: (_SEVERITY_RANK[i["severity"]], _KIND_RANK[i["kind"]], -len(i["services"]), i["title"]))
+    return {
+        "generated_at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+        "checked": len(signals),
+        "items": items,
+        "summary": {
+            "critical": sum(1 for i in items if i["severity"] == "critical"),
+            "warning": sum(1 for i in items if i["severity"] == "warning"),
+            "total": len(items),
+        },
+        "per_instance": per_instance,
+    }
+
+
+def gather_attention(force: bool = False) -> dict:
+    """Collects the light-weight signals (queue, health, disk space) from
+    every enabled instance at once and summarises them. Cached for a few
+    seconds so rapid refreshes don't hammer the apps; force skips that."""
+    with _ATTENTION_LOCK:
+        cached = _ATTENTION_CACHE["data"]
+        if not force and cached is not None and time.monotonic() - _ATTENTION_CACHE["at"] < ATTENTION_CACHE_SECONDS:
+            return cached
+
+    enabled = {n: c for n, c in APPS.items() if c.get("enabled", True)}
+    jobs = {}
+    for n, c in enabled.items():
+        jobs[(n, "queue")] = lambda n=n, c=c: fetch_queue(n, c)
+        jobs[(n, "health")] = lambda n=n, c=c: fetch_health(n, c)
+        jobs[(n, "diskspace")] = lambda n=n, c=c: fetch_diskspace(n, c)
+    results = run_concurrently(jobs)
+
+    signals = {}
+    for n in enabled:
+        signals[n] = {}
+        for kind in ("queue", "health", "diskspace"):
+            ok, value = results[(n, kind)]
+            signals[n][kind] = value if ok else {"error": value}
+
+    data = summarize_attention(signals)
+    with _ATTENTION_LOCK:
+        _ATTENTION_CACHE["data"] = data
+        _ATTENTION_CACHE["at"] = time.monotonic()
+    return data
+
+
+@app.route("/api/attention")
+@login_required
+def api_attention():
+    return jsonify(gather_attention(force=request.args.get("refresh") == "1"))
+
+
+@app.route("/fragment/instance/<name>")
+@login_required
+def fragment_instance(name):
+    """
+    The panels (library, request, queue, history, system) for one
+    instance, as an HTML fragment. The dashboard fetches this the first
+    time an instance is opened, instead of every instance's data being
+    baked into the page up front.
+    """
+    config = APPS.get(name)
+    if not config or not config.get("enabled", True):
+        return ("Unknown instance", 404)
+    perms = user_permissions(current_user())
+    html = render_template(
+        "partials/instance_panels.html",
+        instance=build_instance_view(name, config, perms),
+        can_search=perms["searching"],
+    )
+    response = app.make_response(html)
+    response.headers["Cache-Control"] = "no-store"
+    return response
 
 
 @app.route("/api/home/stats")
@@ -4450,62 +4823,22 @@ def index():
     perms = user_permissions(user)
     is_admin = user.get("role") == "admin"
 
-    instances = []
-    active_requester = get_active_requester()
-
-    for name, config in APPS.items():
-        if not config.get("enabled", True):
-            continue  # disabled instance - don't even fetch its data
-
-        # Hide the Request tab if there's no active requester configured
-        # OR this account isn't allowed to request.
-        effective_seerr_type = (
-            config["seerr_media_type"] if (active_requester and perms["requesting"]) else None
-        )
-
-        queue = fetch_queue(name, config)
-        history = fetch_history(name, config)
-        library = fetch_library(name, config)
-        health = fetch_health(name, config)
-        diskspace = fetch_diskspace(name, config)
-        seerr = fetch_seerr_requests(active_requester, effective_seerr_type)
-
-        # Only "warning" and "error" are actual problems worth badging -
-        # "notice" is informational (e.g. "you're on a pre-release branch").
-        health_issue_count = sum(
-            1 for item in health["health_items"] if item["type"] in ("warning", "error")
-        )
-
-        collections = []
-        if config["library_kind"] == "movie":
-            owned_tmdb_lookup = {
-                item["tmdb_id"]: item["item_id"]
-                for item in library["library_items"] if item.get("tmdb_id")
-            }
-            collections = fetch_collections(config, owned_tmdb_lookup)
-
-        instances.append({
+    # Only what the sidebar needs, all of it straight from config - no
+    # network calls. Each instance's panels are fetched on demand from
+    # /fragment/instance/<name>, and the health/queue badges are filled in
+    # from /api/attention once the page is already on screen.
+    instances = [
+        {
             "name": name,
             "logo_url": INSTANCE_ICONS.get(config["library_kind"], ""),
             "color": config.get("color", "#5b8cff"),
             "library_kind": config["library_kind"],
             "url": config["url"],
-            "seerr_media_type": effective_seerr_type,
-            "error": queue["error"],
-            "queue_items": queue["queue_items"],
-            "history_items": history["history_items"],
-            "library_items": library["library_items"],
-            "library_error": library["error"],
-            "status_options": library["status_options"],
-            "genre_options": library["genre_options"],
-            "request_items": seerr["request_items"],
-            "collections": collections,
-            "health_items": health["health_items"],
-            "health_error": health["error"],
-            "health_issue_count": health_issue_count,
-            "diskspace_items": diskspace["diskspace_items"],
-            "diskspace_error": diskspace["error"],
-        })
+            "seerr_media_type": instance_seerr_type(config, perms),
+        }
+        for name, config in APPS.items()
+        if config.get("enabled", True)
+    ]
 
     downloaders_for_template = [
         {

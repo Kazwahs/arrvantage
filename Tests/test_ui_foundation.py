@@ -79,7 +79,7 @@ class TestStaticAssets:
 
     def test_shared_stylesheet_defines_design_tokens(self, client):
         css = client.get("/static/css/app.css").data.decode()
-        for token in ("--bg:", "--panel:", "--accent:", "--error:", "--warning:", "--focus:", "--font-sans:"):
+        for token in ("--bg:", "--panel:", "--accent:", "--error:", "--warning:", "--focus:", "--font-sans:", "--error-text:"):
             assert token in css
 
     def test_font_urls_in_css_resolve(self, client):
@@ -161,7 +161,9 @@ class TestDiskSpaceTiers:
     def _render(self, app_module, admin_session, monkeypatch, items):
         client, _ = admin_session
         _stub_fetchers(app_module, monkeypatch, items)
-        return client.get("/").data.decode()
+        # Instance panels (incl. disk space) are lazy-loaded fragments now,
+        # not part of the main page.
+        return client.get("/fragment/instance/Radarr").data.decode()
 
     def test_healthy_disk_has_no_warning(self, app_module, admin_session, monkeypatch):
         html = self._render(app_module, admin_session, monkeypatch, [_disk("/mnt/media", 40)])

@@ -54,6 +54,7 @@
     --accent-amber: #e8a33d;
     --warning: var(--accent-amber);
     --error: #e5484d;
+    --error-text: #ec5d61;  /* --error lightened so small red text clears 4.5:1 on --panel */
     --success: #5fd97a;
     --focus: #8ab8ee;
 

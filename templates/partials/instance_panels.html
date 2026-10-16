@@ -1,0 +1,236 @@
+{# One instance's panels (library, request, queue, history, system).
+   Rendered on demand by /fragment/instance/<name> and injected into the
+   dashboard the first time that instance is opened - it is not part of the
+   main page. Expects: instance (see build_instance_view), can_search. #}
+<div class="instance-fragment" data-instance="{{ instance.name }}"
+     data-queue-count="{{ instance.queue_items|length }}"
+     data-health-count="{{ instance.health_issue_count }}">
+
+<!-- Library panel -->
+<div class="panel" data-instance="{{ instance.name }}" data-view="library">
+    {% if instance.library_error %}
+        <div class="error">{{ instance.library_error }}</div>
+    {% elif instance.library_items|length == 0 %}
+        <div class="empty">Nothing in the library yet</div>
+    {% else %}
+        <div class="filter-row">
+            <select id="status-filter-{{ instance.name }}" onchange="filterLibrary('{{ instance.name }}')">
+                <option value="all">All statuses</option>
+                {% for s in instance.status_options %}<option value="{{ s }}">{{ s }}</option>{% endfor %}
+            </select>
+            <select id="genre-filter-{{ instance.name }}" onchange="filterLibrary('{{ instance.name }}')">
+                <option value="all">All genres</option>
+                {% for g in instance.genre_options %}<option value="{{ g }}">{{ g }}</option>{% endfor %}
+            </select>
+            <select id="sort-{{ instance.name }}" onchange="sortLibrary('{{ instance.name }}')">
+                <option value="title">Sort: Alphabetical</option>
+                {% if instance.library_kind in ("movie", "series") %}
+                <option value="release">Sort: Release Date</option>
+                {% endif %}
+                <option value="added">Sort: Date Added</option>
+            </select>
+            <button type="button" class="sort-dir-btn" id="sort-dir-{{ instance.name }}" data-direction="asc"
+                    onclick="toggleSortDirection('{{ instance.name }}')" title="Toggle ascending/descending">&uarr;</button>
+            {% if instance.library_kind == "movie" %}
+            <select id="view-mode-{{ instance.name }}" onchange="toggleLibraryViewMode('{{ instance.name }}')">
+                <option value="movies">All Movies</option>
+                <option value="collections">Collections</option>
+            </select>
+            {% endif %}
+        </div>
+
+        <div class="library-grid" id="library-rows-{{ instance.name }}">
+            {% for item in instance.library_items %}
+            <div class="library-card"
+                 data-status="{{ item.status }}"
+                 data-genre="{{ item.genre }}"
+                 data-title="{{ item.title }}"
+                 data-cover="{{ item.cover_url }}"
+                 data-release-date="{{ item.release_date }}"
+                 data-date-added="{{ item.date_added }}">
+                <div class="cover-wrap" role="button" tabindex="0" onclick="openDetails(this, '{{ instance.name }}', {{ item.item_id }})">
+                    {% if item.cover_url %}
+                        <img src="{{ item.cover_url }}" alt="{{ item.title }}" loading="lazy"
+                             onerror="this.style.display='none'; this.nextElementSibling.style.display='flex';">
+                    {% endif %}
+                    <div class="cover-fallback" {% if item.cover_url %}style="display:none;"{% endif %}>{{ item.title }}</div>
+                    <span class="status-badge status-{{ item.status|lower }}">{{ item.status }}</span>
+                </div>
+                <div class="card-title">{{ item.title }}</div>
+                <div class="card-genre">{{ item.genre }}</div>
+                {% if item.status == "Missing" and can_search %}
+                <div class="card-actions">
+                    <button class="mini-btn" onclick="event.stopPropagation(); triggerAutoSearch(this, '{{ instance.name }}', {{ item.item_id }})">Auto Search</button>
+                    <button class="mini-btn" onclick="event.stopPropagation(); openInteractiveSearch(this, '{{ instance.name }}', {{ item.item_id }})">Find Releases</button>
+                </div>
+                {% endif %}
+            </div>
+            {% endfor %}
+        </div>
+
+        {% if instance.library_kind == "movie" %}
+        <div class="collections-list library-grid" id="collections-{{ instance.name }}" style="display:none;">
+            {% if instance.collections|length == 0 %}
+                <div class="empty">No collections found</div>
+            {% else %}
+                {% for col in instance.collections %}
+                <div class="library-card" data-title="{{ col.title }}">
+                    <div class="cover-wrap" role="button" tabindex="0" onclick="openCollectionModal('{{ instance.name }}', {{ col.collection_id }})">
+                        {% if col.cover_url %}
+                            <img src="{{ col.cover_url }}" alt="{{ col.title }}" loading="lazy"
+                                 onerror="this.style.display='none'; this.nextElementSibling.style.display='flex';">
+                        {% endif %}
+                        <div class="cover-fallback" {% if col.cover_url %}style="display:none;"{% endif %}>{{ col.title }}</div>
+                        <span class="status-badge collection-badge">{{ col.owned_count }}/{{ col.total_count }}</span>
+                    </div>
+                    <div class="card-title">{{ col.title }}</div>
+                </div>
+                {% endfor %}
+            {% endif %}
+        </div>
+        {% endif %}
+    {% endif %}
+</div>
+<!-- Request panel: search Overseerr + list existing requests -->
+<div class="panel" data-instance="{{ instance.name }}" data-view="request">
+    {% if instance.seerr_media_type %}
+        <div class="search-row">
+            <input type="text" placeholder="Search to request..."
+                   data-instance="{{ instance.name }}"
+                   data-media-type="{{ instance.seerr_media_type }}"
+                   onkeydown="if(event.key==='Enter') runSearch(this)">
+            <button onclick="runSearch(this.previousElementSibling)">Search</button>
+        </div>
+        <div class="search-results" id="results-{{ instance.name }}"></div>
+
+        <div class="section-label">Existing requests</div>
+        <div id="requests-list-{{ instance.name }}">
+            {% if instance.request_items|length == 0 %}
+                <div class="empty">No requests yet</div>
+            {% else %}
+                {% for r in instance.request_items %}
+                <div class="request-row">
+                    <div class="request-thumb">
+                        {% if r.poster_url %}
+                            <img src="{{ r.poster_url }}" alt="{{ r.title }}" loading="lazy"
+                                 onerror="this.style.display='none'; this.nextElementSibling.style.display='flex';">
+                        {% endif %}
+                        <div class="request-thumb-fallback" {% if r.poster_url %}style="display:none;"{% endif %}></div>
+                    </div>
+                    <div class="request-info">
+                        <div class="request-title">{{ r.title }}{% if r.is4k %} <span class="inline-badge badge-notice">4K</span>{% endif %}</div>
+                        <div class="request-meta">
+                            <span class="inline-badge badge-{{ r.status_class }}">{{ r.status }}</span>
+                            {% if r.status_class == 'success' %}&middot; {{ r.media_status }}{% endif %}
+                            &middot; req. by {{ r.requested_by }}
+                            {% if r.requested_date %}&middot; {{ r.requested_date }}{% endif %}
+                        </div>
+                    </div>
+                </div>
+                {% endfor %}
+            {% endif %}
+        </div>
+    {% else %}
+        <div class="placeholder">{{ instance.name }} isn't a movie/TV instance, so Overseerr requests don't apply here.</div>
+    {% endif %}
+</div>
+
+<!-- Queue panel -->
+<div class="panel" data-instance="{{ instance.name }}" data-view="queue">
+    {% if instance.error %}
+        <div class="error">{{ instance.error }}</div>
+    {% elif instance.queue_items|length == 0 %}
+        <div class="empty">Queue is empty</div>
+    {% else %}
+        {% for item in instance.queue_items %}
+        <div class="queue-item">
+            <div class="queue-item-row">
+                <span>{{ item.title }}</span>
+                <span class="item-time">{{ item.time_left }}</span>
+            </div>
+            {% if item.indexer or item.quality or item.download_client %}
+            <div class="queue-item-meta">
+                {{ [item.quality, item.indexer, item.download_client, item.protocol] | select | join(' · ') }}
+                {% if item.custom_format_score %}&middot; CF score {{ item.custom_format_score }}{% endif %}
+                {% if item.size_human %}&middot; {{ item.size_human }}{% endif %}
+            </div>
+            {% endif %}
+            {% if item.progress_pct is not none %}
+            <div class="queue-progress-track">
+                <div class="queue-progress-fill {% if item.status_messages %}has-issue{% endif %}" style="width: {{ item.progress_pct }}%;"></div>
+            </div>
+            {% endif %}
+            {% for msg in item.status_messages %}
+            <div class="queue-status-msg is-error">{{ msg }}</div>
+            {% endfor %}
+        </div>
+        {% endfor %}
+    {% endif %}
+</div>
+
+<!-- History panel -->
+<div class="panel" data-instance="{{ instance.name }}" data-view="history">
+    {% if instance.error or instance.history_error %}
+        <div class="error">{{ instance.error or instance.history_error }}</div>
+    {% elif instance.history_items|length == 0 %}
+        <div class="empty">No history yet</div>
+    {% else %}
+        {% for item in instance.history_items %}
+        <div class="item">
+            <span>{{ item.title }}</span>
+            <span class="item-event">{{ item.event }}</span>
+            <span class="item-date">{{ item.date }}</span>
+        </div>
+        {% endfor %}
+    {% endif %}
+</div>
+
+<!-- System panel: health checks + disk space -->
+<div class="panel" data-instance="{{ instance.name }}" data-view="system">
+    <div class="section-heading">Health</div>
+    {% if instance.health_error %}
+        <div class="error">{{ instance.health_error }}</div>
+    {% elif instance.health_items|length == 0 %}
+        <div class="empty">No health issues reported</div>
+    {% else %}
+        {% for h in instance.health_items %}
+        <div class="health-item">
+            <span class="inline-badge badge-{{ h.type }}">{{ h.type }}</span>
+            <span>
+                {% if h.wiki_url %}<a href="{{ h.wiki_url }}" target="_blank" rel="noopener" class="link-inherit">{{ h.message }}</a>{% else %}{{ h.message }}{% endif %}
+                {% if h.source %}<span class="health-item-source">&middot; {{ h.source }}</span>{% endif %}
+            </span>
+        </div>
+        {% endfor %}
+    {% endif %}
+
+    <div class="section-heading">Disk space</div>
+    {% if instance.diskspace_error %}
+        <div class="error">{{ instance.diskspace_error }}</div>
+    {% elif instance.diskspace_items|length == 0 %}
+        <div class="empty">No root folders reported</div>
+    {% else %}
+        {% for d in instance.diskspace_items %}
+        {# Low/critical thresholds come from DISK_LOW_PCT / DISK_CRITICAL_PCT in app.py.
+           Shown as a word as well as a color, never color alone. #}
+        {% set disk_tier = '' if d.percent_free is none else ('critical' if d.percent_free < disk_critical_pct else ('low' if d.percent_free < disk_low_pct else '')) %}
+        <div class="diskspace-item">
+            <div class="diskspace-item-row">
+                <span class="path">{{ d.path }}{% if d.label %} ({{ d.label }}){% endif %}</span>
+                <span class="free{% if disk_tier %} is-{{ disk_tier }}{% endif %}">
+                    {% if disk_tier == 'critical' %}Critically low &middot; {% elif disk_tier == 'low' %}Low &middot; {% endif %}{{ d.free_human }} free of {{ d.total_human }}{% if d.percent_free is not none %} ({{ d.percent_free }}%){% endif %}
+                </span>
+            </div>
+            {% if d.percent_free is not none %}
+            <div class="queue-progress-track" role="progressbar" aria-label="Space used on {{ d.path }}" aria-valuemin="0" aria-valuemax="100" aria-valuenow="{{ 100 - d.percent_free }}">
+                <div class="queue-progress-fill{% if disk_tier == 'critical' %} is-critical{% elif disk_tier == 'low' %} has-issue{% endif %}" style="width: {{ 100 - d.percent_free }}%;"></div>
+            </div>
+            {% endif %}
+        </div>
+        {% endfor %}
+    {% endif %}
+</div>
+{% if instance.library_kind == "movie" %}
+<script type="application/json" class="collections-data">{{ instance.collections | tojson }}</script>
+{% endif %}
+</div>

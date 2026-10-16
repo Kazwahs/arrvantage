@@ -202,7 +202,7 @@ body {
     padding: 1rem 0;
 }
 
-.error { color: var(--error); font-size: 0.9rem; }
+.error { color: var(--error-text); font-size: 0.9rem; }
 
 /* --- Queue tab: title/time row plus an optional progress bar
        and status/error messages underneath --- */
@@ -258,7 +258,7 @@ body {
     border-radius: 4px;
     background: rgba(255, 255, 255, 0.08);
 }
-.inline-badge.badge-error { color: var(--error); }
+.inline-badge.badge-error { color: var(--error-text); }
 .inline-badge.badge-warning { color: var(--accent-amber); }
 .inline-badge.badge-notice { color: var(--muted); }
 .inline-badge.badge-success { color: var(--success); }
@@ -311,8 +311,78 @@ body {
     border-radius: 50%;
     background: var(--error);
 }
+.health-dot.is-warning { background: var(--warning); }
 
-#system-tab-badge { font-family: var(--mono); color: var(--error); }
+/* --- Home: needs attention --- */
+
+.attention { margin-bottom: 1.75rem; }
+.attention-heading { display: flex; align-items: center; gap: 0.5rem; margin: 0 0 0.6rem 0; font-weight: 500; }
+.attention-count {
+    font-family: var(--mono);
+    font-variant-numeric: tabular-nums;
+    font-size: var(--text-xs);
+    letter-spacing: 0;
+    color: var(--text);
+    background: var(--panel);
+    border: 1px solid var(--border);
+    border-radius: var(--radius-sm);
+    padding: 0 0.4rem;
+}
+.attention-list { list-style: none; margin: 0; padding: 0; border-top: 1px solid var(--border); }
+.attention-item {
+    display: flex;
+    align-items: flex-start;
+    gap: 0.75rem;
+    padding: 0.7rem 0.25rem 0.7rem 0.75rem;
+    border-bottom: 1px solid var(--border);
+    border-left: 2px solid var(--accent-amber);
+}
+.attention-item.is-critical { border-left-color: var(--error); }
+.attention-sev { flex: 0 0 4.2rem; margin-top: 0.1rem; }
+.attention-main { min-width: 0; flex: 1; }
+.attention-title { font-size: var(--text-base); overflow-wrap: anywhere; }
+.attention-detail { font-size: var(--text-sm); color: var(--muted); margin-top: 0.15rem; overflow-wrap: anywhere; }
+.attention-services { display: flex; flex-wrap: wrap; gap: 0.35rem; margin-top: 0.45rem; }
+.attention-link {
+    background: var(--panel);
+    border: 1px solid var(--border);
+    border-radius: var(--radius-sm);
+    color: var(--muted);
+    font-size: var(--text-xs);
+    padding: 0.15rem 0.5rem;
+    cursor: pointer;
+    transition: border-color var(--dur-fast) var(--ease-out), color var(--dur-fast) var(--ease-out);
+}
+.attention-link:hover { border-color: var(--accent); color: var(--text); }
+.attention-more {
+    background: none;
+    border: 0;
+    color: var(--accent);
+    font-size: var(--text-sm);
+    padding: 0.5rem 0;
+    cursor: pointer;
+}
+.attention-more:hover { text-decoration: underline; }
+.attention-clear {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 0.5rem;
+    padding: 0.7rem 0.75rem;
+    border: 1px solid var(--border);
+    border-left: 2px solid var(--success);
+    border-radius: var(--radius);
+    background: var(--panel);
+}
+.attention-clear svg { color: var(--success); flex: none; }
+.attention-clear-title { font-size: var(--text-base); }
+.attention-clear-detail { font-size: var(--text-sm); color: var(--muted); }
+.attention-loading, .attention-error { font-size: var(--text-sm); color: var(--muted); padding: 0.6rem 0; }
+
+.instance-load-status { padding: 0.5rem 0; }
+.instance-load-status .error { margin-bottom: 0.75rem; }
+
+#system-tab-badge { font-family: var(--mono); color: var(--error-text); }
 
 /* --- Request tab: search box + results --- */
 
@@ -399,7 +469,7 @@ body {
 .request-title { font-size: 0.88rem; }
 .request-meta { font-size: 0.78rem; color: var(--muted); margin-top: 0.15rem; }
 .test-ok { color: var(--success); }
-.test-fail { color: var(--error); }
+.test-fail { color: var(--error-text); }
 .test-status { font-size: 0.78rem; margin-top: 0.15rem; }
 
 .section-label {

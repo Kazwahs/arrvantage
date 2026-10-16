@@ -23,14 +23,12 @@
                 data-instance="{{ instance.name }}"
                 data-seerr-type="{{ instance.seerr_media_type or '' }}"
                 data-kind="{{ instance.library_kind }}"
-                data-queue-count="{{ instance.queue_items|length }}"
-                data-health-count="{{ instance.health_issue_count }}"
+                data-queue-count="0"
+                data-health-count="0"
                 data-url="{{ instance.url }}"
                 style="--tab-color: {{ instance.color }};"
                 onclick="selectInstance('{{ instance.name }}')">
-            {% if instance.health_issue_count > 0 %}
-            <span class="health-dot" title="{{ instance.health_issue_count }} health issue(s)"></span>
-            {% endif %}
+            {# the red/amber status dot is added by applyAttentionToSidebar() #}
             <img class="instance-logo" src="{{ instance.logo_url }}" alt="" onerror="this.style.display='none';">
             {{ instance.name }}
             <span class="tab-open-link" role="link" tabindex="0" aria-label="Open {{ instance.name }} directly" title="Open {{ instance.name }} directly"
@@ -141,7 +139,7 @@
                     <button class="test-btn" onclick="runCrossInstanceSearch()">Search</button>
                 </div>
                 <div class="topbar-right">
-                    <button class="test-btn" onclick="loadHomeStats()">Refresh</button>
+                    <button class="test-btn" onclick="refreshHome()">Refresh</button>
                     {% if is_admin %}
                     <a class="settings-link" href="/settings" title="Settings">
                         <img src="/static/icons/settings.svg" alt="Settings">
@@ -154,6 +152,16 @@
             </div>
             <div class="content">
                 <div id="cross-instance-search-results" style="display:none; margin-bottom: 1.5rem;"></div>
+
+                <section class="attention" id="attention-panel" aria-labelledby="attention-heading">
+                    <h2 class="modal-section-title attention-heading" id="attention-heading">
+                        Needs attention <span class="attention-count" id="attention-count" hidden></span>
+                    </h2>
+                    <div id="attention-body" aria-live="polite" aria-busy="true">
+                        <div class="attention-loading">Checking your services&hellip;</div>
+                    </div>
+                </section>
+
                 <div id="home-stats-content" class="modal-loading">Loading...</div>
             </div>
         </div>
@@ -186,234 +194,12 @@
         </div>
 
         <div class="content">
+            {# Each instance's panels are fetched from /fragment/instance/<name> the
+               first time it's opened (see ensureInstanceLoaded in the script). #}
             {% for instance in instances %}
-
-            <!-- Library panel -->
-            <div class="panel" data-instance="{{ instance.name }}" data-view="library">
-                {% if instance.library_error %}
-                    <div class="error">{{ instance.library_error }}</div>
-                {% elif instance.library_items|length == 0 %}
-                    <div class="empty">Nothing in the library yet</div>
-                {% else %}
-                    <div class="filter-row">
-                        <select id="status-filter-{{ instance.name }}" onchange="filterLibrary('{{ instance.name }}')">
-                            <option value="all">All statuses</option>
-                            {% for s in instance.status_options %}<option value="{{ s }}">{{ s }}</option>{% endfor %}
-                        </select>
-                        <select id="genre-filter-{{ instance.name }}" onchange="filterLibrary('{{ instance.name }}')">
-                            <option value="all">All genres</option>
-                            {% for g in instance.genre_options %}<option value="{{ g }}">{{ g }}</option>{% endfor %}
-                        </select>
-                        <select id="sort-{{ instance.name }}" onchange="sortLibrary('{{ instance.name }}')">
-                            <option value="title">Sort: Alphabetical</option>
-                            {% if instance.library_kind in ("movie", "series") %}
-                            <option value="release">Sort: Release Date</option>
-                            {% endif %}
-                            <option value="added">Sort: Date Added</option>
-                        </select>
-                        <button type="button" class="sort-dir-btn" id="sort-dir-{{ instance.name }}" data-direction="asc"
-                                onclick="toggleSortDirection('{{ instance.name }}')" title="Toggle ascending/descending">&uarr;</button>
-                        {% if instance.library_kind == "movie" %}
-                        <select id="view-mode-{{ instance.name }}" onchange="toggleLibraryViewMode('{{ instance.name }}')">
-                            <option value="movies">All Movies</option>
-                            <option value="collections">Collections</option>
-                        </select>
-                        {% endif %}
-                    </div>
-
-                    <div class="library-grid" id="library-rows-{{ instance.name }}">
-                        {% for item in instance.library_items %}
-                        <div class="library-card"
-                             data-status="{{ item.status }}"
-                             data-genre="{{ item.genre }}"
-                             data-title="{{ item.title }}"
-                             data-cover="{{ item.cover_url }}"
-                             data-release-date="{{ item.release_date }}"
-                             data-date-added="{{ item.date_added }}">
-                            <div class="cover-wrap" role="button" tabindex="0" onclick="openDetails(this, '{{ instance.name }}', {{ item.item_id }})">
-                                {% if item.cover_url %}
-                                    <img src="{{ item.cover_url }}" alt="{{ item.title }}" loading="lazy"
-                                         onerror="this.style.display='none'; this.nextElementSibling.style.display='flex';">
-                                {% endif %}
-                                <div class="cover-fallback" {% if item.cover_url %}style="display:none;"{% endif %}>{{ item.title }}</div>
-                                <span class="status-badge status-{{ item.status|lower }}">{{ item.status }}</span>
-                            </div>
-                            <div class="card-title">{{ item.title }}</div>
-                            <div class="card-genre">{{ item.genre }}</div>
-                            {% if item.status == "Missing" and can_search %}
-                            <div class="card-actions">
-                                <button class="mini-btn" onclick="event.stopPropagation(); triggerAutoSearch(this, '{{ instance.name }}', {{ item.item_id }})">Auto Search</button>
-                                <button class="mini-btn" onclick="event.stopPropagation(); openInteractiveSearch(this, '{{ instance.name }}', {{ item.item_id }})">Find Releases</button>
-                            </div>
-                            {% endif %}
-                        </div>
-                        {% endfor %}
-                    </div>
-
-                    {% if instance.library_kind == "movie" %}
-                    <div class="collections-list library-grid" id="collections-{{ instance.name }}" style="display:none;">
-                        {% if instance.collections|length == 0 %}
-                            <div class="empty">No collections found</div>
-                        {% else %}
-                            {% for col in instance.collections %}
-                            <div class="library-card" data-title="{{ col.title }}">
-                                <div class="cover-wrap" role="button" tabindex="0" onclick="openCollectionModal('{{ instance.name }}', {{ col.collection_id }})">
-                                    {% if col.cover_url %}
-                                        <img src="{{ col.cover_url }}" alt="{{ col.title }}" loading="lazy"
-                                             onerror="this.style.display='none'; this.nextElementSibling.style.display='flex';">
-                                    {% endif %}
-                                    <div class="cover-fallback" {% if col.cover_url %}style="display:none;"{% endif %}>{{ col.title }}</div>
-                                    <span class="status-badge collection-badge">{{ col.owned_count }}/{{ col.total_count }}</span>
-                                </div>
-                                <div class="card-title">{{ col.title }}</div>
-                            </div>
-                            {% endfor %}
-                        {% endif %}
-                    </div>
-                    {% endif %}
-                {% endif %}
-            </div>
-            <!-- Request panel: search Overseerr + list existing requests -->
-            <div class="panel" data-instance="{{ instance.name }}" data-view="request">
-                {% if instance.seerr_media_type %}
-                    <div class="search-row">
-                        <input type="text" placeholder="Search to request..."
-                               data-instance="{{ instance.name }}"
-                               data-media-type="{{ instance.seerr_media_type }}"
-                               onkeydown="if(event.key==='Enter') runSearch(this)">
-                        <button onclick="runSearch(this.previousElementSibling)">Search</button>
-                    </div>
-                    <div class="search-results" id="results-{{ instance.name }}"></div>
-
-                    <div class="section-label">Existing requests</div>
-                    <div id="requests-list-{{ instance.name }}">
-                        {% if instance.request_items|length == 0 %}
-                            <div class="empty">No requests yet</div>
-                        {% else %}
-                            {% for r in instance.request_items %}
-                            <div class="request-row">
-                                <div class="request-thumb">
-                                    {% if r.poster_url %}
-                                        <img src="{{ r.poster_url }}" alt="{{ r.title }}" loading="lazy"
-                                             onerror="this.style.display='none'; this.nextElementSibling.style.display='flex';">
-                                    {% endif %}
-                                    <div class="request-thumb-fallback" {% if r.poster_url %}style="display:none;"{% endif %}></div>
-                                </div>
-                                <div class="request-info">
-                                    <div class="request-title">{{ r.title }}{% if r.is4k %} <span class="inline-badge badge-notice">4K</span>{% endif %}</div>
-                                    <div class="request-meta">
-                                        <span class="inline-badge badge-{{ r.status_class }}">{{ r.status }}</span>
-                                        {% if r.status_class == 'success' %}&middot; {{ r.media_status }}{% endif %}
-                                        &middot; req. by {{ r.requested_by }}
-                                        {% if r.requested_date %}&middot; {{ r.requested_date }}{% endif %}
-                                    </div>
-                                </div>
-                            </div>
-                            {% endfor %}
-                        {% endif %}
-                    </div>
-                {% else %}
-                    <div class="placeholder">{{ instance.name }} isn't a movie/TV instance, so Overseerr requests don't apply here.</div>
-                {% endif %}
-            </div>
-
-            <!-- Queue panel -->
-            <div class="panel" data-instance="{{ instance.name }}" data-view="queue">
-                {% if instance.error %}
-                    <div class="error">{{ instance.error }}</div>
-                {% elif instance.queue_items|length == 0 %}
-                    <div class="empty">Queue is empty</div>
-                {% else %}
-                    {% for item in instance.queue_items %}
-                    <div class="queue-item">
-                        <div class="queue-item-row">
-                            <span>{{ item.title }}</span>
-                            <span class="item-time">{{ item.time_left }}</span>
-                        </div>
-                        {% if item.indexer or item.quality or item.download_client %}
-                        <div class="queue-item-meta">
-                            {{ [item.quality, item.indexer, item.download_client, item.protocol] | select | join(' · ') }}
-                            {% if item.custom_format_score %}&middot; CF score {{ item.custom_format_score }}{% endif %}
-                            {% if item.size_human %}&middot; {{ item.size_human }}{% endif %}
-                        </div>
-                        {% endif %}
-                        {% if item.progress_pct is not none %}
-                        <div class="queue-progress-track">
-                            <div class="queue-progress-fill {% if item.status_messages %}has-issue{% endif %}" style="width: {{ item.progress_pct }}%;"></div>
-                        </div>
-                        {% endif %}
-                        {% for msg in item.status_messages %}
-                        <div class="queue-status-msg is-error">{{ msg }}</div>
-                        {% endfor %}
-                    </div>
-                    {% endfor %}
-                {% endif %}
-            </div>
-
-            <!-- History panel -->
-            <div class="panel" data-instance="{{ instance.name }}" data-view="history">
-                {% if instance.error %}
-                    <div class="error">{{ instance.error }}</div>
-                {% elif instance.history_items|length == 0 %}
-                    <div class="empty">No history yet</div>
-                {% else %}
-                    {% for item in instance.history_items %}
-                    <div class="item">
-                        <span>{{ item.title }}</span>
-                        <span class="item-event">{{ item.event }}</span>
-                        <span class="item-date">{{ item.date }}</span>
-                    </div>
-                    {% endfor %}
-                {% endif %}
-            </div>
-
-            <!-- System panel: health checks + disk space -->
-            <div class="panel" data-instance="{{ instance.name }}" data-view="system">
-                <div class="section-heading">Health</div>
-                {% if instance.health_error %}
-                    <div class="error">{{ instance.health_error }}</div>
-                {% elif instance.health_items|length == 0 %}
-                    <div class="empty">No health issues reported</div>
-                {% else %}
-                    {% for h in instance.health_items %}
-                    <div class="health-item">
-                        <span class="inline-badge badge-{{ h.type }}">{{ h.type }}</span>
-                        <span>
-                            {% if h.wiki_url %}<a href="{{ h.wiki_url }}" target="_blank" rel="noopener" class="link-inherit">{{ h.message }}</a>{% else %}{{ h.message }}{% endif %}
-                            {% if h.source %}<span class="health-item-source">&middot; {{ h.source }}</span>{% endif %}
-                        </span>
-                    </div>
-                    {% endfor %}
-                {% endif %}
-
-                <div class="section-heading">Disk space</div>
-                {% if instance.diskspace_error %}
-                    <div class="error">{{ instance.diskspace_error }}</div>
-                {% elif instance.diskspace_items|length == 0 %}
-                    <div class="empty">No root folders reported</div>
-                {% else %}
-                    {% for d in instance.diskspace_items %}
-                    {# Low/critical thresholds: under 15% free is "low", under 7% is "critical".
-                       Shown as a word as well as a color, never color alone. #}
-                    {% set disk_tier = '' if d.percent_free is none else ('critical' if d.percent_free < 7 else ('low' if d.percent_free < 15 else '')) %}
-                    <div class="diskspace-item">
-                        <div class="diskspace-item-row">
-                            <span class="path">{{ d.path }}{% if d.label %} ({{ d.label }}){% endif %}</span>
-                            <span class="free{% if disk_tier %} is-{{ disk_tier }}{% endif %}">
-                                {% if disk_tier == 'critical' %}Critically low &middot; {% elif disk_tier == 'low' %}Low &middot; {% endif %}{{ d.free_human }} free of {{ d.total_human }}{% if d.percent_free is not none %} ({{ d.percent_free }}%){% endif %}
-                            </span>
-                        </div>
-                        {% if d.percent_free is not none %}
-                        <div class="queue-progress-track" role="progressbar" aria-label="Space used on {{ d.path }}" aria-valuemin="0" aria-valuemax="100" aria-valuenow="{{ 100 - d.percent_free }}">
-                            <div class="queue-progress-fill{% if disk_tier == 'critical' %} is-critical{% elif disk_tier == 'low' %} has-issue{% endif %}" style="width: {{ 100 - d.percent_free }}%;"></div>
-                        </div>
-                        {% endif %}
-                    </div>
-                    {% endfor %}
-                {% endif %}
-            </div>
-
+            <div class="instance-panels" data-instance-panels="{{ instance.name }}"></div>
             {% endfor %}
+            <div class="instance-load-status" id="instance-load-status" role="status" aria-live="polite" hidden></div>
         </div>
         </div>
 
@@ -597,6 +383,11 @@
             return div.innerHTML;
         }
 
+        // For values placed inside an HTML attribute (escapeHtml leaves quotes alone).
+        function escapeAttr(value) {
+            return escapeHtml(value).replace(/"/g, '&quot;').replace(/'/g, '&#39;');
+        }
+
         function withScheme(url) {
             // A URL saved in Settings without http(s):// (e.g. just
             // "192.168.1.50:8080") doesn't open correctly as a raw
@@ -625,13 +416,8 @@
         }
 
         const CAN_SEARCH = {{ can_search | tojson }};
-        const COLLECTIONS_DATA = {
-            {% for instance in instances %}
-            {% if instance.library_kind == "movie" %}
-            "{{ instance.name }}": {{ instance.collections | tojson }},
-            {% endif %}
-            {% endfor %}
-        };
+        // Filled in per instance as each one's panels load (see ensureInstanceLoaded).
+        const COLLECTIONS_DATA = {};
 
         // --- Keyboard support -------------------------------------------------
         // Anything marked role="button"/"link" that isn't a real <button>/<a>
@@ -706,8 +492,136 @@
             document.getElementById('home-view').style.display = 'block';
             updateAlphaIndexVisibility();
 
+            loadAttention();
             loadHomeStats();
         }
+
+        function refreshHome() {
+            loadAttention(true);
+            loadHomeStats();
+        }
+
+        // --- Needs attention (Home) ---------------------------------------
+        // /api/attention merges duplicate warnings across apps, collapses
+        // disks several apps share, and ranks what's left, so Home can lead
+        // with what actually needs a person - or say plainly that nothing does.
+
+        const ATTENTION_PREVIEW = 6;
+        let attentionData = null;
+        let attentionShowAll = false;
+
+        function attentionItemHTML(item) {
+            const critical = item.severity === 'critical';
+            const services = (item.services || []).map(svc =>
+                `<button type="button" class="attention-link" data-instance="${escapeAttr(svc)}" data-view="${escapeAttr(item.view || 'system')}">${escapeHtml(svc)}</button>`
+            ).join('');
+            return `
+                <li class="attention-item ${critical ? 'is-critical' : 'is-warning'}">
+                    <span class="inline-badge ${critical ? 'badge-error' : 'badge-warning'} attention-sev">${critical ? 'Critical' : 'Warning'}</span>
+                    <div class="attention-main">
+                        <div class="attention-title">${escapeHtml(item.title)}</div>
+                        ${item.detail ? `<div class="attention-detail">${escapeHtml(item.detail)}</div>` : ''}
+                        <div class="attention-services">${services}</div>
+                    </div>
+                </li>`;
+        }
+
+        function renderAttention(data) {
+            attentionData = data;
+            const body = document.getElementById('attention-body');
+            const count = document.getElementById('attention-count');
+            const items = data.items || [];
+            body.setAttribute('aria-busy', 'false');
+
+            if (!items.length) {
+                count.hidden = true;
+                const n = data.checked || 0;
+                body.innerHTML = `
+                    <div class="attention-clear">
+                        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><polyline points="20 6 9 17 4 12"></polyline></svg>
+                        <span class="attention-clear-title">All clear</span>
+                        <span class="attention-clear-detail">${n} service${n === 1 ? '' : 's'} checked, nothing needs you right now.</span>
+                    </div>`;
+                return;
+            }
+
+            count.textContent = items.length;
+            count.hidden = false;
+            const shown = attentionShowAll ? items : items.slice(0, ATTENTION_PREVIEW);
+            body.innerHTML = `<ul class="attention-list">${shown.map(attentionItemHTML).join('')}</ul>` +
+                (items.length > ATTENTION_PREVIEW
+                    ? `<button type="button" class="attention-more" id="attention-more">${attentionShowAll ? 'Show fewer' : `Show all ${items.length}`}</button>`
+                    : '');
+        }
+
+        function applyAttentionToSidebar(perInstance) {
+            document.querySelectorAll('.instance-tab[data-instance]').forEach(tab => {
+                const st = perInstance && perInstance[tab.dataset.instance];
+                if (!st) return;
+                // Don't clobber counts from a panel load that's newer than this summary.
+                if (!instanceIsLoaded(tab.dataset.instance)) {
+                    tab.dataset.queueCount = st.queue_count;
+                    tab.dataset.healthCount = st.health_issues;
+                }
+                let dot = tab.querySelector('.health-dot');
+                if (!st.dot) {
+                    if (dot) dot.remove();
+                    return;
+                }
+                const label = st.unreachable ? 'Unreachable'
+                    : st.dot === 'critical' ? 'Needs attention'
+                    : `${st.queue_issues} stalled or failing download${st.queue_issues === 1 ? '' : 's'}`;
+                if (!dot) {
+                    dot = document.createElement('span');
+                    dot.className = 'health-dot';
+                    dot.setAttribute('role', 'img');
+                    tab.prepend(dot);
+                }
+                dot.classList.toggle('is-warning', st.dot === 'warning');
+                dot.title = label;
+                dot.setAttribute('aria-label', label);
+            });
+            updateQueueTabCount();
+            updateSystemTabBadge();
+        }
+
+        async function loadAttention(force) {
+            const body = document.getElementById('attention-body');
+            body.setAttribute('aria-busy', 'true');
+            try {
+                const response = await fetch('/api/attention' + (force ? '?refresh=1' : ''));
+                if (!response.ok) throw new Error(`HTTP ${response.status}`);
+                const data = await response.json();
+                renderAttention(data);
+                applyAttentionToSidebar(data.per_instance);
+            } catch (err) {
+                body.setAttribute('aria-busy', 'false');
+                if (!attentionData) {
+                    body.innerHTML = `<div class="attention-error">Couldn't check your services. <button type="button" class="attention-more" onclick="loadAttention(true)">Try again</button></div>`;
+                }
+            }
+        }
+
+        // One delegated listener for the instance links and "show all".
+        document.getElementById('attention-body').addEventListener('click', (e) => {
+            const link = e.target.closest('.attention-link');
+            if (link) {
+                selectInstance(link.dataset.instance);
+                selectView(link.dataset.view);
+                return;
+            }
+            if (e.target.closest('#attention-more') && attentionData) {
+                attentionShowAll = !attentionShowAll;
+                renderAttention(attentionData);
+            }
+        });
+
+        // Keep Home current while it's the visible view of a visible tab.
+        setInterval(() => {
+            if (document.hidden) return;
+            if (document.getElementById('home-view').style.display === 'none') return;
+            loadAttention();
+        }, 60000);
 
         async function loadHomeStats() {
             const el = document.getElementById('home-stats-content');
@@ -900,11 +814,82 @@
             document.getElementById('mediaservers-view').style.display = 'none';
             document.getElementById('transcoders-view').style.display = 'none';
             document.getElementById('instances-view').style.display = 'block';
+            refreshInstanceChrome();
+            ensureInstanceLoaded(name);
+        }
+
+        // --- Lazy-loaded instance panels ---------------------------------
+        // The page ships only the sidebar. An instance's library, queue,
+        // history, requests and system panels are fetched from
+        // /fragment/instance/<name> the first time it's opened, then kept
+        // in the page, so opening it again is instant.
+
+        const instanceState = {};  // name -> {status: 'loading' | 'loaded' | 'error', message}
+
+        function instanceIsLoaded(name) {
+            return !!instanceState[name] && instanceState[name].status === 'loaded';
+        }
+
+        // Re-applies everything that depends on the current instance's panels.
+        function refreshInstanceChrome() {
             updateQueueTabCount();
             updateSystemTabBadge();
             updateRequestTabVisibility();
             updateAlphaIndexVisibility();
             render();
+        }
+
+        function syncInstanceLoadStatus() {
+            const el = document.getElementById('instance-load-status');
+            const st = instanceState[currentInstance];
+            if (!st || st.status === 'loaded') {
+                el.hidden = true;
+                el.innerHTML = '';
+                return;
+            }
+            el.hidden = false;
+            if (st.status === 'loading') {
+                el.innerHTML = `<div class="modal-loading">Loading ${escapeHtml(currentInstance)}&hellip;</div>`;
+            } else {
+                el.innerHTML = `<div class="error">Couldn't load ${escapeHtml(currentInstance)} (${escapeHtml(st.message)}).</div>
+                    <button type="button" class="test-btn" onclick="ensureInstanceLoaded(currentInstance)">Try again</button>`;
+            }
+        }
+
+        async function ensureInstanceLoaded(name) {
+            const existing = instanceState[name];
+            if (existing && (existing.status === 'loaded' || existing.status === 'loading')) return;
+
+            instanceState[name] = { status: 'loading' };
+            if (currentInstance === name) syncInstanceLoadStatus();
+
+            try {
+                const response = await fetch(`/fragment/instance/${encodeURIComponent(name)}`);
+                if (!response.ok) throw new Error(`HTTP ${response.status}`);
+                const html = await response.text();
+
+                const host = document.querySelector(`.instance-panels[data-instance-panels="${CSS.escape(name)}"]`);
+                host.innerHTML = html;
+
+                const fragment = host.querySelector('.instance-fragment');
+                const tab = document.querySelector(`.instance-tab[data-instance="${CSS.escape(name)}"]`);
+                if (fragment && tab) {
+                    tab.dataset.queueCount = fragment.dataset.queueCount;
+                    tab.dataset.healthCount = fragment.dataset.healthCount;
+                }
+                const collectionsEl = host.querySelector('.collections-data');
+                if (collectionsEl) {
+                    try { COLLECTIONS_DATA[name] = JSON.parse(collectionsEl.textContent); } catch (e) { COLLECTIONS_DATA[name] = []; }
+                }
+
+                instanceState[name] = { status: 'loaded' };
+            } catch (err) {
+                instanceState[name] = { status: 'error', message: (err && err.message) || 'request failed' };
+            }
+            if (currentInstance === name) {
+                syncInstanceLoadStatus();
+                refreshInstanceChrome();
+            }
         }
 
         function updateQueueTabCount() {
@@ -1752,6 +1737,7 @@
                 const match = panel.dataset.instance === currentInstance && panel.dataset.view === currentView;
                 panel.classList.toggle('active', match);
             });
+            syncInstanceLoadStatus();
             applyGlobalSearch();
         }
 
@@ -1834,8 +1820,11 @@
         render();
 
         function filterLibrary(instance) {
-            const status = document.getElementById(`status-filter-${instance}`).value;
-            const genre = document.getElementById(`genre-filter-${instance}`).value;
+            const statusEl = document.getElementById(`status-filter-${instance}`);
+            const genreEl = document.getElementById(`genre-filter-${instance}`);
+            if (!statusEl || !genreEl) return;  // empty or failed library: no filter row rendered
+            const status = statusEl.value;
+            const genre = genreEl.value;
             const query = document.getElementById('global-search').value.trim().toLowerCase();
             const cards = document.querySelectorAll(`#library-rows-${instance} .library-card`);
 
@@ -1912,7 +1901,7 @@
             const sortSelect = document.getElementById(`sort-${currentInstance}`);
             const isAlphabetical = !sortSelect || sortSelect.value === 'title';
             const onInstancePage = document.getElementById('instances-view').style.display === 'block';
-            const shouldShow = onInstancePage && currentView === 'library' && isAlphabetical;
+            const shouldShow = onInstancePage && instanceIsLoaded(currentInstance) && currentView === 'library' && isAlphabetical;
             document.getElementById('alpha-index').classList.toggle('hidden', !shouldShow);
             document.querySelector('.main').classList.toggle('alpha-visible', shouldShow);
         }
@@ -2042,6 +2031,7 @@
         // above; every other tab does a simple text match on each row. ---
 
         function applyGlobalSearch() {
+            if (!instanceIsLoaded(currentInstance)) return;  // panels not fetched yet
             if (currentView === 'library') {
                 filterLibrary(currentInstance);
                 return;
@@ -2682,6 +2672,7 @@
                 btn.disabled = false;
             }
         }
+        loadAttention();
         loadHomeStats();
     </script>
 
