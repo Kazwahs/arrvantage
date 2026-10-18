@@ -1,11 +1,11 @@
 <!DOCTYPE html>
-<html lang="en">
+<html lang="en" data-theme="{{ current_theme }}">
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>arrVantage</title>
     <link rel="icon" href="/static/icons/favicon.svg" type="image/svg+xml">
-    <meta name="theme-color" content="#0d1117">
+    {% include "partials/theme_head.html" %}
     <link rel="preload" href="{{ url_for('static', filename='fonts/Geist-Variable.woff2') }}" as="font" type="font/woff2" crossorigin>
     <link rel="stylesheet" href="{{ asset_url('css/app.css') }}">
     <link rel="stylesheet" href="{{ asset_url('css/dashboard.css') }}">
@@ -31,6 +31,9 @@
     <img src="/static/icons/settings.svg" alt="Settings">
 </a>
 {% endif %}
+<button type="button" class="settings-link" onclick="showAppearance()" title="Appearance" aria-label="Appearance">
+    <img src="/static/icons/appearance.svg" alt="">
+</button>
 <button type="button" class="settings-link" onclick="showAbout()" title="About arrVantage" aria-label="About arrVantage">
     <img src="/static/icons/about.svg" alt="">
 </button>
@@ -352,13 +355,45 @@
         {% endfor %}
     </div>
 
+    {# One slide-over panel serves item details, About and Appearance: the openers
+       fill #modal-header / #modal-body and add .open to the overlay. It slides in
+       from the right on a desktop and up from the bottom on a phone. #}
     <div class="modal-overlay" id="modal-overlay" onclick="if(event.target === this) closeDetails()">
-        <div class="modal-box" role="dialog" aria-modal="true" aria-label="Details">
-            <button class="modal-close" onclick="closeDetails()" aria-label="Close">&times;</button>
-            <div id="modal-header"></div>
-            <div id="modal-body"></div>
+        <div class="modal-box" id="slide-over" role="dialog" aria-modal="true" aria-label="Details">
+            <button type="button" class="modal-close" onclick="closeDetails()" aria-label="Close panel">&times;</button>
+            <div class="modal-scroll" tabindex="0">
+                <div id="modal-header"></div>
+                <div id="modal-body"></div>
+            </div>
         </div>
     </div>
+
+    {# Appearance picker. showAppearance() copies this into the slide-over; the theme list comes from THEMES in app.py. #}
+    <template id="appearance-template">
+        <p class="appearance-intro">Pick how arrVantage looks. It is saved to your account and follows you to your other devices.</p>
+        <div class="theme-grid" role="radiogroup" aria-label="Theme">
+            {% for key, theme in themes.items() %}
+            <button type="button" class="theme-card" role="radio" data-theme-key="{{ key }}" aria-checked="false" tabindex="-1" onclick="setTheme('{{ key }}')">
+                <span class="theme-swatch{% if key == 'auto' %} theme-swatch--split{% endif %}" aria-hidden="true">
+                    {% if key == 'auto' %}
+                    <span class="theme-swatch-half" data-theme="midnight"><span class="swatch-bar"></span><span class="swatch-line"></span></span>
+                    <span class="theme-swatch-half" data-theme="paper"><span class="swatch-bar"></span><span class="swatch-line"></span></span>
+                    {% else %}
+                    <span class="theme-swatch-half" data-theme="{{ key }}"><span class="swatch-bar"></span><span class="swatch-line"></span><span class="swatch-line swatch-line--short"></span></span>
+                    {% endif %}
+                </span>
+                <span class="theme-card-text">
+                    <span class="theme-card-name">{{ theme.label }}</span>
+                    <span class="theme-card-desc">{{ theme.description }}</span>
+                </span>
+                <span class="theme-card-check" aria-hidden="true">
+                    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12"></polyline></svg>
+                </span>
+            </button>
+            {% endfor %}
+        </div>
+        <div class="appearance-status" id="appearance-status" role="status" aria-live="polite"></div>
+    </template>
 
     <script type="application/json" id="home-layout-data">{{ home_layout|tojson }}</script>
     <script>
@@ -485,6 +520,23 @@
                 }
                 wasOpen = isOpen;
             }).observe(overlay, { attributes: true, attributeFilter: ['class'] });
+        })();
+
+        // Name the dialog after whatever title the opener rendered (a movie, "About
+        // arrVantage"...), so a screen reader announces more than "Details".
+        (function labelSlideOver() {
+            const box = document.getElementById('slide-over');
+            const header = document.getElementById('modal-header');
+            if (!box || !header) return;
+            new MutationObserver(() => {
+                const title = header.querySelector('.modal-title');
+                if (title && title.textContent.trim()) {
+                    title.id = 'slide-over-title';
+                    box.setAttribute('aria-labelledby', 'slide-over-title');
+                } else {
+                    box.removeAttribute('aria-labelledby');
+                }
+            }).observe(header, { childList: true, subtree: true });
         })();
 
         // Keep aria-current in step with the visual "active" state, so a screen
@@ -2489,6 +2541,89 @@
         function closeDetails() {
             document.getElementById('modal-overlay').classList.remove('open');
         }
+
+        // ---- Appearance (themes) ----
+        const THEME_KEYS = {{ themes.keys()|list|tojson }};
+        const THEME_COLORS = {{ themes|tojson }};
+
+        function updateThemeColorMeta(key) {
+            const meta = THEME_COLORS[key] || THEME_COLORS.midnight;
+            document.querySelectorAll('meta[name="theme-color"]').forEach(m => m.remove());
+            const add = (content, media) => {
+                const m = document.createElement('meta');
+                m.name = 'theme-color';
+                m.content = content;
+                if (media) m.media = media;
+                document.head.appendChild(m);
+            };
+            if (meta.light_color) {
+                add(meta.light_color, '(prefers-color-scheme: light)');
+                add(meta.color, '(prefers-color-scheme: dark)');
+            } else {
+                add(meta.color);
+            }
+        }
+
+        function markCurrentTheme() {
+            const current = document.documentElement.getAttribute('data-theme');
+            const cards = document.querySelectorAll('#modal-body .theme-card');
+            cards.forEach(card => {
+                const on = card.dataset.themeKey === current;
+                card.setAttribute('aria-checked', on ? 'true' : 'false');
+                card.tabIndex = on ? 0 : -1;
+                card.classList.toggle('is-selected', on);
+            });
+        }
+
+        async function setTheme(key) {
+            if (!THEME_KEYS.includes(key)) return;
+            const status = document.getElementById('appearance-status');
+            document.documentElement.setAttribute('data-theme', key);
+            updateThemeColorMeta(key);
+            markCurrentTheme();
+            try { localStorage.setItem('arrTheme', key); } catch (e) { /* storage can be blocked */ }
+            try {
+                const response = await fetch('/api/theme', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ theme: key }),
+                });
+                if (!response.ok) throw new Error(`HTTP ${response.status}`);
+                if (status) status.textContent = `${THEME_COLORS[key].label} theme saved.`;
+            } catch (err) {
+                if (status) status.textContent = "Couldn't save your theme. It will reset when you reload the page.";
+            }
+        }
+
+        function showAppearance() {
+            document.getElementById('modal-header').innerHTML = `
+                <div class="modal-header">
+                    <div class="modal-header-text">
+                        <div class="modal-title">Appearance</div>
+                    </div>
+                </div>
+            `;
+            const body = document.getElementById('modal-body');
+            body.replaceChildren(document.getElementById('appearance-template').content.cloneNode(true));
+            markCurrentTheme();
+            document.getElementById('modal-overlay').classList.add('open');
+        }
+
+        // Radio-group keyboard behaviour: arrows move and select, Home/End jump.
+        document.addEventListener('keydown', (e) => {
+            const card = e.target.closest && e.target.closest('.theme-card');
+            if (!card) return;
+            const cards = Array.from(document.querySelectorAll('#modal-body .theme-card'));
+            let i = cards.indexOf(card);
+            if (e.key === 'ArrowDown' || e.key === 'ArrowRight') i = (i + 1) % cards.length;
+            else if (e.key === 'ArrowUp' || e.key === 'ArrowLeft') i = (i - 1 + cards.length) % cards.length;
+            else if (e.key === 'Home') i = 0;
+            else if (e.key === 'End') i = cards.length - 1;
+            else return;
+            e.preventDefault();
+            cards[i].focus();
+            setTheme(cards[i].dataset.themeKey);
+        });
 
         function showAbout() {
             const header = document.getElementById('modal-header');

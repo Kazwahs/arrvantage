@@ -1,13 +1,20 @@
 <!DOCTYPE html>
-<html lang="en">
+<html lang="en" data-theme="{{ current_theme }}">
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Set up - arrVantage</title>
     <link rel="icon" href="/static/icons/favicon.svg" type="image/svg+xml">
-    <meta name="theme-color" content="#0d1117">
+    {% include "partials/theme_head.html" %}
     <link rel="preload" href="{{ url_for('static', filename='fonts/Geist-Variable.woff2') }}" as="font" type="font/woff2" crossorigin>
     <link rel="stylesheet" href="{{ asset_url('css/app.css') }}">
+    <script>
+        // Signed-out pages have no account to read a theme from, so use the one this browser last chose.
+        try {
+            var saved = localStorage.getItem('arrTheme');
+            if (saved && {{ themes.keys()|list|tojson }}.indexOf(saved) !== -1) document.documentElement.setAttribute('data-theme', saved);
+        } catch (e) {}
+    </script>
     <style>
         html, body { min-height: 100%; margin: 0; }
         body {
@@ -35,9 +42,9 @@
         .subtitle { color: var(--muted); font-size: 0.82rem; margin-bottom: 1.5rem; }
 
         .error {
-            background: rgba(255, 107, 107, 0.1);
+            background: color-mix(in srgb, var(--error) 12%, transparent);
             border: 1px solid var(--error);
-            color: var(--error);
+            color: var(--error-text);
             border-radius: 6px;
             padding: 0.6rem 0.8rem;
             font-size: 0.82rem;
@@ -116,7 +123,7 @@
         }
         .test-status { font-size: 0.8rem; }
         .test-status.test-ok { color: var(--success); }
-        .test-status.test-fail { color: var(--error); }
+        .test-status.test-fail { color: var(--error-text); }
         .test-status.test-empty { color: var(--muted); }
 
         .add-btn {
@@ -149,8 +156,8 @@
             padding: 0.65rem 1.5rem;
             cursor: pointer;
         }
-        .nav-btn.primary { background: var(--accent); color: white; }
-        .nav-btn.primary:hover:not(:disabled) { background: #4a7ae0; }
+        .nav-btn.primary { background: var(--accent); color: var(--on-accent); }
+        .nav-btn.primary:hover:not(:disabled) { background: var(--accent-hover); }
         .nav-btn.primary:disabled { opacity: 0.5; cursor: default; }
         .nav-btn.secondary { background: none; border: 1px solid var(--border); color: var(--muted); }
         .nav-btn.secondary:hover { color: var(--text); border-color: var(--accent); }

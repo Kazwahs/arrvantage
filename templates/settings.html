@@ -1,11 +1,11 @@
 <!DOCTYPE html>
-<html lang="en">
+<html lang="en" data-theme="{{ current_theme }}">
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Settings - arrVantage</title>
     <link rel="icon" href="/static/icons/favicon.svg" type="image/svg+xml">
-    <meta name="theme-color" content="#0d1117">
+    {% include "partials/theme_head.html" %}
     <link rel="preload" href="{{ url_for('static', filename='fonts/Geist-Variable.woff2') }}" as="font" type="font/woff2" crossorigin>
     <link rel="stylesheet" href="{{ asset_url('css/app.css') }}">
     <style>
@@ -25,7 +25,7 @@
         .subtitle { color: var(--muted); font-size: 0.85rem; margin-bottom: 1.5rem; }
 
         .saved-banner {
-            background: rgba(74, 222, 128, 0.1);
+            background: color-mix(in srgb, var(--success) 12%, transparent);
             border: 1px solid var(--success);
             color: var(--success);
             border-radius: 8px;
@@ -94,7 +94,7 @@
 
         .admin-badge {
             flex-shrink: 0;
-            background: rgba(77, 143, 221, 0.15);
+            background: var(--accent-wash);
             color: var(--accent);
             font-size: 0.72rem;
             font-weight: 600;
@@ -213,7 +213,7 @@
         .save-hint--flush { margin: 0.5rem 0 0 0; }
         .test-status { font-size: 0.8rem; }
         .test-status.test-ok { color: var(--success); }
-        .test-status.test-fail { color: var(--error); }
+        .test-status.test-fail { color: var(--error-text); }
         .test-status.test-empty { color: var(--muted); }
 
         .add-btn {
@@ -234,13 +234,13 @@
             background: var(--accent);
             border: none;
             border-radius: 8px;
-            color: white;
+            color: var(--on-accent);
             font-size: 0.9rem;
             font-weight: 600;
             padding: 0.65rem 1.5rem;
             cursor: pointer;
         }
-        .save-btn:hover:not(:disabled) { background: #4a7ae0; }
+        .save-btn:hover:not(:disabled) { background: var(--accent-hover); }
         .save-btn:disabled { opacity: 0.5; cursor: default; }
         /* --- Mobile layout --- */
 

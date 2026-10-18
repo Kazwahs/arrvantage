@@ -58,6 +58,17 @@
     --success: #5fd97a;
     --focus: #8ab8ee;
 
+    /* Derived tones that used to be hard-coded in places; a theme restates them. */
+    --hairline: rgba(255, 255, 255, 0.12);   /* thin rules on the sidebar */
+    --hover-bg: rgba(255, 255, 255, 0.08);   /* hover wash on small icon buttons */
+    --accent-wash: rgba(77, 143, 221, 0.1);  /* background of the selected tab */
+    --on-accent: #0d1117;                    /* text on a solid --accent button (white only reached 3.3:1 on this blue) */
+    --accent-hover: #4a7ae0;                 /* solid accent button on hover */
+    --scrim: rgba(0, 0, 0, 0.6);             /* dimming behind the slide-over */
+    --chip-bg: rgba(13, 17, 23, 0.85);       /* small badges laid over cover art */
+    --active-shadow: inset 3px 0 0 var(--accent-amber), 0 0 14px -4px var(--accent-amber);
+    --logo-filter: none;                     /* lets a light theme darken the logo's white text */
+
     /* Type */
     --font-sans: "Geist", -apple-system, "Segoe UI", Roboto, system-ui, sans-serif;
     --mono: "Geist Mono", ui-monospace, "SF Mono", "Cascadia Code", "Roboto Mono", Consolas, monospace;
@@ -89,7 +100,135 @@
 
     /* Motion */
     --dur-fast: 150ms;
+    --dur-slide: 240ms;
     --ease-out: cubic-bezier(0.16, 1, 0.3, 1);
+}
+
+/* --- Themes ---------------------------------------------------------
+   A theme is only a different set of the tokens above, chosen by
+   data-theme on <html> (stored per user; see THEMES in app.py). Midnight is
+   the :root default. The selectors are bare [data-theme=...] so the
+   Appearance panel's preview swatches can show a theme's real colours by
+   setting the attribute on a small element.
+
+   Status colours (--success / --warning / --error) keep their meaning in
+   every theme and are always paired with a word or icon. "Auto" is Paper or
+   Midnight depending on the device, so its Paper block below must stay an
+   exact copy of [data-theme="paper"] (a test checks that). */
+
+[data-theme="midnight"] { color-scheme: dark; }
+
+[data-theme="paper"] {
+    color-scheme: light;
+    --bg: #f7f6f3;
+    --panel: #ffffff;
+    --sidebar: #efede8;
+    --border: #dcd8ce;
+    --text: #25282b;
+    --muted: #5c5a54;
+    --accent: #1f6c9f;
+    --accent-amber: #956400;
+    --warning: #8a5a00;
+    --error: #c0382f;
+    --error-text: #a72f28;
+    --success: #2f7a3a;
+    --focus: #0b57d0;
+    --hairline: rgba(0, 0, 0, 0.12);
+    --hover-bg: rgba(0, 0, 0, 0.06);
+    --accent-wash: rgba(31, 108, 159, 0.1);
+    --on-accent: #ffffff;
+    --accent-hover: #185a85;
+    --scrim: rgba(24, 22, 18, 0.38);
+    --chip-bg: rgba(255, 255, 255, 0.92);
+    --active-shadow: inset 3px 0 0 var(--accent-amber);
+    --logo-filter: invert(1) hue-rotate(180deg);
+}
+
+@media (prefers-color-scheme: light) {
+    [data-theme="auto"] {
+        color-scheme: light;
+        --bg: #f7f6f3;
+        --panel: #ffffff;
+        --sidebar: #efede8;
+        --border: #dcd8ce;
+        --text: #25282b;
+        --muted: #5c5a54;
+        --accent: #1f6c9f;
+        --accent-amber: #956400;
+        --warning: #8a5a00;
+        --error: #c0382f;
+        --error-text: #a72f28;
+        --success: #2f7a3a;
+        --focus: #0b57d0;
+        --hairline: rgba(0, 0, 0, 0.12);
+        --hover-bg: rgba(0, 0, 0, 0.06);
+        --accent-wash: rgba(31, 108, 159, 0.1);
+        --on-accent: #ffffff;
+        --accent-hover: #185a85;
+        --scrim: rgba(24, 22, 18, 0.38);
+        --chip-bg: rgba(255, 255, 255, 0.92);
+        --active-shadow: inset 3px 0 0 var(--accent-amber);
+        --logo-filter: invert(1) hue-rotate(180deg);
+    }
+}
+
+/* Telemetry: a control-room terminal. Near-black, monospaced, square
+   corners, hairline borders. The only colours are status colours, so
+   the accent is white phosphor rather than a hue. */
+[data-theme="telemetry"] {
+    color-scheme: dark;
+    --font-sans: var(--mono);
+    --bg: #0a0a0a;
+    --panel: #121212;
+    --sidebar: #070707;
+    --border: #2e2e2e;
+    --text: #eaeaea;
+    --muted: #9b9b9b;
+    --accent: #f2f2f2;
+    --accent-amber: #ffb02e;
+    --warning: #ffb02e;
+    --error: #ff3b3b;
+    --error-text: #ff5c5c;
+    --success: #4af626;
+    --focus: #ffffff;
+    --hairline: rgba(255, 255, 255, 0.16);
+    --hover-bg: rgba(255, 255, 255, 0.1);
+    --accent-wash: rgba(255, 255, 255, 0.07);
+    --on-accent: #0a0a0a;
+    --accent-hover: #ffffff;
+    --scrim: rgba(0, 0, 0, 0.72);
+    --chip-bg: rgba(10, 10, 10, 0.9);
+    --active-shadow: inset 3px 0 0 var(--accent);
+    --radius-sm: 0;
+    --radius: 0;
+    --radius-md: 0;
+    --radius-lg: 0;
+}
+
+/* High contrast: pure black and white, bright borders, a thick yellow focus ring. */
+[data-theme="contrast"] {
+    color-scheme: dark;
+    --bg: #000000;
+    --panel: #000000;
+    --sidebar: #000000;
+    --border: #8a8a8a;
+    --text: #ffffff;
+    --muted: #d4d4d4;
+    --accent: #7cc4ff;
+    --accent-amber: #ffd23f;
+    --warning: #ffd23f;
+    --error: #ff6b6b;
+    --error-text: #ff8a8a;
+    --success: #4ade80;
+    --focus: #ffd23f;
+    --hairline: rgba(255, 255, 255, 0.5);
+    --hover-bg: rgba(255, 255, 255, 0.18);
+    --accent-wash: rgba(124, 196, 255, 0.18);
+    --on-accent: #000000;
+    --accent-hover: #a8d8ff;
+    --scrim: rgba(0, 0, 0, 0.8);
+    --chip-bg: #000000;
+    --active-shadow: inset 4px 0 0 var(--focus);
 }
 
 /* --- Base ---------------------------------------------------------- */
@@ -116,6 +255,10 @@ h1, .modal-title { text-wrap: balance; }
 :where(a, button, input, select, textarea, summary, [tabindex]:not([tabindex="-1"])):focus-visible {
     outline: 2px solid var(--focus);
     outline-offset: 2px;
+}
+
+[data-theme="contrast"] :where(a, button, input, select, textarea, summary, [tabindex]:not([tabindex="-1"])):focus-visible {
+    outline-width: 3px;
 }
 
 /* Visible to screen readers only (landmarks' headings, extra labels). */

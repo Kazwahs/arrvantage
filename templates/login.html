@@ -1,13 +1,20 @@
 <!DOCTYPE html>
-<html lang="en">
+<html lang="en" data-theme="{{ current_theme }}">
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Log in - arrVantage</title>
     <link rel="icon" href="/static/icons/favicon.svg" type="image/svg+xml">
-    <meta name="theme-color" content="#0d1117">
+    {% include "partials/theme_head.html" %}
     <link rel="preload" href="{{ url_for('static', filename='fonts/Geist-Variable.woff2') }}" as="font" type="font/woff2" crossorigin>
     <link rel="stylesheet" href="{{ asset_url('css/app.css') }}">
+    <script>
+        // Signed-out pages have no account to read a theme from, so use the one this browser last chose.
+        try {
+            var saved = localStorage.getItem('arrTheme');
+            if (saved && {{ themes.keys()|list|tojson }}.indexOf(saved) !== -1) document.documentElement.setAttribute('data-theme', saved);
+        } catch (e) {}
+    </script>
     <style>
         html, body { height: 100%; margin: 0; }
         body {
@@ -38,9 +45,9 @@
             font-size: 0.9rem;
         }
         .error {
-            background: rgba(255, 107, 107, 0.1);
+            background: color-mix(in srgb, var(--error) 12%, transparent);
             border: 1px solid var(--error);
-            color: var(--error);
+            color: var(--error-text);
             border-radius: 6px;
             padding: 0.6rem 0.8rem;
             font-size: 0.82rem;
@@ -51,14 +58,14 @@
             background: var(--accent);
             border: none;
             border-radius: 8px;
-            color: white;
+            color: var(--on-accent);
             font-size: 0.9rem;
             font-weight: 600;
             padding: 0.65rem;
             cursor: pointer;
             margin-top: 0.5rem;
         }
-        button:hover { background: #4a7ae0; }
+        button:hover { background: var(--accent-hover); }
     </style>
 </head>
 <body>

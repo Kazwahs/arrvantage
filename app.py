@@ -341,6 +341,40 @@ def ensure_csrf_token() -> str:
     return session["csrf_token"]
 
 
+# Selectable colour themes (Appearance panel). The colours themselves live in
+# static/css/app.css as [data-theme="..."] token sets; this is just the list,
+# its labels, and the browser-chrome colour for each. "auto" picks Paper or
+# Midnight from the device's light/dark setting.
+DEFAULT_THEME = "midnight"
+THEMES = {
+    "auto": {"label": "Auto", "description": "Follows your device: Paper in light mode, Midnight in dark mode.",
+             "color": "#0d1117", "light_color": "#f7f6f3"},
+    "midnight": {"label": "Midnight", "description": "The original dark look.", "color": "#0d1117"},
+    "paper": {"label": "Paper", "description": "Light and warm, easy to read in daylight.", "color": "#f7f6f3"},
+    "telemetry": {"label": "Telemetry", "description": "Square corners, monospaced type and near-black panels, like a control-room terminal.",
+                  "color": "#0a0a0a"},
+    "contrast": {"label": "High contrast", "description": "Pure black and white with bright borders and a thick focus ring.",
+                 "color": "#000000"},
+}
+
+
+def normalize_theme(value) -> str:
+    """Any stored or posted theme name that isn't a known one becomes the default."""
+    return value if isinstance(value, str) and value in THEMES else DEFAULT_THEME
+
+
+@app.context_processor
+def inject_theme():
+    """Gives every template the signed-in user's theme (the default on login/setup)."""
+    user = current_user()
+    key = normalize_theme(user.get("theme") if user else None)
+    return {
+        "current_theme": key,
+        "theme_meta": THEMES[key],
+        "themes": THEMES,
+    }
+
+
 @app.context_processor
 def inject_asset_helpers():
     """
@@ -4388,6 +4422,23 @@ def normalize_home_layout(raw) -> dict:
     return {"order": order, "hidden": [key for key in order if key in wanted_hidden]}
 
 
+@app.route("/api/theme", methods=["POST"])
+@login_required
+def api_theme():
+    """Saves the signed-in user's colour theme."""
+    payload = request.get_json(silent=True)
+    theme = payload.get("theme") if isinstance(payload, dict) else None
+    if not isinstance(theme, str) or theme not in THEMES:
+        return jsonify({"ok": False, "error": "Unknown theme."}), 400
+    user = current_user()
+    if theme == DEFAULT_THEME:
+        user.pop("theme", None)
+    else:
+        user["theme"] = theme
+    save_config(CONFIG)
+    return jsonify({"ok": True, "theme": theme})
+
+
 @app.route("/api/home/layout", methods=["POST"])
 @login_required
 def api_home_layout():
@@ -4765,9 +4816,11 @@ def parse_users(form, existing_users: list) -> list:
             "role": role, "permissions": permissions,
         }
         # Saving Settings rebuilds every user from the form, which has no
-        # field for the Home layout - carry it forward so it isn't wiped.
-        if existing and existing.get("home_layout"):
-            entry["home_layout"] = existing["home_layout"]
+        # field for per-user preferences (Home layout, theme) - carry them
+        # forward so they aren't wiped.
+        for kept in ("home_layout", "theme"):
+            if existing and existing.get(kept):
+                entry[kept] = existing[kept]
         users.append(entry)
 
     # Guarantee an admin always survives, even if the form somehow

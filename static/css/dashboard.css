@@ -65,7 +65,7 @@ body {
 
 .sidebar-divider {
     border: none;
-    border-top: 1px solid rgba(255, 255, 255, 0.12);
+    border-top: 1px solid var(--hairline);
     margin: 0.75rem 1.25rem 1rem 1.25rem;
 }
 
@@ -93,7 +93,7 @@ body {
     padding: 0.6rem 2.1rem 0.6rem 0.75rem;
     background: var(--panel);
     border: 1px solid var(--border);
-    border-radius: 8px;
+    border-radius: var(--radius-md);
     color: var(--muted);
     font-size: 0.9rem;
     cursor: pointer;
@@ -105,8 +105,8 @@ body {
 .instance-tab.active {
     color: var(--text);
     border-color: var(--tab-color, var(--accent));
-    background: rgba(77, 143, 221, 0.1);
-    box-shadow: inset 3px 0 0 var(--accent-amber), 0 0 14px -4px var(--accent-amber);
+    background: var(--accent-wash);
+    box-shadow: var(--active-shadow);
 }
 
 .tab-open-link {
@@ -119,14 +119,14 @@ body {
     justify-content: center;
     width: 1.75rem;
     height: 1.75rem;
-    border-radius: 4px;
+    border-radius: var(--radius-sm);
     color: var(--muted);
     opacity: 0;
     transition: opacity var(--dur-fast) var(--ease-out), background var(--dur-fast) var(--ease-out);
 }
 .nav-item:hover .tab-open-link,
 .nav-item:focus-within .tab-open-link { opacity: 0.7; }
-.tab-open-link:hover, .tab-open-link:focus-visible { opacity: 1; color: var(--text); background: rgba(255,255,255,0.08); }
+.tab-open-link:hover, .tab-open-link:focus-visible { opacity: 1; color: var(--text); background: var(--hover-bg); }
 @media (hover: none) {
     .tab-open-link { opacity: 0.6; }
 }
@@ -134,7 +134,7 @@ body {
 .instance-logo {
     width: 22px;
     height: 22px;
-    border-radius: 5px;
+    border-radius: var(--radius-sm);
     object-fit: contain;
     flex-shrink: 0;
     background: var(--sidebar);
@@ -162,7 +162,7 @@ body {
 .topbar-search {
     background: var(--panel);
     border: 1px solid var(--border);
-    border-radius: 6px;
+    border-radius: var(--radius);
     padding: 0.4rem 0.65rem;
     color: var(--text);
     font-size: 0.85rem;
@@ -179,7 +179,7 @@ body {
     flex-shrink: 0;
     background: var(--panel);
     border: 1px solid var(--border);
-    border-radius: 6px;
+    border-radius: var(--radius);
     margin-bottom: 0.6rem;
 }
 .settings-link { padding: 0; cursor: pointer; color: inherit; }
@@ -201,7 +201,7 @@ body {
 .view-tab {
     background: var(--panel);
     border: 1px solid var(--border);
-    border-radius: 8px;
+    border-radius: var(--radius-md);
     color: var(--muted);
     font-size: 0.9rem;
     padding: 0.5rem 1rem;
@@ -213,7 +213,7 @@ body {
 .view-tab.active {
     color: var(--text);
     border-color: var(--accent);
-    background: rgba(77, 143, 221, 0.1);
+    background: var(--accent-wash);
 }
 .view-tab.hidden { display: none; }
 #queue-tab-count { font-family: var(--mono); }
@@ -270,14 +270,14 @@ body {
 .queue-progress-track {
     margin-top: 0.4rem;
     height: 5px;
-    border-radius: 3px;
+    border-radius: var(--radius-sm);
     background: var(--border);
     overflow: hidden;
 }
 .queue-progress-fill {
     height: 100%;
     background: var(--accent);
-    border-radius: 3px;
+    border-radius: var(--radius-sm);
 }
 .queue-progress-fill.has-issue { background: var(--accent-amber); }
 .queue-progress-fill.is-critical { background: var(--error); }
@@ -297,11 +297,11 @@ body {
     font-size: 0.68rem;
     font-family: var(--mono);
     padding: 0.1rem 0.4rem;
-    border-radius: 4px;
-    background: rgba(255, 255, 255, 0.08);
+    border-radius: var(--radius-sm);
+    background: var(--hover-bg);
 }
 .inline-badge.badge-error { color: var(--error-text); }
-.inline-badge.badge-warning { color: var(--accent-amber); }
+.inline-badge.badge-warning { color: var(--warning); }
 .inline-badge.badge-notice { color: var(--muted); }
 .inline-badge.badge-success { color: var(--success); }
 
@@ -447,7 +447,7 @@ body {
 .arrange-actions { display: flex; gap: var(--space-2); }
 .home-all-hidden { display: flex; flex-wrap: wrap; align-items: center; gap: var(--space-3); padding: var(--space-4) 0; color: var(--muted); font-size: var(--text-base); }
 .home-all-hidden[hidden] { display: none; }
-#home-customise[aria-pressed="true"] { border-color: var(--accent); background: rgba(77, 143, 221, 0.1); }
+#home-customise[aria-pressed="true"] { border-color: var(--accent); background: var(--accent-wash); }
 
 @media (pointer: coarse) {
     .panel-handle, .panel-tool { min-width: 2.75rem; min-height: 2.75rem; }
@@ -529,7 +529,7 @@ body {
     flex: 1;
     background: var(--panel);
     border: 1px solid var(--border);
-    border-radius: 6px;
+    border-radius: var(--radius);
     padding: 0.5rem 0.75rem;
     color: var(--text);
     font-size: 0.9rem;
@@ -538,8 +538,8 @@ body {
 .search-row button, .request-btn {
     background: var(--accent);
     border: none;
-    border-radius: 6px;
-    color: white;
+    border-radius: var(--radius);
+    color: var(--on-accent);
     padding: 0.5rem 1rem;
     font-size: 0.85rem;
     cursor: pointer;
@@ -554,7 +554,7 @@ body {
 .komga-library-controls select {
     background: var(--panel);
     border: 1px solid var(--border);
-    border-radius: 6px;
+    border-radius: var(--radius);
     padding: 0.5rem 0.75rem;
     color: var(--text);
     font-size: 0.9rem;
@@ -593,7 +593,7 @@ body {
     width: 80px;
     height: 120px;
     flex-shrink: 0;
-    border-radius: 4px;
+    border-radius: var(--radius-sm);
     overflow: hidden;
     background: var(--sidebar);
     border: 1px solid var(--border);
@@ -625,7 +625,7 @@ body {
 .filter-row select {
     background: var(--panel);
     border: 1px solid var(--border);
-    border-radius: 6px;
+    border-radius: var(--radius);
     padding: 0.4rem 0.6rem;
     color: var(--text);
     font-size: 0.85rem;
@@ -634,7 +634,7 @@ body {
 .sort-dir-btn {
     background: var(--panel);
     border: 1px solid var(--border);
-    border-radius: 6px;
+    border-radius: var(--radius);
     padding: 0.4rem 0.7rem;
     color: var(--text);
     font-size: 0.9rem;
@@ -689,7 +689,7 @@ body {
 .cover-wrap {
     width: 100%;
     aspect-ratio: 2 / 3;
-    border-radius: 8px;
+    border-radius: var(--radius-md);
     overflow: hidden;
     background: var(--panel);
     border: 1px solid var(--border);
@@ -728,8 +728,8 @@ body {
     font-size: 0.68rem;
     font-family: var(--mono);
     padding: 0.15rem 0.4rem;
-    border-radius: 4px;
-    background: rgba(13, 17, 23, 0.85);
+    border-radius: var(--radius-sm);
+    background: var(--chip-bg);
     color: var(--text);
 }
 
@@ -757,7 +757,7 @@ body {
     background: #ef4444;
     color: #000;
     border: none;
-    border-radius: 6px;
+    border-radius: var(--radius);
     font-size: 1.05rem;
     font-weight: 700;
     padding: 0.45rem 0.9rem;
@@ -770,7 +770,7 @@ body {
     flex: 1;
     background: var(--sidebar);
     border: 1px solid var(--border);
-    border-radius: 5px;
+    border-radius: var(--radius-sm);
     color: var(--text);
     font-size: 0.7rem;
     padding: 0.3rem 0.25rem;
@@ -799,48 +799,78 @@ body {
 }
 .release-meta { font-size: 0.75rem; color: var(--muted); margin-top: 0.15rem; }
 
-/* --- Detail modal --- */
+/* --- Slide-over panel ---
+   Item details, About and Appearance all open here. On a desktop it slides in
+   from the right and leaves the library visible behind a light scrim; on a
+   phone it rises from the bottom as a sheet. */
 
 .modal-overlay {
     display: none;
     position: fixed;
     top: 0; left: 0; right: 0; bottom: 0;
-    background: rgba(0, 0, 0, 0.6);
+    background: var(--scrim);
     z-index: var(--z-modal);
-    align-items: center;
-    justify-content: center;
-    padding: 2rem;
+    justify-content: flex-end;
 }
 
-.modal-overlay.open { display: flex; }
+.modal-overlay.open { display: flex; animation: scrim-in var(--dur-slide) var(--ease-out); }
 
 .modal-box {
-    background: var(--panel);
-    border: 1px solid var(--border);
-    border-radius: 10px;
-    max-width: 640px;
-    width: 100%;
-    max-height: 85vh;
-    overflow-y: auto;
-    padding: 1.5rem;
     position: relative;
+    display: flex;
+    flex-direction: column;
+    width: min(36rem, 100%);
+    height: 100%;
+    background: var(--panel);
+    border-left: 1px solid var(--border);
+    animation: slide-in-right var(--dur-slide) var(--ease-out);
 }
 
-.modal-close { position: absolute; top: 1rem; right: 1rem; background: none; border: none; color: var(--muted); font-size: 1.3rem; cursor: pointer; line-height: 1; }
-.modal-close:hover { color: var(--text); }
+.modal-scroll {
+    flex: 1;
+    min-height: 0;
+    overflow-y: auto;
+    overscroll-behavior: contain;
+    padding: 1.5rem;
+    overflow-wrap: anywhere;   /* long unbroken error text must never push the panel wider */
+}
+
+.modal-close {
+    position: absolute;
+    top: 0.75rem;
+    right: 0.75rem;
+    z-index: 1;
+    width: 2.25rem;
+    height: 2.25rem;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    background: var(--panel);
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    color: var(--muted);
+    font-size: 1.4rem;
+    line-height: 1;
+    cursor: pointer;
+}
+.modal-close:hover { color: var(--text); border-color: var(--accent); }
+
+@keyframes scrim-in { from { opacity: 0; } to { opacity: 1; } }
+@keyframes slide-in-right { from { transform: translateX(2.5rem); opacity: 0; } to { transform: none; opacity: 1; } }
+@keyframes slide-in-up { from { transform: translateY(2rem); opacity: 0; } to { transform: none; opacity: 1; } }
 
 .modal-header {
     display: flex;
     gap: 1rem;
     margin-bottom: 1.25rem;
-    padding-right: 2rem;
+    padding-right: 2.5rem;
 }
 
 .modal-cover {
     width: 100px;
     flex-shrink: 0;
     aspect-ratio: 2 / 3;
-    border-radius: 8px;
+    border-radius: var(--radius-md);
     overflow: hidden;
     background: var(--sidebar);
     border: 1px solid var(--border);
@@ -883,7 +913,7 @@ body {
 .cast-photo {
     width: 100%;
     aspect-ratio: 1 / 1;
-    border-radius: 8px;
+    border-radius: var(--radius-md);
     overflow: hidden;
     background: var(--sidebar);
     margin-bottom: 0.4rem;
@@ -940,18 +970,18 @@ body {
     min-width: 120px;
     text-align: center;
     padding: 0.55rem;
-    border-radius: 6px;
+    border-radius: var(--radius);
     font-size: 0.85rem;
     font-weight: 600;
     text-decoration: none;
-    color: white;
+    color: var(--on-accent);
     background: var(--accent);
 }
 .play-btn:hover { filter: brightness(1.1); }
 
 .play-btn-plex { background: #f5c518; color: #1a1a1a; }
-.play-btn-jellyfin { background: #8b5cf6; }
-.play-btn-emby { background: #52c41a; }
+.play-btn-jellyfin { background: #7c4dea; color: #fff; }
+.play-btn-emby { background: #52c41a; color: #0a2a00; }
 
 /* --- Mobile layout (phones / narrow windows) --- */
 
@@ -1003,7 +1033,7 @@ body {
         padding: 0.5rem 0.75rem;
         background: var(--panel);
         border: 1px solid var(--border);
-        border-radius: 8px;
+        border-radius: var(--radius-md);
         color: var(--muted);
         font-size: 0.9rem;
     }
@@ -1011,8 +1041,8 @@ body {
     .sidebar-logo[aria-current="page"] {
         color: var(--text);
         border-color: var(--accent);
-        background: rgba(77, 143, 221, 0.1);
-        box-shadow: inset 3px 0 0 var(--accent-amber), 0 0 14px -4px var(--accent-amber);
+        background: var(--accent-wash);
+        box-shadow: var(--active-shadow);
     }
     .sidebar-home-chip { display: inline-flex; align-items: center; gap: 0.45rem; }
     .arrange-bar { top: calc(var(--mobile-nav-h, 4.25rem) + var(--space-2)); }
@@ -1059,8 +1089,18 @@ body {
     .filter-row { flex-wrap: wrap; }
     .filter-row select { flex: 1; min-width: 45%; }
 
-    .modal-overlay { padding: 0.75rem; align-items: flex-end; }
-    .modal-box { max-height: 92vh; padding: 1.25rem; }
+    .modal-overlay { align-items: flex-end; }
+    .modal-box {
+        width: 100%;
+        height: auto;
+        max-height: 92vh;
+        max-height: 92dvh;
+        border-left: 0;
+        border-top: 1px solid var(--border);
+        border-radius: var(--radius-lg) var(--radius-lg) 0 0;
+        animation-name: slide-in-up;
+    }
+    .modal-scroll { padding: 1.25rem; padding-bottom: max(1.25rem, env(safe-area-inset-bottom)); }
     .modal-header { gap: 0.75rem; }
     .modal-cover { width: 80px; }
 
@@ -1163,3 +1203,95 @@ body {
 .stat-actions { display: flex; gap: var(--space-2); }
 .stat-actions .mini-btn { text-decoration: none; text-align: center; }
 .stat-row { display: flex; gap: var(--space-5); }
+
+
+/* --- Theme-specific touches ---
+   Colours live in the tokens (app.css). What follows are the few things a
+   token can't express: the logo's white text on a light theme, and the
+   structural character of Telemetry and High contrast. */
+
+.sidebar-logo img, .modal-cover--logo img { filter: var(--logo-filter); }
+
+[data-theme="telemetry"] .instance-tab,
+[data-theme="telemetry"] .view-tab,
+[data-theme="telemetry"] .test-btn,
+[data-theme="telemetry"] .view-title {
+    text-transform: uppercase;
+    letter-spacing: 0.06em;
+    font-size: var(--text-sm);
+}
+[data-theme="telemetry"] .sidebar-title::before { content: "// "; }
+[data-theme="telemetry"] .instance-tab,
+[data-theme="telemetry"] .view-tab,
+[data-theme="telemetry"] .stat-card,
+[data-theme="telemetry"] .modal-box { border-color: var(--border); }
+/* faint CRT scanlines over everything; purely decorative and non-interactive */
+[data-theme="telemetry"] body::after {
+    content: "";
+    position: fixed;
+    inset: 0;
+    z-index: var(--z-modal);
+    pointer-events: none;
+    background: repeating-linear-gradient(0deg, transparent 0, transparent 2px, rgba(0, 0, 0, 0.22) 2px, rgba(0, 0, 0, 0.22) 3px);
+    opacity: 0.3;
+}
+
+[data-theme="contrast"] a:not(.test-btn):not(.settings-link):not(.tab-open-link):not(.skip-link) { text-decoration: underline; }
+[data-theme="contrast"] .instance-tab,
+[data-theme="contrast"] .view-tab,
+[data-theme="contrast"] .stat-card { border-width: 2px; }
+
+/* --- Appearance panel ---------------------------------------------------
+   Each theme card previews the theme's own tokens: the swatch halves carry
+   data-theme, so var(--bg) etc. resolve to that theme inside them. */
+.appearance-intro { margin: 0 0 var(--space-4, 1rem); color: var(--muted); }
+.theme-grid { display: grid; gap: 0.6rem; }
+.theme-card {
+    display: grid;
+    grid-template-columns: 5.5rem 1fr auto;
+    align-items: center;
+    gap: 0.9rem;
+    width: 100%;
+    padding: 0.7rem;
+    text-align: left;
+    font: inherit;
+    color: var(--text);
+    background: var(--panel);
+    border: 1px solid var(--border);
+    border-radius: var(--radius-md, 10px);
+    cursor: pointer;
+    transition: border-color var(--dur-fast, 120ms) var(--ease-out, ease), background var(--dur-fast, 120ms) var(--ease-out, ease);
+}
+.theme-card:hover { border-color: var(--accent); }
+.theme-card.is-selected { border-color: var(--accent); background: var(--accent-wash); box-shadow: inset 0 0 0 1px var(--accent); }
+.theme-swatch {
+    display: flex;
+    height: 3.4rem;
+    overflow: hidden;
+    border: 1px solid var(--border);
+    border-radius: var(--radius-sm, 6px);
+}
+.theme-swatch-half {
+    flex: 1;
+    display: flex;
+    flex-direction: column;
+    justify-content: center;
+    gap: 0.28rem;
+    padding: 0 0.5rem;
+    background: var(--bg);
+    color: var(--text);
+}
+.swatch-bar { height: 0.45rem; width: 55%; background: var(--accent); border-radius: var(--radius-sm, 3px); }
+.swatch-line { height: 0.25rem; width: 100%; background: var(--border); border-radius: var(--radius-sm, 3px); }
+.swatch-line--short { width: 60%; background: var(--muted); }
+.theme-swatch--split .swatch-bar { width: 80%; }
+.theme-swatch--split .swatch-line { width: 90%; }
+.theme-card-text { display: flex; flex-direction: column; gap: 0.15rem; min-width: 0; }
+.theme-card-name { font-weight: 600; }
+.theme-card-desc { font-size: var(--text-sm, 0.85rem); color: var(--muted); }
+.theme-card-check { display: flex; width: 1.5rem; height: 1.5rem; align-items: center; justify-content: center; border-radius: 50%; color: var(--on-accent); background: var(--accent); opacity: 0; }
+.theme-card.is-selected .theme-card-check { opacity: 1; }
+.appearance-status { min-height: 1.4em; margin-top: 0.9rem; font-size: var(--text-sm, 0.85rem); color: var(--muted); }
+@media (max-width: 480px) {
+    .theme-card { grid-template-columns: 4.2rem 1fr auto; gap: 0.7rem; }
+}

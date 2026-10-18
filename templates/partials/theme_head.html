@@ -1,0 +1,7 @@
+{# Browser-chrome colour for the current theme. "Auto" gives a light and a dark value chosen by the device. #}
+{% if theme_meta.light_color %}
+    <meta name="theme-color" content="{{ theme_meta.light_color }}" media="(prefers-color-scheme: light)">
+    <meta name="theme-color" content="{{ theme_meta.color }}" media="(prefers-color-scheme: dark)">
+{% else %}
+    <meta name="theme-color" content="{{ theme_meta.color }}">
+{% endif %}
