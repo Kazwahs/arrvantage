@@ -500,6 +500,23 @@ body {
     cursor: pointer;
 }
 .attention-more:hover { text-decoration: underline; }
+.attention-hide {
+    flex: none;
+    align-self: flex-start;
+    background: none;
+    border: 1px solid var(--border);
+    border-radius: var(--radius-sm);
+    color: var(--muted);
+    font-size: var(--text-xs);
+    padding: 0.2rem 0.6rem;
+    cursor: pointer;
+    transition: border-color var(--dur-fast) var(--ease-out), color var(--dur-fast) var(--ease-out);
+}
+.attention-hide:hover { border-color: var(--accent); color: var(--text); }
+@media (pointer: coarse) { .attention-hide { min-height: 2.5rem; padding-inline: 0.9rem; } }
+.attention-hidden { margin-top: 0.4rem; }
+.attention-hidden-note { margin: 0.2rem 0 0.6rem; font-size: var(--text-sm); color: var(--muted); }
+.attention-list--hidden .attention-item { border-left-color: var(--border); }
 .attention-clear {
     display: flex;
     flex-wrap: wrap;
@@ -1295,3 +1312,33 @@ body {
 @media (max-width: 480px) {
     .theme-card { grid-template-columns: 4.2rem 1fr auto; gap: 0.7rem; }
 }
+
+.appearance-heading { margin: var(--space-5, 1.5rem) 0 0.4rem; font-size: var(--text-md, 0.85rem); font-weight: 600; }
+.appearance-intro + .appearance-heading { margin-top: 0.25rem; }
+.appearance-hint { margin: 0 0 0.7rem; font-size: var(--text-sm); color: var(--muted); }
+.accent-grid { display: flex; flex-wrap: wrap; gap: 0.5rem; }
+.accent-swatch {
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+    padding: 0.4rem 0.75rem 0.4rem 0.45rem;
+    font: inherit;
+    font-size: var(--text-md, 0.85rem);
+    color: var(--text);
+    background: var(--panel);
+    border: 1px solid var(--border);
+    border-radius: var(--radius-md, 8px);
+    cursor: pointer;
+    transition: border-color var(--dur-fast, 120ms) var(--ease-out, ease);
+}
+.accent-swatch:hover { border-color: var(--accent); }
+.accent-swatch.is-selected { border-color: var(--accent); box-shadow: inset 0 0 0 1px var(--accent); background: var(--accent-wash); }
+.accent-dot {
+    width: 1.35rem;
+    height: 1.35rem;
+    border-radius: 50%;
+    background: var(--accent);
+    border: 1px solid var(--hairline);
+}
+/* "Theme default" has no colour of its own to show, so it reads as an empty ring. */
+.accent-dot--default { background: transparent; border: 2px dashed var(--muted); }

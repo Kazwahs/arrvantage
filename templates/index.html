@@ -1,5 +1,5 @@
 <!DOCTYPE html>
-<html lang="en" data-theme="{{ current_theme }}">
+<html lang="en" data-theme="{{ current_theme }}" data-accent="{{ current_accent }}">
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
@@ -186,6 +186,7 @@
                         <div class="home-panel-body" id="attention-body" aria-live="polite" aria-busy="true">
                             <div class="attention-loading">Checking your services&hellip;</div>
                         </div>
+                        <div class="sr-only" id="attention-status" role="status" aria-live="polite"></div>
                     </section>
                     <section class="home-panel" data-panel="libraries" data-label="Libraries" aria-labelledby="home-libraries-heading" hidden>
                         <h2 class="modal-section-title" id="home-libraries-heading">Libraries</h2>
@@ -371,6 +372,17 @@
     {# Appearance picker. showAppearance() copies this into the slide-over; the theme list comes from THEMES in app.py. #}
     <template id="appearance-template">
         <p class="appearance-intro">Pick how arrVantage looks. It is saved to your account and follows you to your other devices.</p>
+        <h3 class="appearance-heading" id="accent-heading">Accent colour</h3>
+        <p class="appearance-hint">Used for highlights and buttons on top of any theme. Green, amber and red are kept for status, so they aren't offered.</p>
+        <div class="accent-grid" role="radiogroup" aria-labelledby="accent-heading">
+            {% for key, accent in accents.items() %}
+            <button type="button" class="accent-swatch" role="radio" data-accent-key="{{ key }}" aria-checked="false" tabindex="-1" onclick="setAccent('{{ key }}')">
+                <span class="accent-dot{% if key == 'default' %} accent-dot--default{% endif %}" {% if key != 'default' %}data-accent="{{ key }}"{% endif %} aria-hidden="true"></span>
+                <span class="accent-name">{{ accent.label }}</span>
+            </button>
+            {% endfor %}
+        </div>
+        <h3 class="appearance-heading">Theme</h3>
         <div class="theme-grid" role="radiogroup" aria-label="Theme">
             {% for key, theme in themes.items() %}
             <button type="button" class="theme-card" role="radio" data-theme-key="{{ key }}" aria-checked="false" tabindex="-1" onclick="setTheme('{{ key }}')">
@@ -598,11 +610,17 @@
         let attentionData = null;
         let attentionShowAll = false;
 
-        function attentionItemHTML(item) {
+        let attentionShowHidden = false;
+
+        function attentionItemHTML(item, hiddenList) {
             const critical = item.severity === 'critical';
             const services = (item.services || []).map(svc =>
                 `<button type="button" class="attention-link" data-instance="${escapeAttr(svc)}" data-view="${escapeAttr(item.view || 'system')}">${escapeHtml(svc)}</button>`
             ).join('');
+            // Only warnings can be hidden; a critical item always stays in front of you.
+            const action = !item.hideable || !item.hide_key ? '' : hiddenList
+                ? `<button type="button" class="attention-hide" data-act="unhide" data-key="${escapeAttr(item.hide_key)}" aria-label="Show again: ${escapeAttr(item.title)}">Show again</button>`
+                : `<button type="button" class="attention-hide" data-act="hide" data-key="${escapeAttr(item.hide_key)}" aria-label="Hide warning: ${escapeAttr(item.title)}" title="Hide until it clears">Hide</button>`;
             return `
                 <li class="attention-item ${critical ? 'is-critical' : 'is-warning'}">
                     <span class="inline-badge ${critical ? 'badge-error' : 'badge-warning'} attention-sev">${critical ? 'Critical' : 'Warning'}</span>
@@ -611,6 +629,7 @@
                         ${item.detail ? `<div class="attention-detail">${escapeHtml(item.detail)}</div>` : ''}
                         <div class="attention-services">${services}</div>
                     </div>
+                    ${action}
                 </li>`;
         }
 
@@ -619,27 +638,113 @@
             const body = document.getElementById('attention-body');
             const count = document.getElementById('attention-count');
             const items = data.items || [];
+            const hiddenItems = data.hidden_items || [];
             body.setAttribute('aria-busy', 'false');
 
+            // A refresh replaces the markup, which would drop keyboard focus
+            // from whatever was being used - remember it and put it back.
+            const active = document.activeElement;
+            let restoreFocus = null;
+            if (active && body.contains(active)) {
+                if (active.dataset.key) {
+                    restoreFocus = `.attention-hide[data-key="${CSS.escape(active.dataset.key)}"]`;
+                } else if (active.id) {
+                    restoreFocus = `#${CSS.escape(active.id)}`;
+                }
+            }
+
+            let html = '';
             if (!items.length) {
                 count.hidden = true;
                 const n = data.checked || 0;
-                body.innerHTML = `
+                const extra = hiddenItems.length
+                    ? ` ${hiddenItems.length} warning${hiddenItems.length === 1 ? ' is' : 's are'} hidden.` : '';
+                html += `
                     <div class="attention-clear">
                         <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><polyline points="20 6 9 17 4 12"></polyline></svg>
                         <span class="attention-clear-title">All clear</span>
-                        <span class="attention-clear-detail">${n} service${n === 1 ? '' : 's'} checked, nothing needs you right now.</span>
+                        <span class="attention-clear-detail">${n} service${n === 1 ? '' : 's'} checked, nothing needs you right now.${extra}</span>
                     </div>`;
-                return;
+            } else {
+                count.textContent = items.length;
+                count.hidden = false;
+                const shown = attentionShowAll ? items : items.slice(0, ATTENTION_PREVIEW);
+                html += `<ul class="attention-list">${shown.map(i => attentionItemHTML(i, false)).join('')}</ul>` +
+                    (items.length > ATTENTION_PREVIEW
+                        ? `<button type="button" class="attention-more" id="attention-more">${attentionShowAll ? 'Show fewer' : `Show all ${items.length}`}</button>`
+                        : '');
             }
 
-            count.textContent = items.length;
-            count.hidden = false;
-            const shown = attentionShowAll ? items : items.slice(0, ATTENTION_PREVIEW);
-            body.innerHTML = `<ul class="attention-list">${shown.map(attentionItemHTML).join('')}</ul>` +
-                (items.length > ATTENTION_PREVIEW
-                    ? `<button type="button" class="attention-more" id="attention-more">${attentionShowAll ? 'Show fewer' : `Show all ${items.length}`}</button>`
-                    : '');
+            if (hiddenItems.length) {
+                html += `
+                    <div class="attention-hidden">
+                        <button type="button" class="attention-more" id="attention-hidden-toggle" aria-expanded="${attentionShowHidden}" aria-controls="attention-hidden-list">
+                            ${attentionShowHidden ? 'Collapse hidden warnings' : `Hidden warnings (${hiddenItems.length})`}
+                        </button>
+                        <div id="attention-hidden-list" ${attentionShowHidden ? '' : 'hidden'}>
+                            <p class="attention-hidden-note">These stay hidden until they clear. If one comes back later, it will show again.</p>
+                            <ul class="attention-list attention-list--hidden">${hiddenItems.map(i => attentionItemHTML(i, true)).join('')}</ul>
+                            <button type="button" class="attention-more" id="attention-restore-all">Show all hidden warnings</button>
+                        </div>
+                    </div>`;
+            }
+            body.innerHTML = html;
+            const back = restoreFocus && body.querySelector(restoreFocus);
+            if (back) back.focus();
+        }
+
+        function announceAttention(text) {
+            const el = document.getElementById('attention-status');
+            if (el) el.textContent = text;
+        }
+
+        // Focus would be lost when the button that was just used disappears,
+        // so put it on its neighbour (or the heading) after the re-render.
+        function refocusAttention(index) {
+            const body = document.getElementById('attention-body');
+            const buttons = body.querySelectorAll('.attention-list:not(.attention-list--hidden) .attention-hide');
+            const target = buttons[Math.min(index, buttons.length - 1)]
+                || body.querySelector('#attention-hidden-toggle')
+                || document.getElementById('attention-heading');
+            if (target) {
+                if (target.tabIndex < 0) target.tabIndex = -1;
+                target.focus();
+            }
+        }
+
+        async function postAttentionHide(payload) {
+            const response = await fetch('/api/attention/hide', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify(payload),
+            });
+            if (!response.ok) {
+                let message = `HTTP ${response.status}`;
+                try { message = (await response.json()).error || message; } catch (e) { /* not JSON */ }
+                throw new Error(message);
+            }
+        }
+
+        async function setAttentionHidden(key, hide, index) {
+            if (!attentionData) return;
+            if (hide) {
+                // Hiding feels instant: move it locally first, then save.
+                const at = attentionData.items.findIndex(i => i.hide_key === key);
+                if (at !== -1) {
+                    const [item] = attentionData.items.splice(at, 1);
+                    attentionData.hidden_items = [...(attentionData.hidden_items || []), item];
+                    renderAttention(attentionData);
+                    refocusAttention(index);
+                }
+            }
+            try {
+                await postAttentionHide({ key, hidden: hide });
+                announceAttention(hide ? 'Warning hidden until it clears.' : 'Warning shown again.');
+            } catch (err) {
+                announceAttention(`Couldn't ${hide ? 'hide' : 'show'} that warning: ${err.message}`);
+            }
+            await loadAttention();
+            if (!hide) refocusAttention(index);
         }
 
         function applyAttentionToSidebar(perInstance) {
@@ -701,6 +806,34 @@
             if (e.target.closest('#attention-more') && attentionData) {
                 attentionShowAll = !attentionShowAll;
                 renderAttention(attentionData);
+                return;
+            }
+            const toggle = e.target.closest('#attention-hidden-toggle');
+            if (toggle && attentionData) {
+                attentionShowHidden = !attentionShowHidden;
+                renderAttention(attentionData);
+                document.getElementById('attention-hidden-toggle').focus();
+                return;
+            }
+            if (e.target.closest('#attention-restore-all')) {
+                (async () => {
+                    try {
+                        await postAttentionHide({ restore_all: true });
+                        announceAttention('All hidden warnings are showing again.');
+                    } catch (err) {
+                        announceAttention(`Couldn't show the hidden warnings: ${err.message}`);
+                    }
+                    attentionShowHidden = false;
+                    await loadAttention();
+                    refocusAttention(0);
+                })();
+                return;
+            }
+            const hideBtn = e.target.closest('.attention-hide');
+            if (hideBtn) {
+                const list = hideBtn.closest('.attention-list');
+                const index = Array.from(list.querySelectorAll('.attention-hide')).indexOf(hideBtn);
+                setAttentionHidden(hideBtn.dataset.key, hideBtn.dataset.act === 'hide', index);
             }
         });
 
@@ -2575,6 +2708,38 @@
             });
         }
 
+        const ACCENT_KEYS = {{ accents.keys()|list|tojson }};
+        const ACCENT_LABELS = {{ accents|tojson }};
+
+        function markCurrentAccent() {
+            const current = document.documentElement.getAttribute('data-accent') || 'default';
+            document.querySelectorAll('#modal-body .accent-swatch').forEach(swatch => {
+                const on = swatch.dataset.accentKey === current;
+                swatch.setAttribute('aria-checked', on ? 'true' : 'false');
+                swatch.tabIndex = on ? 0 : -1;
+                swatch.classList.toggle('is-selected', on);
+            });
+        }
+
+        async function setAccent(key) {
+            if (!ACCENT_KEYS.includes(key)) return;
+            const status = document.getElementById('appearance-status');
+            document.documentElement.setAttribute('data-accent', key);
+            markCurrentAccent();
+            try { localStorage.setItem('arrAccent', key); } catch (e) { /* storage can be blocked */ }
+            try {
+                const response = await fetch('/api/accent', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ accent: key }),
+                });
+                if (!response.ok) throw new Error(`HTTP ${response.status}`);
+                if (status) status.textContent = `${ACCENT_LABELS[key].label} accent saved.`;
+            } catch (err) {
+                if (status) status.textContent = "Couldn't save your accent. It will reset when you reload the page.";
+            }
+        }
+
         async function setTheme(key) {
             if (!THEME_KEYS.includes(key)) return;
             const status = document.getElementById('appearance-status');
@@ -2606,23 +2771,28 @@
             const body = document.getElementById('modal-body');
             body.replaceChildren(document.getElementById('appearance-template').content.cloneNode(true));
             markCurrentTheme();
+            markCurrentAccent();
             document.getElementById('modal-overlay').classList.add('open');
         }
 
         // Radio-group keyboard behaviour: arrows move and select, Home/End jump.
-        document.addEventListener('keydown', (e) => {
-            const card = e.target.closest && e.target.closest('.theme-card');
-            if (!card) return;
-            const cards = Array.from(document.querySelectorAll('#modal-body .theme-card'));
-            let i = cards.indexOf(card);
-            if (e.key === 'ArrowDown' || e.key === 'ArrowRight') i = (i + 1) % cards.length;
-            else if (e.key === 'ArrowUp' || e.key === 'ArrowLeft') i = (i - 1 + cards.length) % cards.length;
+        function radioGroupKeys(e, selector, choose) {
+            const current = e.target.closest && e.target.closest(selector);
+            if (!current) return;
+            const all = Array.from(document.querySelectorAll('#modal-body ' + selector));
+            let i = all.indexOf(current);
+            if (e.key === 'ArrowDown' || e.key === 'ArrowRight') i = (i + 1) % all.length;
+            else if (e.key === 'ArrowUp' || e.key === 'ArrowLeft') i = (i - 1 + all.length) % all.length;
             else if (e.key === 'Home') i = 0;
-            else if (e.key === 'End') i = cards.length - 1;
+            else if (e.key === 'End') i = all.length - 1;
             else return;
             e.preventDefault();
-            cards[i].focus();
-            setTheme(cards[i].dataset.themeKey);
+            all[i].focus();
+            choose(all[i]);
+        }
+        document.addEventListener('keydown', (e) => {
+            radioGroupKeys(e, '.theme-card', el => setTheme(el.dataset.themeKey));
+            radioGroupKeys(e, '.accent-swatch', el => setAccent(el.dataset.accentKey));
         });
 
         function showAbout() {

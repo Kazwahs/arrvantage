@@ -434,6 +434,48 @@
     --active-shadow: inset 4px 0 0 var(--focus);
 }
 
+/* --- Accent colour ----------------------------------------------------
+   A per-user highlight laid over any theme (data-accent on <html>; "default"
+   has no block, so the theme keeps its own). Each accent has a light-mode and a
+   dark-mode value via light-dark(), which follows the active theme's
+   color-scheme. Only non-status hues are offered: green, amber and red are
+   reserved for status. Every value is chosen to clear 4.5:1 on the page, panel
+   and sidebar of every theme of its kind (a test checks this), and on-accent
+   text clears 4.5:1 on the accent and its hover tone. The @supports guard
+   leaves older browsers on the theme's own accent rather than a broken one. */
+@supports (color: light-dark(red, blue)) {
+    [data-accent="blue"] {
+        --accent: light-dark(#155cba, #87b7f5);
+        --accent-hover: light-dark(#114b99, #a1c7f7);
+        --accent-wash: light-dark(rgba(21, 92, 186, 0.1), rgba(135, 183, 245, 0.14));
+        --on-accent: light-dark(#ffffff, #0d1117);
+    }
+    [data-accent="cyan"] {
+        --accent: light-dark(#0e687a, #13c4e7);
+        --accent-hover: light-dark(#0b5564, #47d1ec);
+        --accent-wash: light-dark(rgba(14, 104, 122, 0.1), rgba(19, 196, 231, 0.14));
+        --on-accent: light-dark(#ffffff, #0d1117);
+    }
+    [data-accent="violet"] {
+        --accent: light-dark(#7e23e7, #caa3f8);
+        --accent-hover: light-dark(#671dbd, #d6b7fa);
+        --accent-wash: light-dark(rgba(126, 35, 231, 0.1), rgba(202, 163, 248, 0.14));
+        --on-accent: light-dark(#ffffff, #0d1117);
+    }
+    [data-accent="magenta"] {
+        --accent: light-dark(#b11477, #f695d3);
+        --accent-hover: light-dark(#911062, #f8acdd);
+        --accent-wash: light-dark(rgba(177, 20, 119, 0.1), rgba(246, 149, 211, 0.14));
+        --on-accent: light-dark(#ffffff, #0d1117);
+    }
+    [data-accent="neutral"] {
+        --accent: light-dark(#3a4049, #dfe3ea);
+        --accent-hover: light-dark(#30343c, #e6e9ef);
+        --accent-wash: light-dark(rgba(58, 64, 73, 0.1), rgba(223, 227, 234, 0.14));
+        --on-accent: light-dark(#ffffff, #0d1117);
+    }
+}
+
 /* --- Base ---------------------------------------------------------- */
 
 * { box-sizing: border-box; }

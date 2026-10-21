@@ -221,3 +221,100 @@ class TestThemeContrast:
     def test_focus_ring_is_visible_against_the_page(self, app_module):
         for key, tokens in self.themes(app_module).items():
             assert _contrast(tokens["--focus"], tokens["--bg"]) >= 3, key
+
+
+class TestAccentEndpoint:
+    def test_requires_login_and_csrf(self, client, admin_session):
+        # (the admin_session fixture logs the shared client in, so check CSRF first)
+        c, _ = admin_session
+        assert c.post("/api/accent", json={"accent": "blue"}).status_code == 403
+
+    def test_signed_out_requests_are_refused(self, client):
+        assert client.post("/api/accent", json={"accent": "blue"}).status_code in (302, 401, 403)
+
+    def test_saves_a_known_accent_and_default_clears_it(self, app_module, admin_session):
+        client, csrf = admin_session
+        response = client.post("/api/accent", headers=HEADERS(csrf), json={"accent": "violet"})
+        assert response.get_json() == {"ok": True, "accent": "violet"}
+        assert json.load(open(app_module.CONFIG_PATH))["users"][0]["accent"] == "violet"
+        client.post("/api/accent", headers=HEADERS(csrf), json={"accent": "default"})
+        assert "accent" not in json.load(open(app_module.CONFIG_PATH))["users"][0]
+
+    def test_unknown_accent_is_a_400(self, app_module, admin_session):
+        client, csrf = admin_session
+        for bad in ({"accent": "green"}, {"accent": 3}, {}, ["blue"]):
+            assert client.post("/api/accent", headers=HEADERS(csrf), json=bad).status_code == 400
+
+    def test_status_colours_are_never_offered_as_accents(self, app_module):
+        assert not {"green", "amber", "orange", "red", "yellow"} & set(app_module.ACCENTS)
+
+    def test_page_carries_the_accent_and_the_picker_lists_every_one(self, app_module, admin_session):
+        client, csrf = admin_session
+        client.post("/api/accent", headers=HEADERS(csrf), json={"accent": "cyan"})
+        html = client.get("/").data.decode()
+        assert '<html lang="en" data-theme="midnight" data-accent="cyan">' in html
+        for key in app_module.ACCENTS:
+            assert f'data-accent-key="{key}"' in html
+
+    def test_settings_save_keeps_the_accent_and_hidden_warnings(self, app_module):
+        existing = [{"username": "zak", "password_hash": "x", "role": "admin", "permissions": {},
+                     "accent": "magenta", "hidden_attention": ["queue:Sonarr"]}]
+        form = {"user_username_0": "zak", "user_role_0": "admin", "user_password_0": ""}
+        parsed = app_module.parse_users(form, existing)
+        assert parsed[0]["accent"] == "magenta"
+        assert parsed[0]["hidden_attention"] == ["queue:Sonarr"]
+
+
+class TestAccentContrast:
+    """Each accent has a light and a dark value; each must be readable on every theme of its kind."""
+
+    def _modes(self, app_module):
+        css = read_css()
+        modes = {"light": [], "dark": []}
+        for key in app_module.THEMES:
+            if key == "auto":
+                continue
+            opener = ':root,\n[data-theme="midnight"]' if key == "midnight" else f'[data-theme="{key}"]'
+            block = token_block(css, opener)
+            scheme = re.search(r"color-scheme:\s*(light|dark)", block).group(1)
+            tokens = _tokens(block)
+            modes[scheme].append((key, [tokens["--bg"], tokens["--panel"], tokens["--sidebar"]]))
+        return css, modes
+
+    def _accent_values(self, css, key):
+        block = token_block(css, f'[data-accent="{key}"]')
+        values = {}
+        for name in ("--accent", "--accent-hover", "--on-accent"):
+            light, dark = re.search(rf"{name}:\s*light-dark\((#[0-9a-fA-F]{{6}}),\s*(#[0-9a-fA-F]{{6}})\)", block).groups()
+            values[name] = {"light": light, "dark": dark}
+        return values
+
+    def test_every_accent_has_a_css_block(self, app_module):
+        css = read_css()
+        for key in app_module.ACCENTS:
+            if key != "default":
+                assert f'[data-accent="{key}"]' in css, key
+
+    def test_accent_text_clears_4_5_on_every_theme_surface(self, app_module):
+        css, modes = self._modes(app_module)
+        assert modes["light"] and modes["dark"]
+        for key in app_module.ACCENTS:
+            if key == "default":
+                continue
+            values = self._accent_values(css, key)
+            for scheme, themes in modes.items():
+                for theme, surfaces in themes:
+                    for surface in surfaces:
+                        ratio = _contrast(values["--accent"][scheme], surface)
+                        assert ratio >= 4.5, f"{key} ({scheme}) on {theme} {surface}: {ratio:.2f}:1"
+
+    def test_text_on_a_solid_accent_button_is_readable(self, app_module):
+        css, _ = self._modes(app_module)
+        for key in app_module.ACCENTS:
+            if key == "default":
+                continue
+            values = self._accent_values(css, key)
+            for scheme in ("light", "dark"):
+                for tone in ("--accent", "--accent-hover"):
+                    ratio = _contrast(values["--on-accent"][scheme], values[tone][scheme])
+                    assert ratio >= 4.5, f"{key} ({scheme}) {tone}: {ratio:.2f}:1"

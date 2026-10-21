@@ -374,6 +374,26 @@ def normalize_theme(value) -> str:
     return value if isinstance(value, str) and value in THEMES else DEFAULT_THEME
 
 
+# Accent colour: a per-user highlight laid over whichever theme is active. Only
+# non-status hues are offered - green, amber and red are reserved for status and
+# must never double as decoration. "default" means "use the theme's own accent".
+# The CSS for each key lives in app.css ([data-accent=...]) and is contrast-checked
+# against every theme by Tests/test_themes.py; "swatch" is only the picker's fallback.
+DEFAULT_ACCENT = "default"
+ACCENTS = {
+    "default": {"label": "Theme default"},
+    "blue": {"label": "Blue"},
+    "cyan": {"label": "Cyan"},
+    "violet": {"label": "Violet"},
+    "magenta": {"label": "Magenta"},
+    "neutral": {"label": "Neutral"},
+}
+
+
+def normalize_accent(value) -> str:
+    return value if isinstance(value, str) and value in ACCENTS else DEFAULT_ACCENT
+
+
 @app.context_processor
 def inject_theme():
     """Gives every template the signed-in user's theme (the default on login/setup)."""
@@ -383,6 +403,8 @@ def inject_theme():
         "current_theme": key,
         "theme_meta": THEMES[key],
         "themes": THEMES,
+        "current_accent": normalize_accent(user.get("accent") if user else None),
+        "accents": ACCENTS,
     }
 
 
@@ -4239,11 +4261,14 @@ def summarize_attention(signals: dict) -> dict:
     per_instance = {}
     health_groups: dict = {}
     disk_groups: dict = {}
+    complete = True  # False if any call failed, so a missing warning may only mean "couldn't check"
 
     for name, sig in signals.items():
         queue = sig.get("queue") or {"error": "no data", "queue_items": []}
         health = sig.get("health") or {"error": "no data", "health_items": []}
         disk = sig.get("diskspace") or {"error": "no data", "diskspace_items": []}
+        if queue.get("error") or health.get("error") or disk.get("error"):
+            complete = False
 
         state = {"health_issues": 0, "queue_count": 0, "queue_issues": 0, "unreachable": False, "dot": None}
         per_instance[name] = state
@@ -4257,6 +4282,7 @@ def summarize_attention(signals: dict) -> dict:
                 "id": f"unreachable:{name}", "severity": "critical", "kind": "unreachable",
                 "title": f"{name} can't be reached", "detail": queue["error"],
                 "services": [name], "view": None,
+                "hideable": False, "hide_key": None,
             })
             continue
 
@@ -4275,6 +4301,7 @@ def summarize_attention(signals: dict) -> dict:
                 "id": f"queue:{name}", "severity": "warning", "kind": "queue",
                 "title": f"{len(bad)} download{'s' if len(bad) != 1 else ''} stalled or failing in {name}",
                 "detail": detail, "services": [name], "view": "queue",
+                "hideable": True, "hide_key": f"queue:{name}",
             })
             state["dot"] = state["dot"] or "warning"
 
@@ -4313,6 +4340,7 @@ def summarize_attention(signals: dict) -> dict:
             "kind": "health",
             "title": _health_group_title(group["source"], group["messages"]),
             "detail": "", "services": group["services"], "view": "system",
+            "hideable": not group["error"], "hide_key": f"health:{key}",
         })
 
     for key, group in disk_groups.items():
@@ -4324,6 +4352,10 @@ def summarize_attention(signals: dict) -> dict:
             "title": f"{'Critically low' if group['critical'] else 'Low'} disk space: {d.get('path') or 'unknown path'}",
             "detail": f"{d.get('free_human')} free of {d.get('total_human')} ({d.get('percent_free')}%)",
             "services": group["services"], "view": "system",
+            "hideable": not group["critical"],
+            # Keyed on the volume rather than the reading, so the warning stays
+            # hidden while free space drifts by a few GB.
+            "hide_key": f"disk:{d.get('path') or key[0]}",
         })
 
     # Within a kind, what affects the most services comes first - a warning
@@ -4332,6 +4364,7 @@ def summarize_attention(signals: dict) -> dict:
     return {
         "generated_at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
         "checked": len(signals),
+        "complete": complete,
         "items": items,
         "summary": {
             "critical": sum(1 for i in items if i["severity"] == "critical"),
@@ -4340,6 +4373,52 @@ def summarize_attention(signals: dict) -> dict:
         },
         "per_instance": per_instance,
     }
+
+
+MAX_HIDDEN_ATTENTION = 100
+_HIDE_KEY_PREFIXES = ("queue:", "health:", "disk:")
+
+
+def valid_hide_key(key) -> bool:
+    return isinstance(key, str) and len(key) <= 300 and key.startswith(_HIDE_KEY_PREFIXES)
+
+
+def apply_hidden_attention(data: dict, hidden) -> dict:
+    """
+    Pure function: splits a summarize_attention() result into what a person
+    still wants to see and what they have hidden, and recomputes the parts of
+    the summary that depend on that. Only warnings can be hidden - a critical
+    item or an unreachable service always shows. The shared cached result is
+    never modified.
+    """
+    hidden = set(hidden or [])
+    visible, hidden_items = [], []
+    for item in data["items"]:
+        if item.get("hideable") and item.get("hide_key") in hidden:
+            hidden_items.append(item)
+        else:
+            visible.append(item)
+
+    per_instance = {name: dict(state) for name, state in data["per_instance"].items()}
+    for item in hidden_items:
+        # A hidden stalled-download warning also stops lighting that app's sidebar dot.
+        if item["kind"] == "queue":
+            for name in item["services"]:
+                if name in per_instance and per_instance[name]["dot"] == "warning":
+                    per_instance[name]["dot"] = None
+
+    result = dict(data)
+    result.update({
+        "items": visible,
+        "hidden_items": hidden_items,
+        "per_instance": per_instance,
+        "summary": {
+            "critical": sum(1 for i in visible if i["severity"] == "critical"),
+            "warning": sum(1 for i in visible if i["severity"] == "warning"),
+            "total": len(visible),
+        },
+    })
+    return result
 
 
 def gather_attention(force: bool = False) -> dict:
@@ -4376,7 +4455,59 @@ def gather_attention(force: bool = False) -> dict:
 @app.route("/api/attention")
 @login_required
 def api_attention():
-    return jsonify(gather_attention(force=request.args.get("refresh") == "1"))
+    data = gather_attention(force=request.args.get("refresh") == "1")
+    user = current_user()
+    hidden = list(user.get("hidden_attention") or [])
+    if hidden and data.get("complete"):
+        # "Hidden until it clears": once a hidden warning is gone from a full,
+        # error-free check, forget it, so it shows again if it ever comes back.
+        # (An incomplete check proves nothing - an app being briefly
+        # unreachable must not un-hide its warnings.)
+        live = {i["hide_key"] for i in data["items"] if i.get("hide_key")}
+        kept = [k for k in hidden if k in live]
+        if kept != hidden:
+            if kept:
+                user["hidden_attention"] = kept
+            else:
+                user.pop("hidden_attention", None)
+            save_config(CONFIG)
+            hidden = kept
+    return jsonify(apply_hidden_attention(data, hidden))
+
+
+@app.route("/api/attention/hide", methods=["POST"])
+@login_required
+def api_attention_hide():
+    """
+    Hides or un-hides one warning for the signed-in user:
+    {"key": "...", "hidden": true|false}, or {"restore_all": true}.
+    """
+    payload = request.get_json(silent=True)
+    if not isinstance(payload, dict):
+        return jsonify({"ok": False, "error": "Expected a JSON object."}), 400
+    user = current_user()
+    hidden = list(user.get("hidden_attention") or [])
+
+    if payload.get("restore_all"):
+        hidden = []
+    else:
+        key = payload.get("key")
+        if not valid_hide_key(key) or not isinstance(payload.get("hidden"), bool):
+            return jsonify({"ok": False, "error": "Expected a warning key and hidden true/false."}), 400
+        if payload["hidden"]:
+            if key not in hidden:
+                if len(hidden) >= MAX_HIDDEN_ATTENTION:
+                    return jsonify({"ok": False, "error": "Too many hidden warnings - restore some first."}), 400
+                hidden.append(key)
+        else:
+            hidden = [k for k in hidden if k != key]
+
+    if hidden:
+        user["hidden_attention"] = hidden
+    else:
+        user.pop("hidden_attention", None)
+    save_config(CONFIG)
+    return jsonify({"ok": True, "hidden": hidden})
 
 
 @app.route("/fragment/instance/<name>")
@@ -4448,6 +4579,23 @@ def api_theme():
         user["theme"] = theme
     save_config(CONFIG)
     return jsonify({"ok": True, "theme": theme})
+
+
+@app.route("/api/accent", methods=["POST"])
+@login_required
+def api_accent():
+    """Saves the signed-in user's accent colour ("default" clears it)."""
+    payload = request.get_json(silent=True)
+    accent = payload.get("accent") if isinstance(payload, dict) else None
+    if not isinstance(accent, str) or accent not in ACCENTS:
+        return jsonify({"ok": False, "error": "Unknown accent."}), 400
+    user = current_user()
+    if accent == DEFAULT_ACCENT:
+        user.pop("accent", None)
+    else:
+        user["accent"] = accent
+    save_config(CONFIG)
+    return jsonify({"ok": True, "accent": accent})
 
 
 @app.route("/api/home/layout", methods=["POST"])
@@ -4827,9 +4975,9 @@ def parse_users(form, existing_users: list) -> list:
             "role": role, "permissions": permissions,
         }
         # Saving Settings rebuilds every user from the form, which has no
-        # field for per-user preferences (Home layout, theme) - carry them
-        # forward so they aren't wiped.
-        for kept in ("home_layout", "theme"):
+        # field for per-user preferences (Home layout, theme, accent, hidden
+        # warnings) - carry them forward so they aren't wiped.
+        for kept in ("home_layout", "theme", "accent", "hidden_attention"):
             if existing and existing.get(kept):
                 entry[kept] = existing[kept]
         users.append(entry)
