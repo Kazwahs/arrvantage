@@ -156,11 +156,13 @@ class TestThemeTokens:
         normalise = lambda text: re.sub(r"\s+", " ", text).strip()
         assert normalise(paper) == normalise(auto)
 
-    def test_every_theme_defines_the_same_core_tokens(self):
+    def test_every_theme_defines_the_same_core_tokens(self, app_module):
         css = read_css()
         core = ("--bg", "--panel", "--sidebar", "--border", "--text", "--muted", "--accent", "--on-accent")
-        for key in ("paper", "telemetry", "contrast"):
-            block = token_block(css, f'[data-theme="{key}"]')
+        # Every theme restates the core tokens itself (none relies on inheriting them),
+        # because the Appearance panel previews each one inside whichever theme is active.
+        for key in ("midnight", *[k for k in app_module.THEMES if k not in ("midnight", "auto")]):
+            block = token_block(css, ':root,\n[data-theme="midnight"]' if key == "midnight" else f'[data-theme="{key}"]')
             for token in core:
                 assert re.search(rf"{re.escape(token)}\s*:", block), f"{key} is missing {token}"
 
@@ -168,3 +170,54 @@ class TestThemeTokens:
         css = read_css()
         for key in app_module.THEMES:
             assert f'[data-theme="{key}"]' in css, key
+
+
+def _luminance(hex_colour):
+    channels = [int(hex_colour[i:i + 2], 16) / 255 for i in (1, 3, 5)]
+    channels = [c / 12.92 if c <= 0.03928 else ((c + 0.055) / 1.055) ** 2.4 for c in channels]
+    return 0.2126 * channels[0] + 0.7152 * channels[1] + 0.0722 * channels[2]
+
+
+def _contrast(a, b):
+    hi, lo = sorted((_luminance(a), _luminance(b)), reverse=True)
+    return (hi + 0.05) / (lo + 0.05)
+
+
+def _tokens(block):
+    """Hex-valued tokens in a block; a token that is just var(--other) takes that token's value."""
+    tokens = dict(re.findall(r"(--[a-z-]+)\s*:\s*(#[0-9a-fA-F]{6})\s*;", block))
+    for name, target in re.findall(r"(--[a-z-]+)\s*:\s*var\((--[a-z-]+)\)\s*;", block):
+        if target in tokens:
+            tokens[name] = tokens[target]
+    return tokens
+
+
+class TestThemeContrast:
+    """Small text must clear WCAG AA (4.5:1) on the page and panel colours in every theme."""
+
+    PAIRS = ("--text", "--muted", "--accent", "--warning", "--error-text", "--success")
+
+    def themes(self, app_module):
+        css = read_css()
+        blocks = {"midnight": token_block(css, ':root,\n[data-theme="midnight"]')}
+        for key in app_module.THEMES:
+            if key not in ("midnight", "auto"):
+                blocks[key] = token_block(css, f'[data-theme="{key}"]')
+        return {key: _tokens(block) for key, block in blocks.items()}
+
+    def test_ink_and_status_colours_are_readable_on_page_and_panels(self, app_module):
+        for key, tokens in self.themes(app_module).items():
+            for surface in ("--bg", "--panel"):
+                for name in self.PAIRS:
+                    ratio = _contrast(tokens[name], tokens[surface])
+                    assert ratio >= 4.5, f"{key}: {name} on {surface} is {ratio:.2f}:1"
+
+    def test_text_on_a_solid_accent_button_is_readable(self, app_module):
+        for key, tokens in self.themes(app_module).items():
+            for accent in ("--accent", "--accent-hover"):
+                ratio = _contrast(tokens["--on-accent"], tokens[accent])
+                assert ratio >= 4.5, f"{key}: --on-accent on {accent} is {ratio:.2f}:1"
+
+    def test_focus_ring_is_visible_against_the_page(self, app_module):
+        for key, tokens in self.themes(app_module).items():
+            assert _contrast(tokens["--focus"], tokens["--bg"]) >= 3, key

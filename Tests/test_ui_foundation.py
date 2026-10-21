@@ -54,6 +54,9 @@ class TestStaticAssets:
         ("/static/fonts/Geist-Variable.woff2", "font/woff2"),
         ("/static/fonts/GeistMono-Variable.woff2", "font/woff2"),
         ("/static/fonts/OFL.txt", "text/plain"),
+        ("/static/fonts/OFL-IBMPlexSans.txt", "text/plain"),
+        ("/static/fonts/IBMPlexSans-Latin-Variable.woff2", "font/woff2"),
+        ("/static/fonts/IBMPlexSans-LatinExt-Variable.woff2", "font/woff2"),
     ])
     def test_file_is_served(self, client, path, content_type_part):
         response = client.get(path)
@@ -63,12 +66,14 @@ class TestStaticAssets:
     def test_woff2_files_are_real_fonts(self, client):
         # woff2 files start with the magic bytes "wOF2" - catches an
         # accidentally-committed HTML error page or an empty file.
-        for name in ("Geist-Variable.woff2", "GeistMono-Variable.woff2"):
+        for name in ("Geist-Variable.woff2", "GeistMono-Variable.woff2",
+                     "IBMPlexSans-Latin-Variable.woff2", "IBMPlexSans-LatinExt-Variable.woff2"):
             assert client.get(f"/static/fonts/{name}").data[:4] == b"wOF2"
 
     def test_font_licence_is_bundled(self, client):
         # SIL OFL requires the licence text to travel with the font.
-        assert "SIL OPEN FONT LICENSE" in client.get("/static/fonts/OFL.txt").data.decode().upper()
+        for licence in ("OFL.txt", "OFL-IBMPlexSans.txt"):
+            assert "SIL OPEN FONT LICENSE" in client.get(f"/static/fonts/{licence}").data.decode().upper()
 
     def test_shared_stylesheet_defines_test_btn(self, client):
         # .test-btn is used by the dashboard, settings and setup. It was

@@ -32,12 +32,35 @@
     font-display: swap;
 }
 
+/* IBM Plex Sans, used only by the Carbon themes (the browser fetches it only when one is
+   selected). Split by unicode-range so a Latin-only library loads just the first file. */
+@font-face {
+    font-family: "IBM Plex Sans";
+    src: url("../fonts/IBMPlexSans-LatinExt-Variable.woff2") format("woff2");
+    font-weight: 100 700;
+    font-style: normal;
+    font-display: swap;
+    unicode-range: U+0100-02BA, U+02BD-02C5, U+02C7-02CC, U+02CE-02D7, U+02DD-02FF, U+0304, U+0308, U+0329, U+1D00-1DBF, U+1E00-1E9F, U+1EF2-1EFF, U+2020, U+20A0-20AB, U+20AD-20C0, U+2113, U+2C60-2C7F, U+A720-A7FF;
+}
+
+@font-face {
+    font-family: "IBM Plex Sans";
+    src: url("../fonts/IBMPlexSans-Latin-Variable.woff2") format("woff2");
+    font-weight: 100 700;
+    font-style: normal;
+    font-display: swap;
+    unicode-range: U+0000-00FF, U+0131, U+0152-0153, U+02BB-02BC, U+02C6, U+02DA, U+02DC, U+0304, U+0308, U+0329, U+2000-206F, U+20AC, U+2122, U+2191, U+2193, U+2212, U+2215, U+FEFF, U+FFFD;
+}
+
 /* --- Design tokens --------------------------------------------------
    Existing names (--bg, --panel, ...) are kept exactly as they were so
    nothing built on them changes. New tokens are used by new/converted
    code; older rules migrate to them gradually. */
 
-:root {
+/* Colours. Midnight is the default, and is also addressable as [data-theme="midnight"]
+   so the Appearance panel's preview swatch can show it while another theme is active. */
+:root,
+[data-theme="midnight"] {
     color-scheme: dark;
 
     /* Surfaces and ink */
@@ -68,7 +91,10 @@
     --chip-bg: rgba(13, 17, 23, 0.85);       /* small badges laid over cover art */
     --active-shadow: inset 3px 0 0 var(--accent-amber), 0 0 14px -4px var(--accent-amber);
     --logo-filter: none;                     /* lets a light theme darken the logo's white text */
+}
 
+/* Everything that is not colour: type, spacing, radii, layers, motion. */
+:root {
     /* Type */
     --font-sans: "Geist", -apple-system, "Segoe UI", Roboto, system-ui, sans-serif;
     --mono: "Geist Mono", ui-monospace, "SF Mono", "Cascadia Code", "Roboto Mono", Consolas, monospace;
@@ -115,8 +141,6 @@
    every theme and are always paired with a word or icon. "Auto" is Paper or
    Midnight depending on the device, so its Paper block below must stay an
    exact copy of [data-theme="paper"] (a test checks that). */
-
-[data-theme="midnight"] { color-scheme: dark; }
 
 [data-theme="paper"] {
     color-scheme: light;
@@ -170,6 +194,185 @@
         --active-shadow: inset 3px 0 0 var(--accent-amber);
         --logo-filter: invert(1) hue-rotate(180deg);
     }
+}
+
+/* Carbon: IBM's Carbon design system (Gray 100 theme). Neutral grays, one blue,
+   square corners. Blue 40 is the accent on dark surfaces because Carbon's own
+   Blue 60 is too dim for text on Gray 90. */
+[data-theme="carbon"] {
+    color-scheme: dark;
+    --font-sans: "IBM Plex Sans", "Geist", -apple-system, "Segoe UI", system-ui, sans-serif;
+    --bg: #161616;
+    --panel: #262626;
+    --sidebar: #161616;
+    --border: #393939;
+    --text: #f4f4f4;
+    --muted: #a8a8a8;
+    --accent: #78a9ff;
+    --accent-amber: #f1c21b;
+    --warning: #f1c21b;
+    --error: #fa4d56;
+    --error-text: #ff8389;
+    --success: #42be65;
+    --focus: #ffffff;
+    --hairline: rgba(255, 255, 255, 0.12);
+    --hover-bg: rgba(255, 255, 255, 0.08);
+    --accent-wash: rgba(120, 169, 255, 0.14);
+    --on-accent: #161616;
+    --accent-hover: #a6c8ff;
+    --scrim: rgba(0, 0, 0, 0.6);
+    --chip-bg: rgba(22, 22, 22, 0.9);
+    --active-shadow: inset 3px 0 0 var(--accent);
+    --radius-sm: 0;
+    --radius: 0;
+    --radius-md: 0;
+    --radius-lg: 0;
+}
+
+/* Carbon Light: Carbon's Gray 10 theme - white layers on a pale gray page. */
+[data-theme="carbon-light"] {
+    color-scheme: light;
+    --font-sans: "IBM Plex Sans", "Geist", -apple-system, "Segoe UI", system-ui, sans-serif;
+    --bg: #f4f4f4;
+    --panel: #ffffff;
+    --sidebar: #ffffff;
+    --border: #c6c6c6;
+    --text: #161616;
+    --muted: #525252;
+    --accent: #0f62fe;
+    --accent-amber: #735500;
+    --warning: #735500;
+    --error: #da1e28;
+    --error-text: #a2191f;
+    --success: #198038;
+    --focus: #0f62fe;
+    --hairline: rgba(0, 0, 0, 0.14);
+    --hover-bg: rgba(0, 0, 0, 0.06);
+    --accent-wash: rgba(15, 98, 254, 0.1);
+    --on-accent: #ffffff;
+    --accent-hover: #0050e6;
+    --scrim: rgba(22, 22, 22, 0.5);
+    --chip-bg: rgba(255, 255, 255, 0.94);
+    --active-shadow: inset 3px 0 0 var(--accent);
+    --logo-filter: invert(1) hue-rotate(180deg);
+    --radius-sm: 0;
+    --radius: 0;
+    --radius-md: 0;
+    --radius-lg: 0;
+}
+
+/* Nord: the Nord palette (Polar Night surfaces, Snow Storm text, Frost accent,
+   Aurora status colours). Error text is a lightened Aurora red so it clears
+   4.5:1 on the panel colour. */
+[data-theme="nord"] {
+    color-scheme: dark;
+    --bg: #2e3440;
+    --panel: #3b4252;
+    --sidebar: #292e39;
+    --border: #4c566a;
+    --text: #eceff4;
+    --muted: #b4bccb;
+    --accent: #88c0d0;
+    --accent-amber: #ebcb8b;
+    --warning: #ebcb8b;
+    --error: #bf616a;
+    --error-text: #f0a3a9;
+    --success: #a3be8c;
+    --focus: #88c0d0;
+    --hairline: rgba(236, 239, 244, 0.14);
+    --hover-bg: rgba(236, 239, 244, 0.08);
+    --accent-wash: rgba(136, 192, 208, 0.14);
+    --on-accent: #2e3440;
+    --accent-hover: #a3d0dc;
+    --scrim: rgba(24, 28, 36, 0.62);
+    --chip-bg: rgba(46, 52, 64, 0.9);
+    --active-shadow: inset 3px 0 0 var(--accent);
+}
+
+/* Solarized Light: Ethan Schoonover's palette. Body text and the accent are
+   darkened a step from the stock base00/blue so small text clears 4.5:1 on the
+   base2 panels; the cream and slate character is unchanged. */
+[data-theme="solarized"] {
+    color-scheme: light;
+    --bg: #fdf6e3;
+    --panel: #eee8d5;
+    --sidebar: #e6dfc8;
+    --border: #d3cbb2;
+    --text: #475b62;
+    --muted: #4f646b;
+    --accent: #1a679c;
+    --accent-amber: #7f5f00;
+    --warning: #7f5f00;
+    --error: #b02a28;
+    --error-text: #b02a28;
+    --success: #566300;
+    --focus: #268bd2;
+    --hairline: rgba(7, 54, 66, 0.16);
+    --hover-bg: rgba(7, 54, 66, 0.07);
+    --accent-wash: rgba(26, 103, 156, 0.1);
+    --on-accent: #fdf6e3;
+    --accent-hover: #14527d;
+    --scrim: rgba(7, 54, 66, 0.4);
+    --chip-bg: rgba(253, 246, 227, 0.94);
+    --active-shadow: inset 3px 0 0 var(--accent);
+    --logo-filter: invert(1) hue-rotate(180deg);
+}
+
+/* Nord Light: the Snow Storm half of the Nord palette (nord6 page, nord5 sidebar,
+   nord0 text). Frost blue and the Aurora status colours are darkened to clear 4.5:1
+   on light surfaces; the hue of each is unchanged. */
+[data-theme="nord-light"] {
+    color-scheme: light;
+    --bg: #eceff4;
+    --panel: #ffffff;
+    --sidebar: #e5e9f0;
+    --border: #d8dee9;
+    --text: #2e3440;
+    --muted: #4c566a;
+    --accent: #40648c;
+    --accent-amber: #7d5c10;
+    --warning: #7d5c10;
+    --error: #bf616a;
+    --error-text: #a23a44;
+    --success: #4a6a34;
+    --focus: #5e81ac;
+    --hairline: rgba(46, 52, 64, 0.14);
+    --hover-bg: rgba(46, 52, 64, 0.06);
+    --accent-wash: rgba(64, 100, 140, 0.1);
+    --on-accent: #ffffff;
+    --accent-hover: #324f72;
+    --scrim: rgba(46, 52, 64, 0.45);
+    --chip-bg: rgba(255, 255, 255, 0.94);
+    --active-shadow: inset 3px 0 0 var(--accent);
+    --logo-filter: invert(1) hue-rotate(180deg);
+}
+
+/* Solarized Dark: base03 page, base02 panels, base1 text (lifted slightly so the active
+   tab wash stays readable). Muted text, the accent and
+   error text are lightened a step from stock so small text clears 4.5:1 on base02. */
+[data-theme="solarized-dark"] {
+    color-scheme: dark;
+    --bg: #002b36;
+    --panel: #073642;
+    --sidebar: #00212b;
+    --border: #1a4a57;
+    --text: #aab6b6;
+    --muted: #8fa0a2;
+    --accent: #4aa3e0;
+    --accent-amber: #d9a21b;
+    --warning: #d9a21b;
+    --error: #dc322f;
+    --error-text: #f57370;
+    --success: #9cb400;
+    --focus: #268bd2;
+    --hairline: rgba(147, 161, 161, 0.18);
+    --hover-bg: rgba(147, 161, 161, 0.1);
+    --accent-wash: rgba(74, 163, 224, 0.14);
+    --on-accent: #002b36;
+    --accent-hover: #6bb6e8;
+    --scrim: rgba(0, 20, 26, 0.65);
+    --chip-bg: rgba(0, 43, 54, 0.9);
+    --active-shadow: inset 3px 0 0 var(--accent);
 }
 
 /* Telemetry: a control-room terminal. Near-black, monospaced, square
