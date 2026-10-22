@@ -169,7 +169,7 @@
                 <div class="arrange-bar" id="home-arrange-bar" hidden>
                     <div class="arrange-text">
                         <strong>Arranging Home.</strong>
-                        Drag a panel by its grip, or use the arrow buttons. Hide the ones you don't use. Changes save to your account automatically.
+                        Drag a panel by its grip, or use the arrow buttons. Hide the ones you don't use. The cards inside a panel can be put in your own order too. Changes save to your account automatically.
                     </div>
                     <div class="arrange-actions">
                         <button type="button" class="test-btn" id="home-layout-reset">Reset to default</button>
@@ -614,8 +614,9 @@
 
         function attentionItemHTML(item, hiddenList) {
             const critical = item.severity === 'critical';
+            const serviceType = item.service_type || 'instance';
             const services = (item.services || []).map(svc =>
-                `<button type="button" class="attention-link" data-instance="${escapeAttr(svc)}" data-view="${escapeAttr(item.view || 'system')}">${escapeHtml(svc)}</button>`
+                `<button type="button" class="attention-link" data-instance="${escapeAttr(svc)}" data-type="${escapeAttr(serviceType)}" data-view="${escapeAttr(item.view || 'system')}">${escapeHtml(svc)}</button>`
             ).join('');
             // Only warnings can be hidden; a critical item always stays in front of you.
             const action = !item.hideable || !item.hide_key ? '' : hiddenList
@@ -799,8 +800,17 @@
         document.getElementById('attention-body').addEventListener('click', (e) => {
             const link = e.target.closest('.attention-link');
             if (link) {
-                selectInstance(link.dataset.instance);
-                selectView(link.dataset.view);
+                // Each kind of service has its own view; only arr instances have sub-views.
+                const open = {
+                    downloader: selectDownloader, indexer: selectIndexerService,
+                    mediaserver: selectMediaServer, transcoder: selectTranscoder,
+                }[link.dataset.type];
+                if (open) {
+                    open(link.dataset.instance);
+                } else {
+                    selectInstance(link.dataset.instance);
+                    selectView(link.dataset.view);
+                }
                 return;
             }
             if (e.target.closest('#attention-more') && attentionData) {
@@ -851,12 +861,12 @@
         function statCardsHTML(key, items) {
             if (key === 'libraries') {
                 return items.map(inst => inst.error ? `
-                        <div class="stat-card">
+                        <div class="stat-card" data-card="${escapeAttr(inst.name)}">
                             <div class="stat-card-name stat-card-name--solo">${escapeHtml(inst.name)}</div>
                             <div class="test-fail stat-error">${escapeHtml(inst.error)}</div>
                         </div>
                     ` : `
-                        <div class="stat-card">
+                        <div class="stat-card" data-card="${escapeAttr(inst.name)}">
                             <div class="stat-card-head">
                                 <img class="stat-icon" src="${inst.icon_url}" alt="" onerror="this.style.display='none';">
                                 <span class="stat-card-name">${escapeHtml(inst.name)}</span>
@@ -873,7 +883,7 @@
             }
             if (key === 'mediaservers') {
                 return items.map(ms => `
-                        <div class="stat-card">
+                        <div class="stat-card" data-card="${escapeAttr(ms.name)}">
                             <div class="stat-card-head">
                                 <img class="stat-icon" src="${ms.icon_url}" alt="" onerror="this.style.display='none';">
                                 <span class="stat-card-name">${escapeHtml(ms.name)}</span>
@@ -887,7 +897,7 @@
             }
             if (key === 'indexers') {
                 return items.map(svc => svc.error ? `
-                        <div class="stat-card">
+                        <div class="stat-card" data-card="${escapeAttr(svc.name)}">
                             <div class="stat-card-head">
                                 <img class="stat-icon" src="${svc.icon_url}" alt="" onerror="this.style.display='none';">
                                 <span class="stat-card-name">${escapeHtml(svc.name)}</span>
@@ -895,7 +905,7 @@
                             <div class="test-fail stat-error">${escapeHtml(svc.error)}</div>
                         </div>
                     ` : `
-                        <div class="stat-card">
+                        <div class="stat-card" data-card="${escapeAttr(svc.name)}">
                             <div class="stat-card-head stat-card-head--tight">
                                 <img class="stat-icon" src="${svc.icon_url}" alt="" onerror="this.style.display='none';">
                                 <span class="stat-card-name">${escapeHtml(svc.name)}</span>
@@ -907,11 +917,12 @@
                                 <span class="test-ok">${svc.healthy.toLocaleString()} healthy</span>
                                 &middot; <span class="test-fail">${svc.unhealthy.toLocaleString()} unhealthy</span>
                             </div>
+                            ${(svc.unhealthy_names || []).length ? `<div class="stat-failing">Failing: ${escapeHtml(svc.unhealthy_names.join(', '))}</div>` : ''}
                         </div>
                     `).join('');
             }
             return items.map(tc => `
-                        <div class="stat-card">
+                        <div class="stat-card" data-card="${escapeAttr(tc.name)}">
                             <div class="stat-card-head">
                                 <img class="stat-icon" src="${tc.icon_url}" alt="" onerror="this.style.display='none';">
                                 <span class="stat-card-name">${escapeHtml(tc.name)}</span>
@@ -955,6 +966,7 @@
                     const items = sources[key] || [];
                     const panel = document.querySelector(`.home-panel[data-panel="${key}"]`);
                     document.getElementById(`home-${key}-body`).innerHTML = items.length ? statCardsHTML(key, items) : '';
+                    applyCardOrder(panel);
                     panel.hidden = !items.length;
                     if (items.length) any = true;
                 });
@@ -986,6 +998,7 @@
         const homePanelsEl = document.getElementById('home-panels');
         const arrangeStatusEl = document.getElementById('home-arrange-status');
         let arranging = false;
+        const CARD_PANEL_KEYS = ['libraries', 'mediaservers', 'indexers', 'transcoders'];
         let saveTimer = null;
 
         function allPanels() {
@@ -1002,11 +1015,17 @@
             arrangeStatusEl.classList.toggle('is-error', !!isError);
         }
 
+        // The saved order of the cards in each panel ({panelKey: [names]}). Kept
+        // here, not read back from the page, because a panel's cards may not
+        // have loaded yet (or an instance may be down) when something is saved.
+        let cardOrder = {};
+
         function currentLayout() {
             const panels = allPanels();
             return {
                 order: panels.map(p => p.dataset.panel),
                 hidden: panels.filter(p => p.classList.contains('is-user-hidden')).map(p => p.dataset.panel),
+                cards: cardOrder,
             };
         }
 
@@ -1016,7 +1035,89 @@
             (layout.order || []).forEach(key => { if (byKey[key]) homePanelsEl.appendChild(byKey[key]); });
             const hidden = new Set(layout.hidden || []);
             allPanels().forEach(p => p.classList.toggle('is-user-hidden', hidden.has(p.dataset.panel)));
+            cardOrder = {};
+            Object.keys(layout.cards || {}).forEach(key => { cardOrder[key] = layout.cards[key].slice(); });
+            allPanels().forEach(applyCardOrder);
             refreshPanelTools();
+        }
+
+        // --- Cards inside a panel -------------------------------------------
+        // Libraries, media servers, indexers and transcoders are cards in a
+        // grid (each with data-card = its name). While arranging, every card
+        // gets a grip, Earlier and Later buttons; the grip also drags.
+
+        function cardBody(panel) { return panel.querySelector(':scope > .home-panel-body'); }
+        function cardsOf(panel) {
+            const body = cardBody(panel);
+            return body ? Array.from(body.querySelectorAll(':scope > .stat-card[data-card]')) : [];
+        }
+
+        // Puts the cards in the saved order; a card the saved list has never
+        // heard of (a new instance) goes at the end, in its normal place.
+        function applyCardOrder(panel) {
+            const saved = cardOrder[panel.dataset.panel] || [];
+            const body = cardBody(panel);
+            if (!body) return;
+            const cards = cardsOf(panel);
+            // Remember the order the cards arrived in, so "Reset to default" can restore it.
+            cards.forEach((card, index) => { if (card.dataset.natural === undefined) card.dataset.natural = index; });
+            const rank = card => { const at = saved.indexOf(card.dataset.card); return at === -1 ? saved.length : at; };
+            cards.sort((a, b) => rank(a) - rank(b) || a.dataset.natural - b.dataset.natural)
+                .forEach(card => body.appendChild(card));
+        }
+
+        function buildCardTools(card) {
+            const name = escapeAttr(card.dataset.card);
+            const grip = '<svg width="14" height="14" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><circle cx="9" cy="6" r="1.7"/><circle cx="15" cy="6" r="1.7"/><circle cx="9" cy="12" r="1.7"/><circle cx="15" cy="12" r="1.7"/><circle cx="9" cy="18" r="1.7"/><circle cx="15" cy="18" r="1.7"/></svg>';
+            const tools = document.createElement('div');
+            tools.className = 'card-tools';
+            tools.setAttribute('role', 'group');
+            tools.setAttribute('aria-label', `Arrange ${card.dataset.card}`);
+            tools.innerHTML = `
+                <button type="button" class="card-handle" aria-label="Drag ${name} (or press the arrow keys)">${grip}</button>
+                <button type="button" class="card-tool" data-act="earlier" aria-label="Move ${name} earlier">Earlier</button>
+                <button type="button" class="card-tool" data-act="later" aria-label="Move ${name} later">Later</button>`;
+            card.prepend(tools);
+            return tools;
+        }
+
+        function refreshCardTools(panel) {
+            const cards = cardsOf(panel);
+            cards.forEach((card, index) => {
+                const tools = card.querySelector(':scope > .card-tools') || buildCardTools(card);
+                tools.hidden = cards.length < 2;   // nothing to reorder
+                tools.querySelector('[data-act="earlier"]').setAttribute('aria-disabled', index === 0 ? 'true' : 'false');
+                tools.querySelector('[data-act="later"]').setAttribute('aria-disabled', index === cards.length - 1 ? 'true' : 'false');
+                // What's on the card (links, buttons) is not clickable while arranging.
+                Array.from(card.children).forEach(child => { if (child !== tools) child.inert = arranging; });
+            });
+        }
+
+        function commitCardOrder(panel) {
+            const key = panel.dataset.panel;
+            const names = cardsOf(panel).map(card => card.dataset.card);
+            // Keep names that aren't on the page right now, after the ones that are.
+            cardOrder[key] = [...names, ...(cardOrder[key] || []).filter(name => !names.includes(name))];
+            queueLayoutSave();
+        }
+
+        function announceCardMove(card, panel) {
+            const cards = cardsOf(panel);
+            announceLayout(`${card.dataset.card} moved. Position ${cards.indexOf(card) + 1} of ${cards.length} in ${panelLabel(panel)}.`);
+        }
+
+        function moveCard(card, direction) {
+            const panel = card.closest('.home-panel');
+            const cards = cardsOf(panel);
+            const at = cards.indexOf(card);
+            const other = cards[at + direction];
+            if (at === -1 || !other) return false;
+            if (direction < 0) cardBody(panel).insertBefore(card, other);
+            else cardBody(panel).insertBefore(card, other.nextSibling);
+            refreshCardTools(panel);
+            commitCardOrder(panel);
+            announceCardMove(card, panel);
+            return true;
         }
 
         function queueLayoutSave() {
@@ -1074,6 +1175,7 @@
                 toggle.textContent = isHidden ? 'Show' : 'Hide';
                 toggle.setAttribute('aria-label', `${isHidden ? 'Show' : 'Hide'} ${panelLabel(panel)}`);
             });
+            allPanels().forEach(refreshCardTools);
             const everythingHidden = movable.length > 0 && movable.every(p => p.classList.contains('is-user-hidden'));
             document.getElementById('home-all-hidden').hidden = arranging || !everythingHidden;
         }
@@ -1099,7 +1201,11 @@
             const button = document.getElementById('home-customise');
             button.setAttribute('aria-pressed', on ? 'true' : 'false');
             // Panel contents shouldn't be clickable or tabbable while moving things around.
-            homePanelsEl.querySelectorAll('.home-panel-body').forEach(body => { body.inert = on; });
+            // (The card panels stay live so their own controls work; refreshCardTools makes each card's contents inert.)
+            allPanels().forEach(panel => {
+                const body = cardBody(panel);
+                if (body) body.inert = on && !CARD_PANEL_KEYS.includes(panel.dataset.panel);
+            });
             announceLayout('');
             if (on) {
                 // A search replaces the panels; arranging needs them back.
@@ -1243,6 +1349,131 @@
             e.preventDefault();
             movePanel(handle.closest('.home-panel'), e.key === 'ArrowUp' ? -1 : 1);
             handle.focus();
+        });
+
+        // Card buttons and arrow keys on a card's grip.
+        homePanelsEl.addEventListener('click', (e) => {
+            const btn = e.target.closest('.card-tool');
+            if (!btn || !arranging) return;
+            if (btn.getAttribute('aria-disabled') === 'true') return;
+            moveCard(btn.closest('.stat-card'), btn.dataset.act === 'earlier' ? -1 : 1);
+            btn.focus();
+        });
+
+        homePanelsEl.addEventListener('keydown', (e) => {
+            const handle = e.target.closest('.card-handle');
+            if (!handle || !arranging) return;
+            const earlier = e.key === 'ArrowUp' || e.key === 'ArrowLeft';
+            if (!earlier && e.key !== 'ArrowDown' && e.key !== 'ArrowRight') return;
+            e.preventDefault();
+            moveCard(handle.closest('.stat-card'), earlier ? -1 : 1);
+            handle.focus();
+        });
+
+        // Dragging a card. The cards wrap in a grid, so the drop spot is the
+        // card nearest the pointer (before it if the pointer is on its first
+        // half). As with panels, the DOM only changes on release.
+        let cardDrag = null;
+
+        function cardDropTarget() {
+            const others = cardsOf(cardDrag.panel).filter(card => card !== cardDrag.card);
+            if (!others.length) return null;
+            const { lastX: x, lastY: y } = cardDrag;
+            let best = null;
+            others.forEach(card => {
+                const r = card.getBoundingClientRect();
+                const inside = x >= r.left && x <= r.right && y >= r.top && y <= r.bottom;
+                const distance = Math.hypot(x - (r.left + r.width / 2), y - (r.top + r.height / 2));
+                if (!best || (inside && !best.inside) || (inside === best.inside && distance < best.distance)) {
+                    best = { card, inside, distance, rect: r };
+                }
+            });
+            // One column (a phone) means before/after is up/down; a grid means left/right.
+            const stacked = cardDrag.stacked;
+            const before = stacked ? y < best.rect.top + best.rect.height / 2 : x < best.rect.left + best.rect.width / 2;
+            return { card: best.card, before };
+        }
+
+        function updateCardDrag() {
+            if (!cardDrag) return;
+            const scroller = document.scrollingElement;
+            cardDrag.card.style.transform = `translate(${cardDrag.lastX - cardDrag.startX}px, ${cardDrag.lastY - cardDrag.startY + (scroller.scrollTop - cardDrag.startScroll)}px)`;
+            cardsOf(cardDrag.panel).forEach(card => card.classList.remove('drop-before', 'drop-after'));
+            cardDrag.target = cardDropTarget();
+            if (cardDrag.target) cardDrag.target.card.classList.add(cardDrag.target.before ? 'drop-before' : 'drop-after');
+        }
+
+        function cardAutoScroll() {
+            if (!cardDrag) return;
+            const edge = 56;
+            const top = window.matchMedia('(max-width: 768px)').matches
+                ? document.querySelector('.sidebar').getBoundingClientRect().bottom : 0;
+            let delta = 0;
+            if (cardDrag.lastY < top + edge) delta = -Math.ceil((top + edge - cardDrag.lastY) / 4);
+            else if (cardDrag.lastY > window.innerHeight - edge) delta = Math.ceil((cardDrag.lastY - (window.innerHeight - edge)) / 4);
+            if (delta) { document.scrollingElement.scrollTop += delta; updateCardDrag(); }
+            cardDrag.raf = requestAnimationFrame(cardAutoScroll);
+        }
+
+        function endCardDrag(commit) {
+            if (!cardDrag) return;
+            const d = cardDrag;
+            cardDrag = null;
+            cancelAnimationFrame(d.raf);
+            ['pointermove', 'pointerup', 'pointercancel', 'lostpointercapture'].forEach((type, i) => {
+                d.handle.removeEventListener(type, [onCardDragMove, onCardDragUp, onCardDragCancel, onCardDragCancel][i]);
+            });
+            try { d.handle.releasePointerCapture(d.pointerId); } catch (err) { /* already released */ }
+            document.removeEventListener('keydown', onCardDragKey, true);
+            d.card.classList.remove('is-dragging');
+            d.card.style.transform = '';
+            cardBody(d.panel).classList.remove('is-stacked');
+            cardsOf(d.panel).forEach(card => card.classList.remove('drop-before', 'drop-after'));
+
+            if (commit && d.target) {
+                const before = cardsOf(d.panel).map(card => card.dataset.card).join('|');
+                const body = cardBody(d.panel);
+                body.insertBefore(d.card, d.target.before ? d.target.card : d.target.card.nextSibling);
+                if (cardsOf(d.panel).map(card => card.dataset.card).join('|') !== before) {
+                    commitCardOrder(d.panel);
+                    announceCardMove(d.card, d.panel);
+                }
+            }
+            refreshCardTools(d.panel);
+            d.handle.focus();
+        }
+
+        function onCardDragMove(e) { if (cardDrag) { cardDrag.lastX = e.clientX; cardDrag.lastY = e.clientY; updateCardDrag(); } }
+        function onCardDragUp() { endCardDrag(true); }
+        function onCardDragCancel() { endCardDrag(false); }
+        function onCardDragKey(e) {
+            if (e.key === 'Escape') { e.preventDefault(); e.stopPropagation(); endCardDrag(false); }
+        }
+
+        homePanelsEl.addEventListener('pointerdown', (e) => {
+            const handle = e.target.closest('.card-handle');
+            if (!handle || !arranging || e.button > 0) return;
+            const card = handle.closest('.stat-card');
+            const panel = card.closest('.home-panel');
+            const cards = cardsOf(panel);
+            if (cards.length < 2) return;
+            e.preventDefault();
+            handle.setPointerCapture(e.pointerId);
+            const firstLeft = cards[0].getBoundingClientRect().left;
+            cardDrag = {
+                card, panel, handle, pointerId: e.pointerId, target: null, raf: 0,
+                startX: e.clientX, startY: e.clientY, lastX: e.clientX, lastY: e.clientY,
+                startScroll: document.scrollingElement.scrollTop,
+                stacked: cards.every(c => Math.abs(c.getBoundingClientRect().left - firstLeft) < 2),
+            };
+            card.classList.add('is-dragging');
+            cardBody(panel).classList.toggle('is-stacked', cardDrag.stacked);
+            handle.addEventListener('pointermove', onCardDragMove);
+            handle.addEventListener('pointerup', onCardDragUp);
+            handle.addEventListener('pointercancel', onCardDragCancel);
+            handle.addEventListener('lostpointercapture', onCardDragCancel);
+            document.addEventListener('keydown', onCardDragKey, true);
+            cardDrag.raf = requestAnimationFrame(cardAutoScroll);
         });
 
         document.getElementById('home-customise').addEventListener('click', () => setArranging(!arranging));

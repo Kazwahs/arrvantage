@@ -141,3 +141,49 @@ class TestSettingsKeepsLayout:
         }]
         form = {"user_username_0": "zak", "user_role_0": "admin", "user_password_0": ""}
         assert "home_layout" not in app_module.parse_users(form, existing)[0]
+
+
+class TestCardOrder:
+    """The order of the cards inside a panel (libraries, media servers, indexers, transcoders)."""
+
+    def test_a_layout_without_cards_has_no_cards_key(self, app_module):
+        assert "cards" not in app_module.normalize_home_layout({"order": DEFAULT})
+
+    def test_keeps_card_order_for_card_panels(self, app_module):
+        layout = app_module.normalize_home_layout({"cards": {"libraries": ["Sonarr", "Radarr"], "indexers": ["Prowlarr"]}})
+        assert layout["cards"] == {"libraries": ["Sonarr", "Radarr"], "indexers": ["Prowlarr"]}
+
+    def test_drops_panels_that_have_no_cards_and_unknown_panels(self, app_module):
+        layout = app_module.normalize_home_layout({"cards": {"attention": ["x"], "bogus": ["y"], "libraries": ["A"]}})
+        assert layout["cards"] == {"libraries": ["A"]}
+
+    def test_cleans_up_the_names(self, app_module):
+        layout = app_module.normalize_home_layout(
+            {"cards": {"libraries": ["A", "A", "", 5, None, "x" * 201, "B"], "mediaservers": [], "indexers": "nope"}})
+        assert layout["cards"] == {"libraries": ["A", "B"]}
+
+    def test_the_list_is_capped(self, app_module):
+        names = [f"n{i}" for i in range(150)]
+        assert len(app_module.normalize_home_layout({"cards": {"libraries": names}})["cards"]["libraries"]) == app_module.MAX_CARDS_PER_PANEL
+
+    def test_garbage_cards_are_ignored(self, app_module):
+        for junk in (None, [], "x", {"libraries": {"a": 1}}):
+            assert "cards" not in app_module.normalize_home_layout({"cards": junk})
+
+    def test_saving_and_reloading_keeps_the_card_order(self, app_module, admin_session):
+        client, csrf = admin_session
+        response = client.post("/api/home/layout", headers=HEADERS(csrf),
+                               json={"order": DEFAULT, "hidden": [], "cards": {"libraries": ["Sonarr", "Radarr"]}})
+        assert response.get_json()["layout"]["cards"] == {"libraries": ["Sonarr", "Radarr"]}
+        assert embedded_layout(client.get("/").data.decode())["cards"] == {"libraries": ["Sonarr", "Radarr"]}
+
+    def test_reset_clears_card_order_too(self, app_module, admin_session):
+        client, csrf = admin_session
+        client.post("/api/home/layout", headers=HEADERS(csrf), json={"cards": {"libraries": ["B", "A"]}})
+        client.post("/api/home/layout", headers=HEADERS(csrf), json={"reset": True})
+        assert "cards" not in embedded_layout(client.get("/").data.decode())
+
+    def test_every_card_in_the_page_script_has_an_identity(self, admin_session):
+        client, _ = admin_session
+        html = client.get("/").data.decode()
+        assert html.count('class="stat-card" data-card=') == 6

@@ -4039,7 +4039,14 @@ def fetch_home_stats() -> dict:
             })
             continue
         healthy = sum(1 for idx in result["indexers"] if idx["healthy"])
+        # Only indexers that are switched on count as failing - a disabled
+        # one is a choice, not a fault.
+        unhealthy_names = [
+            idx["name"] for idx in result["indexers"]
+            if idx["enabled"] and not idx["healthy"]
+        ]
         indexer_service_stats.append({
+            "unhealthy_names": unhealthy_names,
             "name": service["name"],
             "type": INDEXER_SERVICE_TYPES.get(service["type"], service["type"]),
             "icon_url": INDEXER_ICONS.get(service["type"], ""),
@@ -4227,7 +4234,7 @@ _ATTENTION_CACHE: dict = {"at": 0.0, "data": None}
 _ATTENTION_LOCK = threading.Lock()
 
 _SEVERITY_RANK = {"critical": 0, "warning": 1}
-_KIND_RANK = {"unreachable": 0, "disk": 1, "queue": 2, "health": 3}
+_KIND_RANK = {"unreachable": 0, "disk": 1, "queue": 2, "service": 3, "health": 4}
 _BAD_QUEUE_STATUSES = {"warning", "failed", "error"}
 
 
@@ -4250,12 +4257,100 @@ def _health_group_title(source: str, messages: list) -> str:
     return messages[0]
 
 
-def summarize_attention(signals: dict) -> dict:
+_SERVICE_LABELS = {
+    "downloaders": ("downloader", "Downloader"),
+    "indexers": ("indexer", "Indexer service"),
+    "media_servers": ("mediaserver", "Media server"),
+    "transcoders": ("transcoder", "Transcoder"),
+}
+_FAILING_NAMES_SHOWN = 6
+
+
+def _name_list(names: list) -> str:
+    shown = names[:_FAILING_NAMES_SHOWN]
+    more = len(names) - len(shown)
+    return ", ".join(shown) + (f" and {more} more" if more > 0 else "")
+
+
+def _summarize_services(services: dict) -> tuple:
+    """
+    Turns probe results for downloaders, indexer services, media servers and
+    transcoders into attention items. Returns (items, complete, checked).
+
+    Each probe result is a dict with an "error" (string or None), plus:
+    - downloaders: "connection_status" ("connected" / "firewalled" /
+      "disconnected" - qBittorrent only)
+    - indexers: "indexers", a list of {"name", "enabled", "healthy"}
+    A service that can't be reached is critical, except a transcoder, which
+    is only a warning: Tdarr is often switched off on purpose. Only warnings
+    can be hidden, so a down downloader, indexer service or media server
+    always stays in front of you.
+    """
+    items = []
+    complete = True
+    checked = 0
+
+    for group, (service_type, noun) in _SERVICE_LABELS.items():
+        for name, result in (services.get(group) or {}).items():
+            checked += 1
+            result = result or {}
+            error = result.get("error")
+            if error:
+                complete = False
+                soft = group == "transcoders"
+                items.append({
+                    "id": f"unreachable:{service_type}:{name}",
+                    "severity": "warning" if soft else "critical",
+                    "kind": "service" if soft else "unreachable",
+                    "title": f"{name} can't be reached", "detail": str(error),
+                    "services": [name], "service_type": service_type, "view": None,
+                    "hideable": soft,
+                    "hide_key": f"service:{service_type}:{name}:down" if soft else None,
+                })
+                continue
+
+            if group == "downloaders" and result.get("connection_status") in ("firewalled", "disconnected"):
+                status = result["connection_status"]
+                items.append({
+                    "id": f"service:downloader:{name}:connection", "severity": "warning", "kind": "service",
+                    "title": f"{name} is {status}",
+                    "detail": ("Incoming connections are blocked, so downloads may be slow or stall. Check the forwarded port."
+                               if status == "firewalled"
+                               else "It has no network connection, so nothing can download until it reconnects."),
+                    "services": [name], "service_type": service_type, "view": None,
+                    "hideable": True, "hide_key": f"service:downloader:{name}:connection",
+                })
+
+            if group == "indexers":
+                enabled = [i for i in result.get("indexers") or [] if i.get("enabled", True)]
+                bad = [i for i in enabled if not i.get("healthy", True)]
+                if bad:
+                    everything = len(bad) == len(enabled)
+                    names = [i.get("name") or "(unknown)" for i in bad]
+                    items.append({
+                        "id": f"service:indexers:{name}",
+                        "severity": "critical" if everything else "warning", "kind": "service",
+                        "title": (f"Every indexer is failing in {name}" if everything
+                                  else f"{len(bad)} of {len(enabled)} indexers failing in {name}"),
+                        "detail": _name_list(names),
+                        "services": [name], "service_type": service_type, "view": None,
+                        "hideable": not everything, "hide_key": f"service:indexers:{name}",
+                    })
+
+    return items, complete, checked
+
+
+def summarize_attention(signals: dict, services: dict = None) -> dict:
     """
     Pure function: turns {instance: {"queue": {...}, "health": {...},
     "diskspace": {...}}} (each the dict its fetch_* returned, or an
     {"error": ...} stand-in) into the grouped, severity-ranked list Home
     shows. Kept free of any I/O so it can be tested directly.
+
+    `services` optionally adds the rest of the stack, each as
+    {name: probe_result}: {"downloaders": ..., "indexers": ..., "media_servers":
+    ..., "transcoders": ...}. See _summarize_services for what each probe
+    result looks like.
     """
     items = []
     per_instance = {}
@@ -4281,7 +4376,7 @@ def summarize_attention(signals: dict) -> dict:
             items.append({
                 "id": f"unreachable:{name}", "severity": "critical", "kind": "unreachable",
                 "title": f"{name} can't be reached", "detail": queue["error"],
-                "services": [name], "view": None,
+                "services": [name], "service_type": "instance", "view": None,
                 "hideable": False, "hide_key": None,
             })
             continue
@@ -4358,12 +4453,16 @@ def summarize_attention(signals: dict) -> dict:
             "hide_key": f"disk:{d.get('path') or key[0]}",
         })
 
+    service_items, services_complete, services_checked = _summarize_services(services or {})
+    items.extend(service_items)
+    complete = complete and services_complete
+
     # Within a kind, what affects the most services comes first - a warning
     # shared by five apps matters more than a one-app config tip.
     items.sort(key=lambda i: (_SEVERITY_RANK[i["severity"]], _KIND_RANK[i["kind"]], -len(i["services"]), i["title"]))
     return {
         "generated_at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
-        "checked": len(signals),
+        "checked": len(signals) + services_checked,
         "complete": complete,
         "items": items,
         "summary": {
@@ -4376,7 +4475,7 @@ def summarize_attention(signals: dict) -> dict:
 
 
 MAX_HIDDEN_ATTENTION = 100
-_HIDE_KEY_PREFIXES = ("queue:", "health:", "disk:")
+_HIDE_KEY_PREFIXES = ("queue:", "health:", "disk:", "service:")
 
 
 def valid_hide_key(key) -> bool:
@@ -4421,10 +4520,34 @@ def apply_hidden_attention(data: dict, hidden) -> dict:
     return result
 
 
+def probe_downloader(downloader: dict) -> dict:
+    """Light call that says whether a download client answers (and, for
+    qBittorrent, whether its connection is healthy)."""
+    if downloader["type"] == "qbittorrent":
+        return fetch_qbittorrent_transfer_info(downloader)
+    if downloader["type"] == "sabnzbd":
+        return {"error": fetch_sabnzbd_queue(downloader)["error"]}
+    return {"error": None}
+
+
+def probe_media_server(server: dict) -> dict:
+    """The same calls the media server's own tabs make, so a bad address or
+    a rejected API key shows up here just as it would there."""
+    if server["type"] == "komga":
+        result = fetch_komga_libraries(server)
+    elif server["type"] == "plex":
+        result = fetch_plex_now_playing(server)
+    else:
+        result = fetch_jellyfin_now_playing(server)
+    return {"error": result["error"]}
+
+
 def gather_attention(force: bool = False) -> dict:
     """Collects the light-weight signals (queue, health, disk space) from
-    every enabled instance at once and summarises them. Cached for a few
-    seconds so rapid refreshes don't hammer the apps; force skips that."""
+    every enabled instance, plus a reachability check of every enabled
+    downloader, indexer service, media server and transcoder, all at once,
+    and summarises them. Cached for a few seconds so rapid refreshes don't
+    hammer the apps; force skips that."""
     with _ATTENTION_LOCK:
         cached = _ATTENTION_CACHE["data"]
         if not force and cached is not None and time.monotonic() - _ATTENTION_CACHE["at"] < ATTENTION_CACHE_SECONDS:
@@ -4436,6 +4559,17 @@ def gather_attention(force: bool = False) -> dict:
         jobs[(n, "queue")] = lambda n=n, c=c: fetch_queue(n, c)
         jobs[(n, "health")] = lambda n=n, c=c: fetch_health(n, c)
         jobs[(n, "diskspace")] = lambda n=n, c=c: fetch_diskspace(n, c)
+
+    probes = {
+        "downloaders": (DOWNLOADERS, probe_downloader),
+        "indexers": (INDEXERS, fetch_prowlarr_indexers),
+        "media_servers": (MEDIA_SERVERS, probe_media_server),
+        "transcoders": (TRANSCODERS, fetch_tdarr_status),
+    }
+    for group, (entries, probe) in probes.items():
+        for entry in entries:
+            if entry.get("enabled", True):
+                jobs[("svc", group, entry["name"])] = lambda entry=entry, probe=probe: probe(entry)
     results = run_concurrently(jobs)
 
     signals = {}
@@ -4445,7 +4579,12 @@ def gather_attention(force: bool = False) -> dict:
             ok, value = results[(n, kind)]
             signals[n][kind] = value if ok else {"error": value}
 
-    data = summarize_attention(signals)
+    services = {group: {} for group in probes}
+    for key, (ok, value) in results.items():
+        if key[0] == "svc":
+            services[key[1]][key[2]] = value if ok else {"error": value}
+
+    data = summarize_attention(signals, services)
     with _ATTENTION_LOCK:
         _ATTENTION_CACHE["data"] = data
         _ATTENTION_CACHE["at"] = time.monotonic()
@@ -4543,6 +4682,10 @@ def api_home_stats():
 # hide the ones they don't use; that choice is stored on their own user
 # record in config.json, so it follows them to every browser and device.
 HOME_PANELS = ("attention", "libraries", "mediaservers", "indexers", "transcoders")
+# The panels made of cards a person can put in their own order.
+CARD_PANELS = ("libraries", "mediaservers", "indexers", "transcoders")
+MAX_CARDS_PER_PANEL = 100
+MAX_CARD_NAME_LENGTH = 200
 
 
 def normalize_home_layout(raw) -> dict:
@@ -4561,7 +4704,27 @@ def normalize_home_layout(raw) -> dict:
             if isinstance(key, str) and key in HOME_PANELS:
                 wanted_hidden.add(key)
     order += [key for key in HOME_PANELS if key not in order]
-    return {"order": order, "hidden": [key for key in order if key in wanted_hidden]}
+    layout = {"order": order, "hidden": [key for key in order if key in wanted_hidden]}
+
+    # The order of the cards inside a panel. Names are whatever the person's
+    # instances are called, so they aren't checked against the config here (an
+    # instance can be renamed or removed later); the page ignores names it
+    # doesn't have and puts any card it wasn't told about at the end.
+    cards = {}
+    raw_cards = raw.get("cards") if isinstance(raw, dict) else None
+    if isinstance(raw_cards, dict):
+        for key in CARD_PANELS:
+            names = []
+            for name in raw_cards.get(key) if isinstance(raw_cards.get(key), list) else []:
+                if isinstance(name, str) and 0 < len(name) <= MAX_CARD_NAME_LENGTH and name not in names:
+                    names.append(name)
+                if len(names) >= MAX_CARDS_PER_PANEL:
+                    break
+            if names:
+                cards[key] = names
+    if cards:
+        layout["cards"] = cards
+    return layout
 
 
 @app.route("/api/theme", methods=["POST"])
