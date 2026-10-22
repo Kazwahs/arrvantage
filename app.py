@@ -14,7 +14,7 @@ at a time.
 """
 
 from flask import Flask, render_template, request, jsonify, redirect, url_for, session, Response
-from urllib.parse import quote
+from urllib.parse import quote, urlencode
 from functools import wraps
 from werkzeug.security import generate_password_hash, check_password_hash
 from werkzeug.middleware.proxy_fix import ProxyFix
@@ -2072,6 +2072,32 @@ def find_plex_link(server: dict, title: str, plex_type: str) -> str:
     )
 
 
+def jellyfin_family_headers(kind: str, token: str) -> dict:
+    """
+    Auth headers for Jellyfin and Emby. Jellyfin 10.12/12.0 switched its
+    legacy authorization off by default (X-Emby-Token and friends, the api_key
+    query parameter), and answers 401 "CustomAuthentication was challenged" to
+    anything but the current form: Authorization: MediaBrowser Token="...".
+    Anything that isn't Emby gets both so older Jellyfin servers keep working;
+    Emby only knows the X-Emby-Token header.
+    """
+    token = (token or "").replace('"', "")
+    headers = {"X-Emby-Token": token}
+    if kind != "emby":
+        headers["Authorization"] = f'MediaBrowser Token="{token}"'
+    return headers
+
+
+def jellyfin_family_token_params(kind: str, token: str) -> dict:
+    """The same token as query parameters, for URLs a browser loads itself
+    (poster images can't carry headers). Jellyfin's current name is ApiKey;
+    api_key is what older Jellyfin and Emby use."""
+    params = {"api_key": token}
+    if kind != "emby":
+        params["ApiKey"] = token
+    return params
+
+
 def get_jellyfin_server_id(server: dict):
     try:
         response = requests.get(f"{server['url'].rstrip('/')}/System/Info/Public", timeout=5)
@@ -2084,10 +2110,11 @@ def get_jellyfin_server_id(server: dict):
 def find_jellyfin_link(server: dict, title: str, item_type: str) -> str:
     """Works for both Jellyfin and Emby - they share the same API."""
     try:
-        headers = {"X-Emby-Token": server["credential"]}
+        headers = jellyfin_family_headers(server.get("type"), server["credential"])
         params = {
             "searchTerm": title, "IncludeItemTypes": item_type,
-            "Recursive": "true", "Limit": 10, "api_key": server["credential"],
+            "Recursive": "true", "Limit": 10,
+            **jellyfin_family_token_params(server.get("type"), server["credential"]),
         }
         response = requests.get(
             f"{server['url'].rstrip('/')}/Items",
@@ -3156,7 +3183,7 @@ def fetch_jellyfin_now_playing(server: dict) -> dict:
     try:
         response = requests.get(
             f"{server['url'].rstrip('/')}/Sessions",
-            headers={"X-Emby-Token": server["credential"]}, timeout=10,
+            headers=jellyfin_family_headers(server.get("type"), server["credential"]), timeout=10,
         )
         response.raise_for_status()
         sessions = response.json() or []
@@ -3182,7 +3209,7 @@ def fetch_jellyfin_now_playing(server: dict) -> dict:
         play_method = play_state.get("PlayMethod", "DirectPlay")
         items.append({
             "title": title,
-            "poster_url": f"{server['url'].rstrip('/')}/Items/{item_id}/Images/Primary?api_key={server['credential']}" if item_id else "",
+            "poster_url": f"{server['url'].rstrip('/')}/Items/{item_id}/Images/Primary?{urlencode(jellyfin_family_token_params(server.get('type'), server['credential']))}" if item_id else "",
             "user": s.get("UserName", "Unknown"),
             "device": s.get("DeviceName", ""),
             "progress_pct": round((position / runtime) * 100, 1) if runtime else 0,
@@ -3224,7 +3251,7 @@ def fetch_jellyfin_recently_added(server: dict) -> dict:
     try:
         response = requests.get(
             f"{server['url'].rstrip('/')}/Items",
-            headers={"X-Emby-Token": server["credential"]},
+            headers=jellyfin_family_headers(server.get("type"), server["credential"]),
             params={
                 "SortBy": "DateCreated", "SortOrder": "Descending", "Recursive": "true", "Limit": 30,
                 "IncludeItemTypes": "Movie,Series,Episode,Audio,MusicAlbum",
@@ -3244,7 +3271,7 @@ def fetch_jellyfin_recently_added(server: dict) -> dict:
         items.append({
             "title": title,
             "type": e.get("Type", ""),
-            "poster_url": f"{server['url'].rstrip('/')}/Items/{item_id}/Images/Primary?api_key={server['credential']}" if item_id else "",
+            "poster_url": f"{server['url'].rstrip('/')}/Items/{item_id}/Images/Primary?{urlencode(jellyfin_family_token_params(server.get('type'), server['credential']))}" if item_id else "",
         })
     return {"error": None, "items": items}
 
@@ -3281,7 +3308,7 @@ def fetch_jellyfin_watch_history(server: dict) -> dict:
     try:
         response = requests.get(
             f"{server['url'].rstrip('/')}/System/ActivityLog/Entries",
-            headers={"X-Emby-Token": server["credential"]},
+            headers=jellyfin_family_headers(server.get("type"), server["credential"]),
             params={"Limit": 50}, timeout=10,
         )
         response.raise_for_status()
@@ -3318,7 +3345,7 @@ def fetch_jellyfin_users(server: dict) -> dict:
     try:
         response = requests.get(
             f"{server['url'].rstrip('/')}/Users",
-            headers={"X-Emby-Token": server["credential"]}, timeout=10,
+            headers=jellyfin_family_headers(server.get("type"), server["credential"]), timeout=10,
         )
         response.raise_for_status()
         users = response.json() or []
@@ -4858,7 +4885,7 @@ def trigger_jellyfin_library_scan(server: dict) -> None:
     this specific instance."""
     response = requests.post(
         f"{server['url'].rstrip('/')}/Library/Refresh",
-        headers={"X-Emby-Token": server["credential"]}, timeout=15,
+        headers=jellyfin_family_headers(server.get("type"), server["credential"]), timeout=15,
     )
     response.raise_for_status()
 
@@ -5035,7 +5062,7 @@ def api_settings_test():
         elif category == "media_server" and kind_or_type in ("jellyfin", "emby"):
             response = requests.get(
                 f"{url.rstrip('/')}/System/Info",
-                headers={"X-Emby-Token": credential}, timeout=8,
+                headers=jellyfin_family_headers(kind_or_type, credential), timeout=8,
             )
         elif category == "media_server" and kind_or_type == "komga":
             response = requests.get(
@@ -5070,6 +5097,10 @@ def api_settings_test():
         response.raise_for_status()
     except requests.exceptions.HTTPError:
         detail = response.text[:200] if response is not None else "no response body"
+        if category == "media_server" and kind_or_type in ("jellyfin", "emby") and response.status_code in (401, 403):
+            return jsonify({"ok": False, "error": (
+                f"HTTP {response.status_code}: the server rejected this API key. Create one in the "
+                f"{kind_or_type.capitalize()} dashboard (Dashboard, then API Keys) and paste it here.")})
         return jsonify({"ok": False, "error": f"HTTP {response.status_code}: {detail}"})
     except requests.exceptions.RequestException as err:
         return jsonify({"ok": False, "error": str(err)})
