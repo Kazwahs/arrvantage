@@ -41,6 +41,7 @@ services:
     environment:
       - CONFIG_DIR=/app/data
       - FORCE_HTTPS_COOKIES=false
+      # - LOG_LEVEL=DEBUG   # uncomment while troubleshooting (see Troubleshooting)
 ```
 
 Replace `<your-github-username>` with your actual GitHub username (lowercase). `pull_policy: always` is what makes future updates reliable — every redeploy checks the registry for the newest image instead of silently reusing whatever's cached locally.
@@ -111,4 +112,6 @@ None of these are required to get started — add only what you actually run, an
 
 - **"Internal Server Error" saving Settings** — almost always the non-root-user permission issue described in step 3. Check container logs for a `PermissionError` on `config.json`.
 - **A redeploy doesn't seem to include your latest change** — confirm the GitHub Action actually finished (green checkmark) before redeploying; `pull_policy: always` only helps if a newer image genuinely exists to pull.
-- **A specific integration behaves oddly** — check the container logs first. Several integrations in this project were built against best-informed guesses at undocumented API shapes and later corrected once real data was available; if something looks wrong, it's usually a fixable field-name mismatch, not a fundamental problem.
+- **Where are the logs?** arrVantage writes to the container's standard output only, so `docker logs arrvantage` (or the **Logs** button on the app in TrueNAS) is all you need. By default you only see problems: failed calls to your services (host, path and HTTP status or error type), failed Test buttons in Settings, failed sign-ins, and an unreadable `config.json`. Keys, tokens, passwords and query strings are never logged.
+- **Need more detail?** Add `LOG_LEVEL=DEBUG` to the container's environment and redeploy. Every call to your services is then logged with its status and timing, which usually shows straight away whether a service is rejecting a key (`HTTP 401`), is not answering (`ConnectionError`), or is being asked for the wrong path. Switch it back afterwards, since it is chatty. On TrueNAS add it under the app's environment variables.
+- **A specific integration behaves oddly** — check the container logs first (see above). Several integrations in this project were built against best-informed guesses at undocumented API shapes and later corrected once real data was available; if something looks wrong, it's usually a fixable field-name mismatch, not a fundamental problem.

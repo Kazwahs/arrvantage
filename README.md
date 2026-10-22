@@ -51,6 +51,7 @@ services:
     environment:
       - CONFIG_DIR=/app/data
       - FORCE_HTTPS_COOKIES=false
+      # - LOG_LEVEL=DEBUG   # uncomment while troubleshooting
     restart: unless-stopped
 ```
 
@@ -62,6 +63,17 @@ Then open `http://<your-server>:5000` and connect your services (API URLs + keys
 |---|---|---|
 | `CONFIG_DIR` | Where `config.json` (instances, users, API keys) is read from and written to inside the container. Must point at your mounted volume, or settings won't survive a restart. | `/app/data` |
 | `FORCE_HTTPS_COOKIES` | Set to `true` once your reverse proxy + SSL certificate are confirmed working end-to-end, to make the login cookie HTTPS-only. Leave `false` for plain local-network HTTP access. | `false` |
+| `LOG_LEVEL` | How much arrVantage writes to its log: `WARNING` (default), `INFO`, `DEBUG` or `ERROR`. See [Logs](#logs) below. | `WARNING` |
+
+## Logs
+
+arrVantage writes its log to the container's standard output, so there is no log file to find or clean up: use `docker logs arrvantage` (add `-f` to follow it live), or the **Logs** view of the app in TrueNAS.
+
+By default it is quiet and only reports things that need attention: a call to one of your services that failed (the service's host and path, plus the HTTP status or the kind of connection error), a Settings **Test** that failed, a failed sign-in, and a `config.json` that could not be read. A service that stays down is reported once every five minutes rather than every few seconds.
+
+If something misbehaves, set `LOG_LEVEL=DEBUG` and restart the container; every call arrVantage makes to your services is then listed, with the status and how long it took. Please include those lines when you open an issue.
+
+API keys, tokens, passwords and query strings are never written to the log, so the lines are safe to paste into an issue. They do contain the addresses of your servers (for example `192.168.1.20:8096`), so blank those out if you would rather not share them.
 
 ## Why arrVantage?
 

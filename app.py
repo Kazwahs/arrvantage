@@ -14,15 +14,17 @@ at a time.
 """
 
 from flask import Flask, render_template, request, jsonify, redirect, url_for, session, Response
-from urllib.parse import quote, urlencode
+from urllib.parse import quote, urlencode, urlsplit
 from functools import wraps
 from werkzeug.security import generate_password_hash, check_password_hash
 from werkzeug.middleware.proxy_fix import ProxyFix
 from datetime import datetime
 import json
+import logging
 import os
 import re
 import secrets
+import sys
 import requests
 import concurrent.futures
 import threading
@@ -43,6 +45,129 @@ app.wsgi_app = ProxyFix(app.wsgi_app, x_for=1, x_proto=1, x_host=1)
 # cookie over plain HTTP. Defaults off so the app still works before
 # that's set up.
 app.config["SESSION_COOKIE_SECURE"] = os.environ.get("FORCE_HTTPS_COOKIES", "false").lower() == "true"
+
+# ---------------------------------------------------------------------------
+# LOGGING
+# ---------------------------------------------------------------------------
+# Everything goes to stderr, so it shows up in `docker logs` and in the
+# TrueNAS app's Logs view - there is no log file to manage. Quiet by default
+# (WARNING: failed calls to your services, failed logins, a config that
+# couldn't be read). Set LOG_LEVEL=DEBUG to also see every outbound call.
+#
+# Never log a secret: API keys, tokens and passwords travel in headers,
+# request bodies and query strings, so a request is only ever described by
+# method, host and path, and anything that quotes a URL (a requests error
+# does) goes through scrub_log_text() first.
+
+LOG_FORMAT = "%(asctime)s %(levelname)s [%(name)s] %(message)s"
+LOG_REPEAT_SECONDS = 300  # an identical warning is shown once per this long
+
+
+def resolve_log_level(raw) -> int:
+    """LOG_LEVEL=debug|info|warning|error (any case). Anything else, or
+    nothing, means WARNING - a typo must not silence or flood the log."""
+    level = logging.getLevelName(str(raw or "").strip().upper())
+    return level if isinstance(level, int) and level > 0 else logging.WARNING
+
+
+log = logging.getLogger("arrvantage")
+
+
+def configure_logging() -> None:
+    log.setLevel(resolve_log_level(os.environ.get("LOG_LEVEL")))
+    if not any(getattr(h, "_arrvantage", False) for h in log.handlers):
+        handler = logging.StreamHandler(sys.stderr)
+        handler.setFormatter(logging.Formatter(LOG_FORMAT))
+        handler._arrvantage = True
+        log.addHandler(handler)
+
+
+configure_logging()
+
+_URL_USERINFO = re.compile(r"(://)[^/\s@]+@")
+_URL_QUERY = re.compile(r"\?[^\s'\")>]*=[^\s'\")>]*")
+
+
+def scrub_log_text(value, limit: int = 300) -> str:
+    """Text that may quote a URL, made safe to log: query strings (where
+    api_key=, ApiKey=, X-Plex-Token= live) and user:password@ are removed."""
+    text = _URL_USERINFO.sub(r"\1", str(value))
+    text = _URL_QUERY.sub("?[removed]", text)
+    text = " ".join(text.split())
+    return text if len(text) <= limit else text[:limit] + "..."
+
+
+def describe_request(method: str, url: str) -> str:
+    """'GET host:port/path' - no query string, no credentials."""
+    try:
+        parts = urlsplit(url)
+        return f"{method} {parts.netloc.rsplit('@', 1)[-1]}{parts.path}"
+    except ValueError:
+        return f"{method} (unparseable URL)"
+
+
+_log_seen: dict = {}
+_log_seen_lock = threading.Lock()
+
+
+def log_problem(key, message: str, *args) -> None:
+    """A WARNING, but the same problem is only shown once per
+    LOG_REPEAT_SECONDS (the rest drop to DEBUG). A service that is down is
+    probed every few seconds, and that must not fill the log."""
+    now = time.monotonic()
+    with _log_seen_lock:
+        last = _log_seen.get(key)
+        repeat = last is not None and now - last < LOG_REPEAT_SECONDS
+        if not repeat:
+            if len(_log_seen) > 500:
+                for stale in [k for k, t in _log_seen.items() if now - t >= LOG_REPEAT_SECONDS]:
+                    del _log_seen[stale]
+            _log_seen[key] = now
+    log.log(logging.DEBUG if repeat else logging.WARNING, message, *args)
+
+
+def _install_request_logging() -> None:
+    """Every call to a service goes through requests' Session.send, so
+    wrapping it once records them all - failures as warnings, successes
+    at DEBUG - without touching the ~130 places that make a request."""
+    from requests.sessions import Session
+
+    # If this module is imported twice (the tests do), the new wrapper
+    # replaces the old one rather than wrapping it again.
+    original = getattr(Session.send, "_arrvantage_original", Session.send)
+
+    def send(self, request, **kwargs):
+        started = time.monotonic()
+        try:
+            response = original(self, request, **kwargs)
+        except requests.exceptions.RequestException as err:
+            _note_request(request, None, err, started)
+            raise
+        _note_request(request, response, None, started)
+        return response
+
+    send._arrvantage_original = original
+    Session.send = send
+
+
+def _note_request(request, response, err, started) -> None:
+    try:
+        what = describe_request(request.method, request.url)
+        ms = int((time.monotonic() - started) * 1000)
+        shape = re.sub(r"\d+", "#", what)
+        if err is not None:
+            log_problem(("request", shape, err.__class__.__name__), "%s failed: %s: %s (%d ms)",
+                        what, err.__class__.__name__, scrub_log_text(err), ms)
+        elif response.status_code >= 400:
+            log_problem(("request", shape, response.status_code), "%s -> HTTP %s (%d ms)",
+                        what, response.status_code, ms)
+        else:
+            log.debug("%s -> HTTP %s (%d ms)", what, response.status_code, ms)
+    except Exception:  # noqa: BLE001 - logging must never break a request
+        pass
+
+
+_install_request_logging()
 
 # ---------------------------------------------------------------------------
 # CONFIG
@@ -251,8 +376,10 @@ def load_config() -> dict:
         try:
             with open(CONFIG_PATH, "r") as f:
                 return json.load(f)
-        except (json.JSONDecodeError, OSError):
-            pass  # fall through to writing a fresh empty config below
+        except (json.JSONDecodeError, OSError) as err:
+            # Falls through to writing a fresh empty config below, so say so.
+            log.error("config.json could not be read (%s: %s); starting from an empty config",
+                      err.__class__.__name__, scrub_log_text(err))
 
     save_config(EMPTY_CONFIG)
     return EMPTY_CONFIG
@@ -614,6 +741,7 @@ def login():
     if request.method == "POST":
         client_ip = request.remote_addr or "unknown"
         if is_login_locked_out(client_ip):
+            log_problem(("lockout", client_ip), "Login locked out for %s after too many failed attempts", client_ip)
             error = "Too many failed attempts. Please wait a few minutes and try again."
         else:
             username = request.form.get("username", "").strip()
@@ -624,6 +752,10 @@ def login():
                 session["username"] = username
                 return redirect(url_for("index"))
             record_failed_login(client_ip)
+            # The name is only logged when it is a real account: people do
+            # sometimes type their password into the username box.
+            who = f"user {user['username']!r}" if user else "an unknown user"
+            log.warning("Failed login for %s from %s", who, client_ip)
             error = "Incorrect username or password."
 
     return render_template("login.html", error=error, csrf_token=ensure_csrf_token())
@@ -4138,8 +4270,11 @@ def run_concurrently(jobs: dict, timeout: float = FETCH_TIMEOUT_SECONDS) -> dict
             results[key] = (True, future.result(timeout=max(0.0, deadline - time.monotonic())))
         except concurrent.futures.TimeoutError:
             future.cancel()
+            log_problem(("job", str(key), "timeout"), "Background call %s timed out after %ss", key, timeout)
             results[key] = (False, "timed out")
         except Exception as err:  # noqa: BLE001 - a failed call must not escape
+            log_problem(("job", str(key), err.__class__.__name__), "Background call %s failed: %s: %s",
+                        key, err.__class__.__name__, scrub_log_text(err))
             results[key] = (False, str(err) or err.__class__.__name__)
     return results
 
@@ -4913,6 +5048,24 @@ def api_mediaserver_rescan(name):
 
 @app.route("/api/settings/test", methods=["POST"])
 def api_settings_test():
+    """The Test button in Settings. A failure is also written to the log,
+    with what was being tested, so a bug report can say more than 'it
+    failed' (the service's own message is what the person sees on screen)."""
+    result = _run_settings_test()
+    try:
+        response = result[0] if isinstance(result, tuple) else result
+        outcome = response.get_json(silent=True) or {}
+        if outcome.get("ok") is False:
+            body = request.get_json(silent=True) or {}
+            host = urlsplit(str(body.get("url") or "")).netloc.rsplit("@", 1)[-1] or "(no URL)"
+            log.warning("Settings test failed: %s/%s at %s: %s", body.get("category"), body.get("kind_or_type"),
+                        host, scrub_log_text(outcome.get("error", "")))
+    except Exception:  # noqa: BLE001 - logging must never change the answer
+        pass
+    return result
+
+
+def _run_settings_test():
     """
     Tests connectivity + credentials for whatever the person has typed
     into a Settings (or first-run wizard) field so far - deliberately

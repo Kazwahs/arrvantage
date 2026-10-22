@@ -35,6 +35,10 @@ services:
       # Flip to "true" once your reverse proxy + SSL cert are confirmed
       # working end-to-end - this makes the login cookie HTTPS-only.
       - FORCE_HTTPS_COOKIES=false
+      # WARNING (default) only reports problems. Switch to DEBUG while
+      # troubleshooting to log every call to your services (never any
+      # keys or passwords), then back again - DEBUG is chatty.
+      # - LOG_LEVEL=DEBUG
       # Only needed if 5000 conflicts with something else - most setups
       # can leave this out entirely and rely on the built-in default.
       # - PORT=5000
