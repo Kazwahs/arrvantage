@@ -79,9 +79,15 @@ ENV PORT=5000
 # single-user tool with no database, where the concurrency multiple
 # workers exist for was never really needed in the first place.
 #
+# --no-control-socket: gunicorn 26 opens a control socket under the user's
+# home directory (~/.gunicorn/gunicorn.ctl). appuser is created with -M (no
+# home), so it logged "Control server error: [Errno 13] Permission denied:
+# '/home/appuser'" on every start. Nothing here uses that interface, and the
+# app served fine either way - this just removes the noise from the logs.
+#
 # Runs through a shell so ${PORT} actually gets substituted (exec-form
 # CMD, i.e. CMD ["gunicorn", ...], does NOT expand env vars) - `exec`
 # inside that shell replaces the shell process with gunicorn itself,
 # so signals like SIGTERM reach gunicorn directly for a clean shutdown
 # instead of being absorbed by an intermediate shell process.
-CMD ["sh", "-c", "exec gunicorn --bind 0.0.0.0:${PORT} --workers 1 --timeout 90 app:app"]
+CMD ["sh", "-c", "exec gunicorn --bind 0.0.0.0:${PORT} --workers 1 --timeout 90 --no-control-socket app:app"]
