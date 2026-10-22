@@ -611,6 +611,9 @@
         let attentionShowAll = false;
 
         let attentionShowHidden = false;
+        // Whether the folded-away warnings are open. A per-viewer convenience, so it lives in this browser only.
+        let attentionShowWarnings = false;
+        try { attentionShowWarnings = localStorage.getItem('arrAttentionWarnings') === '1'; } catch (e) { /* storage can be blocked */ }
 
         function attentionItemHTML(item, hiddenList) {
             const critical = item.severity === 'critical';
@@ -654,6 +657,13 @@
                 }
             }
 
+            // Criticals always show. Warnings are folded behind one line, because
+            // a handful of routine ones shouldn't drown out what is actually broken.
+            const criticals = items.filter(i => i.severity === 'critical');
+            const warnings = items.filter(i => i.severity !== 'critical');
+            const w = warnings.length;
+            const warningsLabel = `${w} warning${w === 1 ? '' : 's'}`;
+
             let html = '';
             if (!items.length) {
                 count.hidden = true;
@@ -669,11 +679,31 @@
             } else {
                 count.textContent = items.length;
                 count.hidden = false;
-                const shown = attentionShowAll ? items : items.slice(0, ATTENTION_PREVIEW);
-                html += `<ul class="attention-list">${shown.map(i => attentionItemHTML(i, false)).join('')}</ul>` +
-                    (items.length > ATTENTION_PREVIEW
-                        ? `<button type="button" class="attention-more" id="attention-more">${attentionShowAll ? 'Show fewer' : `Show all ${items.length}`}</button>`
-                        : '');
+                if (criticals.length) {
+                    html += `<ul class="attention-list">${criticals.map(i => attentionItemHTML(i, false)).join('')}</ul>`;
+                } else {
+                    html += `
+                        <div class="attention-clear">
+                            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><polyline points="20 6 9 17 4 12"></polyline></svg>
+                            <span class="attention-clear-title">Nothing is broken</span>
+                            <span class="attention-clear-detail">${warningsLabel} you may want to look at.</span>
+                        </div>`;
+                }
+                if (w) {
+                    const shown = attentionShowAll ? warnings : warnings.slice(0, ATTENTION_PREVIEW);
+                    html += `
+                        <div class="attention-warnings">
+                            <button type="button" class="attention-more" id="attention-warnings-toggle" aria-expanded="${attentionShowWarnings}" aria-controls="attention-warnings-list">
+                                ${attentionShowWarnings ? `Hide ${warningsLabel}` : `Show ${warningsLabel}`}
+                            </button>
+                            <div id="attention-warnings-list" ${attentionShowWarnings ? '' : 'hidden'}>
+                                <ul class="attention-list">${shown.map(i => attentionItemHTML(i, false)).join('')}</ul>
+                                ${w > ATTENTION_PREVIEW
+                                    ? `<button type="button" class="attention-more" id="attention-more">${attentionShowAll ? 'Show fewer' : `Show all ${w}`}</button>`
+                                    : ''}
+                            </div>
+                        </div>`;
+                }
             }
 
             if (hiddenItems.length) {
@@ -705,6 +735,7 @@
             const body = document.getElementById('attention-body');
             const buttons = body.querySelectorAll('.attention-list:not(.attention-list--hidden) .attention-hide');
             const target = buttons[Math.min(index, buttons.length - 1)]
+                || body.querySelector('#attention-warnings-toggle')
                 || body.querySelector('#attention-hidden-toggle')
                 || document.getElementById('attention-heading');
             if (target) {
@@ -816,6 +847,14 @@
             if (e.target.closest('#attention-more') && attentionData) {
                 attentionShowAll = !attentionShowAll;
                 renderAttention(attentionData);
+                return;
+            }
+            const warningsToggle = e.target.closest('#attention-warnings-toggle');
+            if (warningsToggle && attentionData) {
+                attentionShowWarnings = !attentionShowWarnings;
+                try { localStorage.setItem('arrAttentionWarnings', attentionShowWarnings ? '1' : '0'); } catch (err) { /* ignore */ }
+                renderAttention(attentionData);
+                document.getElementById('attention-warnings-toggle').focus();
                 return;
             }
             const toggle = e.target.closest('#attention-hidden-toggle');

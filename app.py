@@ -4272,19 +4272,42 @@ def _name_list(names: list) -> str:
     return ", ".join(shown) + (f" and {more} more" if more > 0 else "")
 
 
+def _failing_indexer_names(service_items: list) -> set:
+    """Names listed by 'every indexer is failing' items (see _summarize_services)."""
+    names = set()
+    for item in service_items:
+        if item["id"].startswith("service:indexers:"):
+            names.update(n.strip() for n in item["detail"].split(", ") if n.strip() and not n.startswith("and "))
+    return names
+
+
+_TRAILING_PAREN = re.compile(r"\s*\([^)]*\)\s*$")
+
+
+def _is_indexer_failure_of(group: dict, names: set) -> bool:
+    """True when an arr app's indexer-failure warning only repeats indexers already in `names`."""
+    if "indexer" not in group["source"].lower():
+        return False
+    listed = []
+    for message in group["messages"]:
+        if ": " not in message:
+            return False
+        listed += [_TRAILING_PAREN.sub("", e).strip() for e in message.split(": ", 1)[1].split(", ")]
+    return bool(listed) and all(name in names for name in listed)
+
+
 def _summarize_services(services: dict) -> tuple:
     """
     Turns probe results for downloaders, indexer services, media servers and
     transcoders into attention items. Returns (items, complete, checked).
 
-    Each probe result is a dict with an "error" (string or None), plus:
-    - downloaders: "connection_status" ("connected" / "firewalled" /
-      "disconnected" - qBittorrent only)
-    - indexers: "indexers", a list of {"name", "enabled", "healthy"}
-    A service that can't be reached is critical, except a transcoder, which
-    is only a warning: Tdarr is often switched off on purpose. Only warnings
-    can be hidden, so a down downloader, indexer service or media server
-    always stays in front of you.
+    Each probe result is a dict with an "error" (string or None), plus, for
+    indexer services, "indexers": a list of {"name", "enabled", "healthy"}.
+    Only outages are raised: a service that can't be reached is critical,
+    except a transcoder, which is only a warning because Tdarr is often
+    switched off on purpose. Every enabled indexer failing is critical too.
+    Only warnings can be hidden, so everything else always stays in front
+    of you.
     """
     items = []
     complete = True
@@ -4309,32 +4332,17 @@ def _summarize_services(services: dict) -> tuple:
                 })
                 continue
 
-            if group == "downloaders" and result.get("connection_status") in ("firewalled", "disconnected"):
-                status = result["connection_status"]
-                items.append({
-                    "id": f"service:downloader:{name}:connection", "severity": "warning", "kind": "service",
-                    "title": f"{name} is {status}",
-                    "detail": ("Incoming connections are blocked, so downloads may be slow or stall. Check the forwarded port."
-                               if status == "firewalled"
-                               else "It has no network connection, so nothing can download until it reconnects."),
-                    "services": [name], "service_type": service_type, "view": None,
-                    "hideable": True, "hide_key": f"service:downloader:{name}:connection",
-                })
-
             if group == "indexers":
+                # Some indexers failing is routine and the arr apps already
+                # report it (by name), so only "nothing can search" is raised here.
                 enabled = [i for i in result.get("indexers") or [] if i.get("enabled", True)]
-                bad = [i for i in enabled if not i.get("healthy", True)]
-                if bad:
-                    everything = len(bad) == len(enabled)
-                    names = [i.get("name") or "(unknown)" for i in bad]
+                if enabled and all(not i.get("healthy", True) for i in enabled):
                     items.append({
-                        "id": f"service:indexers:{name}",
-                        "severity": "critical" if everything else "warning", "kind": "service",
-                        "title": (f"Every indexer is failing in {name}" if everything
-                                  else f"{len(bad)} of {len(enabled)} indexers failing in {name}"),
-                        "detail": _name_list(names),
+                        "id": f"service:indexers:{name}", "severity": "critical", "kind": "service",
+                        "title": f"Every indexer is failing in {name}",
+                        "detail": _name_list([i.get("name") or "(unknown)" for i in enabled]),
                         "services": [name], "service_type": service_type, "view": None,
-                        "hideable": not everything, "hide_key": f"service:indexers:{name}",
+                        "hideable": False, "hide_key": None,
                     })
 
     return items, complete, checked
@@ -4428,7 +4436,14 @@ def summarize_attention(signals: dict, services: dict = None) -> dict:
             if critical:
                 state["dot"] = "critical"
 
+    service_items, services_complete, services_checked = _summarize_services(services or {})
+    items.extend(service_items)
+    complete = complete and services_complete
+
+    covered = _failing_indexer_names(service_items)
     for key, group in health_groups.items():
+        if covered and _is_indexer_failure_of(group, covered):
+            continue  # the indexer service's own item already says this
         items.append({
             "id": f"health:{key}",
             "severity": "critical" if group["error"] else "warning",
@@ -4452,10 +4467,6 @@ def summarize_attention(signals: dict, services: dict = None) -> dict:
             # hidden while free space drifts by a few GB.
             "hide_key": f"disk:{d.get('path') or key[0]}",
         })
-
-    service_items, services_complete, services_checked = _summarize_services(services or {})
-    items.extend(service_items)
-    complete = complete and services_complete
 
     # Within a kind, what affects the most services comes first - a warning
     # shared by five apps matters more than a one-app config tip.
@@ -4531,15 +4542,27 @@ def probe_downloader(downloader: dict) -> dict:
 
 
 def probe_media_server(server: dict) -> dict:
-    """The same calls the media server's own tabs make, so a bad address or
-    a rejected API key shows up here just as it would there."""
+    """
+    Is the server answering at all? Plex (/identity) and Jellyfin/Emby
+    (/System/Info/Public) both have a small endpoint that needs no token, so
+    a token without admin rights, or one that is missing a permission, can
+    never make a running server look down. A refused connection or a
+    timeout gets one more try before it counts.
+    """
     if server["type"] == "komga":
-        result = fetch_komga_libraries(server)
-    elif server["type"] == "plex":
-        result = fetch_plex_now_playing(server)
-    else:
-        result = fetch_jellyfin_now_playing(server)
-    return {"error": result["error"]}
+        return {"error": fetch_komga_libraries(server)["error"]}
+    path = "/identity" if server["type"] == "plex" else "/System/Info/Public"
+    last_error = None
+    for _ in range(2):
+        try:
+            response = requests.get(
+                f"{server['url'].rstrip('/')}{path}", headers={"Accept": "application/json"}, timeout=10,
+            )
+            response.raise_for_status()
+            return {"error": None}
+        except requests.exceptions.RequestException as err:
+            last_error = err
+    return {"error": str(last_error) or last_error.__class__.__name__}
 
 
 def gather_attention(force: bool = False) -> dict:
