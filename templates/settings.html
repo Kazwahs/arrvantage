@@ -242,6 +242,66 @@
         }
         .save-btn:hover:not(:disabled) { background: var(--accent-hover); }
         .save-btn:disabled { opacity: 0.5; cursor: default; }
+
+        /* --- Backup, restore and diagnostics --- */
+
+        .tool-block { padding: 1.25rem 0; border-top: 1px solid var(--border); }
+        .tool-block:first-child { padding-top: 0; border-top: none; }
+        .tool-block:last-child { padding-bottom: 0; }
+        .tool-title { font-size: 0.9rem; font-weight: 600; margin: 0 0 0.3rem 0; }
+        .tool-hint { color: var(--muted); font-size: 0.8rem; margin: 0 0 0.75rem 0; }
+        .tool-row { display: flex; flex-wrap: wrap; align-items: center; gap: 0.6rem; margin-top: 0.75rem; }
+        .tool-row input[type="file"] { flex: 1 1 14rem; min-width: 0; color: var(--text); font-size: 0.82rem; }
+        .tool-block .perm-check { margin-bottom: 0.4rem; }
+
+        textarea.diag-text {
+            width: 100%;
+            box-sizing: border-box;
+            margin-top: 0.75rem;
+            background: var(--panel);
+            border: 1px solid var(--border);
+            border-radius: 6px;
+            padding: 0.6rem 0.7rem;
+            color: var(--text);
+            font-family: var(--font-mono, monospace);
+            font-size: 0.78rem;
+            line-height: 1.45;
+            resize: vertical;
+        }
+
+        .import-preview {
+            margin-top: 0.9rem;
+            padding: 0.9rem 1rem;
+            background: var(--sidebar);
+            border: 1px solid var(--border);
+            border-radius: 8px;
+            font-size: 0.82rem;
+        }
+        .import-preview[hidden] { display: none; }
+        .import-preview h3 { font-size: 0.88rem; margin: 0 0 0.6rem 0; }
+        .import-preview ul { margin: 0 0 0.75rem 0; padding-left: 1.1rem; }
+        .import-preview li { margin-bottom: 0.3rem; }
+        .import-names { color: var(--muted); }
+        .import-warning {
+            margin: 0 0 0.75rem 0;
+            padding: 0.5rem 0.7rem;
+            border: 1px solid var(--warning);
+            border-radius: 6px;
+            color: var(--text);
+        }
+        .danger-btn {
+            background: none;
+            border: 1px solid var(--error);
+            border-radius: 6px;
+            color: var(--error-text);
+            font-size: 0.82rem;
+            font-weight: 600;
+            padding: 0.45rem 0.9rem;
+            cursor: pointer;
+        }
+        .danger-btn:hover { background: color-mix(in srgb, var(--error) 12%, transparent); }
+        .danger-btn:disabled { opacity: 0.5; cursor: default; }
+
         /* --- Mobile layout --- */
 
         @media (max-width: 600px) {
@@ -447,6 +507,47 @@
                 <button type="submit" class="save-btn" id="save-btn" disabled>Save Settings</button>
             </div>
         </form>
+
+        <details class="group" id="backup-group">
+            <summary>Backup, restore and diagnostics</summary>
+            <div class="group-body">
+                <div class="tool-block">
+                    <h2 class="tool-title">Export settings</h2>
+                    <p class="tool-hint">Downloads your instances, services, accounts and metadata keys as one JSON file.</p>
+                    <label class="perm-check" for="export-secrets">
+                        <input type="checkbox" id="export-secrets" aria-describedby="export-secrets-hint">
+                        Include API keys and password hashes
+                    </label>
+                    <p class="tool-hint" id="export-secrets-hint">Left off, the file is safe to share but cannot restore your keys or accounts (importing it keeps the ones already set up). Turned on, the file is a full backup: keep it private.</p>
+                    <button type="button" class="test-btn" id="export-btn">Download settings</button>
+                </div>
+
+                <div class="tool-block">
+                    <h2 class="tool-title">Restore from a file</h2>
+                    <p class="tool-hint">Choose a file exported from arrVantage. You will see what it changes before anything happens, and your current settings are saved as a backup file next to config.json first.</p>
+                    <div class="tool-row">
+                        <input type="file" id="import-file" accept=".json,application/json" aria-label="Settings file to restore">
+                        <button type="button" class="test-btn" id="import-review-btn" disabled>Review file</button>
+                    </div>
+                    <div class="import-preview" id="import-preview" hidden></div>
+                    <div class="test-status" id="import-status" role="status" aria-live="polite"></div>
+                </div>
+
+                <div class="tool-block">
+                    <h2 class="tool-title">Diagnostics for a bug report</h2>
+                    <p class="tool-hint">Copies a summary of your setup (types and counts only) and the most recent warnings. It never contains API keys, passwords, usernames or the names you gave your services.</p>
+                    <label class="perm-check" for="diag-hide">
+                        <input type="checkbox" id="diag-hide" checked>
+                        Hide server addresses
+                    </label>
+                    <div class="tool-row">
+                        <button type="button" class="test-btn" id="diag-btn">Copy diagnostics</button>
+                        <span class="test-status" id="diag-status" role="status" aria-live="polite"></span>
+                    </div>
+                    <textarea class="diag-text" id="diag-text" rows="12" readonly hidden aria-label="Diagnostics text"></textarea>
+                </div>
+            </div>
+        </details>
     </div>
 
     <script>
@@ -463,6 +564,174 @@
                 }
                 return originalFetch(url, options);
             };
+        })();
+
+
+        // ---------------------------------------------------------------
+        // Backup, restore and diagnostics
+        // ---------------------------------------------------------------
+        (function () {
+            const exportBox = document.getElementById('export-secrets');
+            document.getElementById('export-btn').addEventListener('click', () => {
+                window.location.href = '/api/config/export' + (exportBox.checked ? '?secrets=1' : '');
+            });
+
+            // --- Restore ---
+            const fileInput = document.getElementById('import-file');
+            const reviewBtn = document.getElementById('import-review-btn');
+            const preview = document.getElementById('import-preview');
+            const importStatus = document.getElementById('import-status');
+            let pendingFile = null;
+
+            function setStatus(el, text, cls) {
+                el.textContent = text;
+                el.className = 'test-status' + (cls ? ' ' + cls : '');
+            }
+
+            function resetPreview() {
+                preview.hidden = true;
+                preview.replaceChildren();
+                pendingFile = null;
+            }
+
+            fileInput.addEventListener('change', () => {
+                resetPreview();
+                setStatus(importStatus, '');
+                reviewBtn.disabled = !fileInput.files.length;
+            });
+
+            function el(tag, text, className) {
+                const node = document.createElement(tag);
+                if (text !== undefined) node.textContent = text;
+                if (className) node.className = className;
+                return node;
+            }
+
+            async function postImport(file, confirm) {
+                const response = await fetch('/api/config/import', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ file: file, confirm: confirm }),
+                });
+                let body = {};
+                try { body = await response.json(); } catch (e) { /* not JSON */ }
+                return { status: response.status, body: body };
+            }
+
+            function showPreview(report) {
+                preview.replaceChildren();
+                preview.appendChild(el('h3', 'This file would replace your settings'));
+                const list = el('ul');
+                report.sections.forEach((section) => {
+                    if (section.incoming === null && !section.current) return;
+                    const item = el('li');
+                    if (section.incoming === null) {
+                        item.textContent = section.label + ': not in the file, so the current ' + section.current + ' stay.';
+                    } else {
+                        item.textContent = section.label + ': ' + section.current + ' now, ' + section.incoming + ' after.';
+                        if (section.names.length) {
+                            item.appendChild(el('span', ' ' + section.names.join(', '), 'import-names'));
+                        }
+                    }
+                    list.appendChild(item);
+                });
+                list.appendChild(el('li', report.includes_secrets
+                    ? 'The file includes API keys, so they are replaced too.'
+                    : 'The file has no API keys: the ones already set up are kept for entries with the same name.'));
+                report.notes.forEach((note) => list.appendChild(el('li', note)));
+                preview.appendChild(list);
+                if (report.signs_you_out) {
+                    preview.appendChild(el('p', 'Your own account is not in this file, so you will be signed out afterwards.', 'import-warning'));
+                }
+                preview.appendChild(el('p', 'Anything you have typed above but not saved will be lost.', 'tool-hint'));
+                const row = el('div', undefined, 'tool-row');
+                const confirmBtn = el('button', 'Replace my settings', 'danger-btn');
+                confirmBtn.type = 'button';
+                const cancelBtn = el('button', 'Cancel', 'test-btn');
+                cancelBtn.type = 'button';
+                row.append(confirmBtn, cancelBtn);
+                preview.appendChild(row);
+                preview.hidden = false;
+                confirmBtn.focus();
+
+                cancelBtn.addEventListener('click', () => { resetPreview(); setStatus(importStatus, 'Nothing was changed.'); reviewBtn.focus(); });
+                confirmBtn.addEventListener('click', async () => {
+                    confirmBtn.disabled = true;
+                    setStatus(importStatus, 'Restoring…');
+                    try {
+                        const result = await postImport(pendingFile, true);
+                        if (!result.body.ok) {
+                            setStatus(importStatus, (result.body.errors || ['Something went wrong.']).join(' '), 'test-fail');
+                            confirmBtn.disabled = false;
+                            return;
+                        }
+                        resetPreview();
+                        setStatus(importStatus, 'Restored. Your previous settings are saved as ' + result.body.backup + '. Reloading…', 'test-ok');
+                        setTimeout(() => { window.location.href = '/settings'; }, 2200);
+                    } catch (err) {
+                        setStatus(importStatus, 'Could not reach the server: ' + err.message, 'test-fail');
+                        confirmBtn.disabled = false;
+                    }
+                });
+            }
+
+            reviewBtn.addEventListener('click', async () => {
+                resetPreview();
+                const file = fileInput.files[0];
+                if (!file) return;
+                if (file.size > 1000000) { setStatus(importStatus, 'That file is too large to be an arrVantage config.', 'test-fail'); return; }
+                let parsed;
+                try {
+                    parsed = JSON.parse(await file.text());
+                } catch (err) {
+                    setStatus(importStatus, 'That file is not valid JSON.', 'test-fail');
+                    return;
+                }
+                setStatus(importStatus, 'Checking the file…');
+                try {
+                    const result = await postImport(parsed, false);
+                    if (!result.body.ok) {
+                        setStatus(importStatus, (result.body.errors || ['Something went wrong.']).join(' '), 'test-fail');
+                        return;
+                    }
+                    setStatus(importStatus, '');
+                    pendingFile = parsed;
+                    showPreview(result.body.report);
+                } catch (err) {
+                    setStatus(importStatus, 'Could not reach the server: ' + err.message, 'test-fail');
+                }
+            });
+
+            // --- Diagnostics ---
+            const diagBtn = document.getElementById('diag-btn');
+            const diagStatus = document.getElementById('diag-status');
+            const diagText = document.getElementById('diag-text');
+            diagBtn.addEventListener('click', async () => {
+                setStatus(diagStatus, 'Collecting…');
+                try {
+                    const hide = document.getElementById('diag-hide').checked ? '1' : '0';
+                    const response = await fetch('/api/diagnostics?hide_addresses=' + hide);
+                    const body = await response.json();
+                    if (!body.ok) throw new Error(body.error || 'failed');
+                    diagText.value = body.text;
+                    diagText.hidden = false;
+                    let copied = false;
+                    try {
+                        if (navigator.clipboard && window.isSecureContext) {
+                            await navigator.clipboard.writeText(body.text);
+                            copied = true;
+                        }
+                    } catch (e) { /* fall through to the older way */ }
+                    if (!copied) {
+                        diagText.focus();
+                        diagText.select();
+                        try { copied = document.execCommand('copy'); } catch (e) { copied = false; }
+                    }
+                    setStatus(diagStatus, copied ? 'Copied. Paste it into your report.' : 'Select the text below and copy it.', copied ? 'test-ok' : 'test-empty');
+                } catch (err) {
+                    setStatus(diagStatus, 'Could not collect diagnostics: ' + err.message, 'test-fail');
+                }
+            });
         })();
 
         // ---------------------------------------------------------------

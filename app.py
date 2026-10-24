@@ -18,10 +18,14 @@ from urllib.parse import quote, urlencode, urlsplit
 from functools import wraps
 from werkzeug.security import generate_password_hash, check_password_hash
 from werkzeug.middleware.proxy_fix import ProxyFix
-from datetime import datetime
+from datetime import datetime, timedelta, timezone
+import collections
+import copy
+import hashlib
 import json
 import logging
 import os
+import platform
 import re
 import secrets
 import sys
@@ -72,14 +76,38 @@ def resolve_log_level(raw) -> int:
 
 log = logging.getLogger("arrvantage")
 
+# The last few warnings, kept in memory (never on disk) for the Settings
+# "Copy diagnostics" button. They are collected whatever LOG_LEVEL is, so a
+# person who turned the log down to ERROR can still send a useful report.
+RECENT_WARNING_LIMIT = 25
+_recent_warnings: "collections.deque" = collections.deque(maxlen=RECENT_WARNING_LIMIT)
+_PROCESS_STARTED = time.time()
+
+
+class _RecentWarningsHandler(logging.Handler):
+    _arrvantage_recent = True
+
+    def emit(self, record) -> None:
+        try:
+            _recent_warnings.append((record.created, record.levelname, record.getMessage()))
+        except Exception:  # noqa: BLE001 - logging must never break a request
+            pass
+
 
 def configure_logging() -> None:
-    log.setLevel(resolve_log_level(os.environ.get("LOG_LEVEL")))
-    if not any(getattr(h, "_arrvantage", False) for h in log.handlers):
-        handler = logging.StreamHandler(sys.stderr)
-        handler.setFormatter(logging.Formatter(LOG_FORMAT))
-        handler._arrvantage = True
-        log.addHandler(handler)
+    level = resolve_log_level(os.environ.get("LOG_LEVEL"))
+    # The logger itself always lets WARNING through, so the diagnostics
+    # collector below sees it; the console handler applies LOG_LEVEL.
+    log.setLevel(min(level, logging.WARNING))
+    for old in [h for h in log.handlers if getattr(h, "_arrvantage", False) or getattr(h, "_arrvantage_recent", False)]:
+        log.removeHandler(old)  # re-running (or re-importing in tests) must not stack handlers
+    console = logging.StreamHandler(sys.stderr)
+    console.setFormatter(logging.Formatter(LOG_FORMAT))
+    console.setLevel(level)
+    console._arrvantage = True
+    log.addHandler(console)
+    recent = _RecentWarningsHandler(level=logging.WARNING)
+    log.addHandler(recent)
 
 
 configure_logging()
@@ -4863,10 +4891,146 @@ def api_home_stats():
     return jsonify(fetch_home_stats())
 
 
+# ---------------------------------------------------------------------------
+# Coming Up (Home): what is about to release or air
+# ---------------------------------------------------------------------------
+# Sonarr (episodes), Radarr (cinema / digital / physical releases) and Lidarr
+# (albums) all answer GET /api/<v>/calendar?start=&end=&unmonitored=false.
+# Only monitored items are asked for - the same list their own Calendar page
+# shows. Each item carries its instance's colour, so the panel can colour-code
+# them the way the sidebar does.
+
+CALENDAR_KINDS = ("movie", "series", "artist")
+COMING_UP_DAYS = (7, 14, 30)
+COMING_UP_CACHE_SECONDS = 300
+_COMING_UP_CACHE: dict = {}
+_COMING_UP_LOCK = threading.Lock()
+
+_RADARR_RELEASES = (("inCinemas", "In cinemas"), ("digitalRelease", "Digital release"),
+                    ("physicalRelease", "Physical release"))
+
+
+def _record_date(value):
+    """The calendar date in an ISO string ('2026-10-25T00:00:00Z' -> date), or None."""
+    try:
+        return datetime.strptime(str(value)[:10], "%Y-%m-%d").date()
+    except ValueError:
+        return None
+
+
+def calendar_items(config_name: str, config: dict, records: list, today) -> list:
+    """Turns one app's calendar records into the items the panel shows. Pure
+    (no network), so it can be tested with sample responses. A date-only
+    release is an all-day item and keeps its date; a timed episode keeps its
+    UTC timestamp, which the browser shows on the viewer's own local day."""
+    kind = config["library_kind"]
+    earliest, latest = today - timedelta(days=1), today + timedelta(days=COMING_UP_DAYS[-1] + 1)
+    base = {"instance": config_name, "color": config.get("color") or _DEFAULT_COLOR, "kind": kind}
+    items = []
+    for record in records or []:
+        if not isinstance(record, dict):
+            continue
+        if kind == "series":
+            when = record.get("airDateUtc") or record.get("airDate")
+            day = _record_date(when)
+            if day is None or not earliest <= day <= latest:
+                continue
+            series = record.get("series")
+            title = (series.get("title") if isinstance(series, dict) else None) or record.get("seriesTitle") or "Unknown series"
+            season, episode = record.get("seasonNumber"), record.get("episodeNumber")
+            code = f"S{season:02d}E{episode:02d}" if isinstance(season, int) and isinstance(episode, int) else ""
+            detail = " - ".join(part for part in (code, record.get("title") or "") if part)
+            items.append({**base, "title": title, "detail": detail, "when": when,
+                          "all_day": "T" not in str(when), "has_file": bool(record.get("hasFile"))})
+        elif kind == "movie":
+            for field, label in _RADARR_RELEASES:
+                day = _record_date(record.get(field)) if record.get(field) else None
+                if day is None or not earliest <= day <= latest:
+                    continue
+                items.append({**base, "title": record.get("title") or "Unknown movie", "detail": label,
+                              "when": day.isoformat(), "all_day": True, "has_file": bool(record.get("hasFile"))})
+        elif kind == "artist":
+            day = _record_date(record.get("releaseDate")) if record.get("releaseDate") else None
+            if day is None or not earliest <= day <= latest:
+                continue
+            artist = record.get("artist")
+            items.append({**base, "title": record.get("title") or "Unknown album",
+                          "detail": (artist.get("artistName") if isinstance(artist, dict) else "") or "",
+                          "when": day.isoformat(), "all_day": True, "has_file": False})
+    return items
+
+
+def fetch_calendar(name: str, config: dict, today=None) -> dict:
+    today = today or _utcnow().date()
+    params = {
+        "start": (today - timedelta(days=1)).isoformat(),
+        "end": (today + timedelta(days=COMING_UP_DAYS[-1] + 1)).isoformat(),
+        "unmonitored": "false",
+    }
+    if config["library_kind"] == "series":
+        params["includeSeries"] = "true"
+    elif config["library_kind"] == "artist":
+        params["includeArtist"] = "true"
+    url = f"{config['url'].rstrip('/')}/api/{api_version(config)}/calendar"
+    try:
+        response = requests.get(url, headers={"X-Api-Key": config["api_key"]}, params=params, timeout=15)
+        response.raise_for_status()
+        records = response.json()
+    except requests.exceptions.ConnectionError:
+        return {"error": "could not connect", "items": []}
+    except requests.exceptions.HTTPError:
+        return {"error": f"HTTP error {response.status_code} - check API key", "items": []}
+    except (requests.exceptions.RequestException, ValueError) as err:
+        return {"error": f"request failed: {scrub_log_text(err, 120)}", "items": []}
+    return {"error": None, "items": calendar_items(name, config, records if isinstance(records, list) else [], today)}
+
+
+def gather_coming_up(days: int) -> dict:
+    """Every enabled calendar-capable instance at once. Cached for a few
+    minutes (release dates barely move); a result with a failed app is not."""
+    instances = [(name, cfg) for name, cfg in APPS.items()
+                 if cfg.get("enabled", True) and cfg["library_kind"] in CALENDAR_KINDS]
+    today = _utcnow().date()
+    result = {
+        "days": days, "start": today.isoformat(), "end": (today + timedelta(days=days - 1)).isoformat(),
+        "instances": [{"name": n, "color": c.get("color") or _DEFAULT_COLOR, "kind": c["library_kind"]} for n, c in instances],
+        "items": [], "errors": [],
+    }
+    if not instances:
+        return result
+    key = (days, today, tuple((n, c["url"], c["api_key"], c.get("color")) for n, c in instances))
+    with _COMING_UP_LOCK:
+        cached = _COMING_UP_CACHE.get(key)
+        if cached and time.monotonic() - cached[0] < COMING_UP_CACHE_SECONDS:
+            return cached[1]
+    outcomes = run_concurrently({n: (lambda n=n, c=c: fetch_calendar(n, c, today)) for n, c in instances})
+    for name, _cfg in instances:
+        ok, value = outcomes[name]
+        if not ok:
+            result["errors"].append({"instance": name, "error": str(value)})
+        elif value["error"]:
+            result["errors"].append({"instance": name, "error": value["error"]})
+        else:
+            result["items"].extend(value["items"])
+    result["items"].sort(key=lambda i: (i["when"][:10], i["all_day"] is False, i["when"], i["title"].lower()))
+    if not result["errors"]:
+        with _COMING_UP_LOCK:
+            _COMING_UP_CACHE.clear()  # one live entry is plenty; never grows
+            _COMING_UP_CACHE[key] = (time.monotonic(), result)
+    return result
+
+
+@app.route("/api/coming-up")
+@login_required
+def api_coming_up():
+    days = request.args.get("days", type=int)
+    return jsonify(gather_coming_up(days if days in COMING_UP_DAYS else COMING_UP_DAYS[0]))
+
+
 # The Home page is a stack of these panels. Each user can reorder them and
 # hide the ones they don't use; that choice is stored on their own user
 # record in config.json, so it follows them to every browser and device.
-HOME_PANELS = ("attention", "libraries", "mediaservers", "indexers", "transcoders")
+HOME_PANELS = ("attention", "comingup", "libraries", "mediaservers", "indexers", "transcoders")
 # The panels made of cards a person can put in their own order.
 CARD_PANELS = ("libraries", "mediaservers", "indexers", "transcoders")
 MAX_CARDS_PER_PANEL = 100
@@ -5362,12 +5526,438 @@ def parse_users(form, existing_users: list) -> list:
     return users
 
 
+# ---------------------------------------------------------------------------
+# Backup, restore and diagnostics (Settings)
+# ---------------------------------------------------------------------------
+
+def _utcnow() -> datetime:
+    return datetime.now(timezone.utc).replace(tzinfo=None)
+
+
+EXPORT_SECTIONS = ("instances", "media_servers", "requesters", "downloaders", "indexers", "transcoders",
+                   "users", "tmdb", "tvdb", "fanart", "theaudiodb", "tautulli", "tracearr")
+# What "include API keys" covers. The session signing key (secret_key) is
+# never exported or imported: it is not a setting, and replacing it would sign
+# everyone out.
+EXPORT_SECRET_FIELDS = ("api_key", "credential", "password_hash", "pin")
+IMPORT_MAX_BYTES = 1_000_000
+CONFIG_BACKUPS_KEPT = 10
+_DEFAULT_COLOR = "#5b8cff"
+_COLOR_RE = re.compile(r"^#[0-9a-fA-F]{6}$")
+_PASSWORD_HASH_RE = re.compile(r"^(scrypt|pbkdf2|argon2)[:$]")
+
+# section -> (label, field that holds the type, allowed types, fields kept, secret field)
+_ENTRY_SECTIONS = {
+    "instances": ("Instances", "kind", KIND_META, ("name", "kind", "url", "api_key", "color", "enabled"), "api_key"),
+    "media_servers": ("Media servers", "type", MEDIA_SERVER_TYPES,
+                      ("name", "type", "url", "credential", "color", "enabled"), "credential"),
+    "requesters": ("Requesters", "type", REQUESTER_TYPES, ("name", "type", "url", "credential", "enabled"), "credential"),
+    "downloaders": ("Downloaders", "type", DOWNLOADER_TYPES, ("name", "type", "url", "api_key", "color", "enabled"), "api_key"),
+    "indexers": ("Indexer services", "type", INDEXER_SERVICE_TYPES,
+                 ("name", "type", "url", "api_key", "color", "enabled"), "api_key"),
+    "transcoders": ("Transcoders", "type", TRANSCODER_TYPES, ("name", "type", "url", "api_key", "color", "enabled"), "api_key"),
+}
+# section -> (label, {field: default}, secret fields)
+_SIMPLE_SECTIONS = {
+    "tmdb": ("TMDB", {"api_key": ""}, ("api_key",)),
+    "tvdb": ("TVDB", {"api_key": "", "pin": ""}, ("api_key", "pin")),
+    "fanart": ("Fanart.tv", {"api_key": ""}, ("api_key",)),
+    "theaudiodb": ("TheAudioDB", {"api_key": "123"}, ("api_key",)),
+    "tautulli": ("Tautulli", {"url": "", "api_key": ""}, ("api_key",)),
+    "tracearr": ("Tracearr", {"url": "", "api_key": ""}, ("api_key",)),
+}
+
+
+def apply_config(new_config: dict) -> None:
+    """Makes a config the live one - the same in-memory refresh Settings does
+    after a save, so a change applies without a restart."""
+    global CONFIG, APPS, MEDIA_SERVERS, REQUESTERS, DOWNLOADERS, INDEXERS, TRANSCODERS, USERS, TMDB, TVDB, FANART, THEAUDIODB, TAUTULLI, TRACEARR
+    CONFIG = new_config
+    APPS = build_apps(CONFIG)
+    MEDIA_SERVERS = CONFIG["media_servers"]
+    REQUESTERS = CONFIG["requesters"]
+    DOWNLOADERS = CONFIG["downloaders"]
+    INDEXERS = CONFIG["indexers"]
+    TRANSCODERS = CONFIG["transcoders"]
+    USERS = CONFIG["users"]
+    TMDB = CONFIG["tmdb"]
+    TVDB = CONFIG["tvdb"]
+    _tvdb_token_cache["token"] = None
+    _tvdb_token_cache["obtained_at"] = 0.0
+    FANART = CONFIG["fanart"]
+    THEAUDIODB = CONFIG["theaudiodb"]
+    TAUTULLI = CONFIG["tautulli"]
+    TRACEARR = CONFIG["tracearr"]
+
+
+# --- Export -----------------------------------------------------------------
+
+
+def _strip_secrets(value):
+    if isinstance(value, dict):
+        return {k: _strip_secrets(v) for k, v in value.items() if k not in EXPORT_SECRET_FIELDS}
+    if isinstance(value, list):
+        return [_strip_secrets(v) for v in value]
+    return value
+
+
+def build_export(cfg: dict, include_secrets: bool) -> dict:
+    data = copy.deepcopy({key: cfg.get(key, EMPTY_CONFIG.get(key)) for key in EXPORT_SECTIONS})
+    if not include_secrets:
+        data = _strip_secrets(data)
+    return {
+        "arrvantage_export": 1,
+        "exported_at": _utcnow().strftime("%Y-%m-%dT%H:%M:%SZ"),
+        "includes_secrets": bool(include_secrets),
+        "config": data,
+    }
+
+
+@app.route("/api/config/export")
+@login_required
+@admin_required
+def api_config_export():
+    include_secrets = request.args.get("secrets") == "1"
+    payload = build_export(CONFIG, include_secrets)
+    stamp = _utcnow().strftime("%Y%m%d-%H%M%S")
+    name = f"arrvantage-config-{stamp}{'' if include_secrets else '-no-keys'}.json"
+    response = Response(json.dumps(payload, indent=2), mimetype="application/json")
+    response.headers["Content-Disposition"] = f'attachment; filename="{name}"'
+    response.headers["Cache-Control"] = "no-store"
+    return response
+
+
+# --- Import -----------------------------------------------------------------
+
+
+def _text(value, limit: int) -> str:
+    return value.strip()[:limit] if isinstance(value, str) else ""
+
+
+def _import_entries(section: str, raw, current: list, carry_secrets: bool, notes: list):
+    label, type_field, allowed, fields, secret_field = _ENTRY_SECTIONS[section]
+    if raw is None:
+        return copy.deepcopy(current), False
+    if not isinstance(raw, list):
+        raise ValueError(f"{label} must be a list.")
+    # A file saved without keys cannot restore them, so keep the key of the
+    # entry that is already set up under the same name.
+    existing = {(e.get("name"), e.get(type_field)): e for e in current if isinstance(e, dict)}
+    entries, skipped = [], 0
+    for item in raw:
+        if not isinstance(item, dict):
+            skipped += 1
+            continue
+        name = _text(item.get("name"), 100)
+        kind = item.get(type_field)
+        url = _text(item.get("url"), 500)
+        if not name or kind not in allowed or (url and not url.lower().startswith(("http://", "https://"))):
+            skipped += 1
+            continue
+        entry = {"name": name, type_field: kind, "url": url}
+        if "api_key" in fields:
+            entry["api_key"] = _text(item.get("api_key"), 500)
+        if "credential" in fields:
+            entry["credential"] = _text(item.get("credential"), 500)
+        if "color" in fields:
+            color = item.get("color")
+            entry["color"] = color if isinstance(color, str) and _COLOR_RE.match(color) else _DEFAULT_COLOR
+        entry["enabled"] = item.get("enabled") if isinstance(item.get("enabled"), bool) else True
+        if carry_secrets and not entry.get(secret_field):
+            old = existing.get((name, kind))
+            if old and old.get(secret_field):
+                entry[secret_field] = old[secret_field]
+        entries.append(entry)
+    if skipped:
+        notes.append(f"{label}: {skipped} entr{'y' if skipped == 1 else 'ies'} in the file could not be used and will be skipped.")
+    return dedupe_names(entries), True
+
+
+def _import_simple(section: str, raw, current: dict, carry_secrets: bool):
+    _label, defaults, secret_fields = _SIMPLE_SECTIONS[section]
+    if not isinstance(raw, dict):
+        return copy.deepcopy(current) if isinstance(current, dict) else dict(defaults)
+    out = {}
+    for field, default in defaults.items():
+        value = _text(raw.get(field), 500)
+        if carry_secrets and field in secret_fields and not value:
+            value = _text((current or {}).get(field), 500)
+        out[field] = value or default
+    return out
+
+
+def _import_users(raw, notes: list) -> list:
+    if not isinstance(raw, list):
+        raise ValueError("Users must be a list.")
+    users, skipped = [], 0
+    for item in raw:
+        if not isinstance(item, dict):
+            skipped += 1
+            continue
+        username = _text(item.get("username"), 64)
+        password_hash = item.get("password_hash")
+        role = item.get("role")
+        if (not username or role not in ("admin", "user") or not isinstance(password_hash, str)
+                or not _PASSWORD_HASH_RE.match(password_hash) or any(u["username"] == username for u in users)):
+            skipped += 1
+            continue
+        perms = item.get("permissions") if isinstance(item.get("permissions"), dict) else {}
+        user = {
+            "username": username, "password_hash": password_hash, "role": role,
+            "permissions": ({"requesting": True, "searching": True} if role == "admin" else
+                            {"requesting": perms.get("requesting") is True, "searching": perms.get("searching") is True}),
+        }
+        if item.get("theme"):
+            user["theme"] = normalize_theme(item.get("theme"))
+        if item.get("accent"):
+            user["accent"] = normalize_accent(item.get("accent"))
+        if isinstance(item.get("home_layout"), dict):
+            user["home_layout"] = normalize_home_layout(item["home_layout"])
+        if isinstance(item.get("hidden_attention"), list):
+            user["hidden_attention"] = [k for k in item["hidden_attention"] if valid_hide_key(k)][:MAX_HIDDEN_ATTENTION]
+        users.append(user)
+    if skipped:
+        notes.append(f"Users: {skipped} account{'' if skipped == 1 else 's'} in the file could not be used and will be skipped.")
+    return users
+
+
+def plan_import(file_data, current: dict):
+    """
+    Turns an uploaded export (or a raw config.json) into the config that would
+    replace the current one, without touching anything. Returns
+    (new_config or None, report). A file saved without API keys keeps the keys
+    and accounts already set up; the session key is always kept.
+    """
+    report = {"errors": [], "notes": [], "sections": [], "includes_secrets": True, "signs_you_out": False}
+    if not isinstance(file_data, dict):
+        report["errors"].append("This is not an arrVantage config file.")
+        return None, report
+    if "arrvantage_export" in file_data:
+        incoming = file_data.get("config")
+        includes_secrets = file_data.get("includes_secrets") is True
+    elif any(key in file_data for key in EXPORT_SECTIONS):
+        incoming, includes_secrets = file_data, True  # a raw config.json
+    else:
+        report["errors"].append("This is not an arrVantage config file.")
+        return None, report
+    if not isinstance(incoming, dict):
+        report["errors"].append("This is not an arrVantage config file.")
+        return None, report
+    report["includes_secrets"] = includes_secrets
+    carry_secrets = not includes_secrets
+
+    new_config = {"secret_key": current.get("secret_key", "")}
+    try:
+        for section, (label, *_rest) in _ENTRY_SECTIONS.items():
+            entries, present = _import_entries(section, incoming.get(section), current.get(section, []),
+                                               carry_secrets, report["notes"])
+            new_config[section] = entries
+            report["sections"].append({
+                "label": label, "current": len(current.get(section, [])), "incoming": len(entries) if present else None,
+                "names": [e["name"] for e in entries],
+            })
+        for section in _SIMPLE_SECTIONS:
+            new_config[section] = _import_simple(section, incoming.get(section), current.get(section), carry_secrets)
+
+        raw_users = incoming.get("users")
+        if includes_secrets and raw_users is not None:
+            users = _import_users(raw_users, report["notes"])
+            if not any(u["role"] == "admin" for u in users):
+                report["errors"].append("The file has no administrator account that can be restored, so importing it "
+                                        "would lock you out. Nothing was changed.")
+                return None, report
+            new_config["users"] = users
+            report["sections"].append({"label": "Users", "current": len(current.get("users", [])),
+                                       "incoming": len(users), "names": [u["username"] for u in users]})
+            report["signs_you_out"] = not any(u["username"] == session.get("username") for u in users)
+        else:
+            new_config["users"] = copy.deepcopy(current.get("users", []))
+            report["notes"].append("Accounts and passwords are kept as they are"
+                                   + ("" if includes_secrets else " (the file was saved without keys and password hashes)") + ".")
+    except ValueError as err:
+        report["errors"].append(str(err))
+        return None, report
+    return new_config, report
+
+
+def backup_config() -> str:
+    """Saves the current settings next to config.json before an import
+    replaces them, keeping the newest few. Returns the file name."""
+    name = f"config.backup-{_utcnow().strftime('%Y%m%d-%H%M%S')}.json"
+    path = os.path.join(CONFIG_DIR, name)
+    fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)  # it holds API keys
+    with os.fdopen(fd, "w") as handle:
+        json.dump(CONFIG, handle, indent=2)
+    backups = sorted(f for f in os.listdir(CONFIG_DIR) if re.fullmatch(r"config\.backup-\d{8}-\d{6}\.json", f))
+    for stale in backups[:-CONFIG_BACKUPS_KEPT]:
+        try:
+            os.remove(os.path.join(CONFIG_DIR, stale))
+        except OSError:
+            pass
+    return name
+
+
+@app.route("/api/config/import", methods=["POST"])
+@login_required
+@admin_required
+def api_config_import():
+    """Two calls: without `confirm` it only reports what would change; with
+    `confirm: true` it backs up the current settings and applies the file."""
+    raw = request.get_data(cache=True)
+    if len(raw) > IMPORT_MAX_BYTES:
+        return jsonify({"ok": False, "errors": ["That file is too large to be an arrVantage config."]}), 413
+    payload = request.get_json(silent=True)
+    if not isinstance(payload, dict) or "file" not in payload:
+        return jsonify({"ok": False, "errors": ["Expected the file's contents."]}), 400
+    new_config, report = plan_import(payload["file"], CONFIG)
+    if report["errors"]:
+        return jsonify({"ok": False, "errors": report["errors"], "report": report}), 400
+    if payload.get("confirm") is not True:
+        return jsonify({"ok": True, "applied": False, "report": report})
+
+    backup = backup_config()
+    save_config(new_config)
+    apply_config(new_config)
+    with _ATTENTION_LOCK:
+        _ATTENTION_CACHE["data"] = None
+    with _LIBRARY_CACHE_LOCK:
+        _LIBRARY_CACHE.clear()
+    log.info("Config imported by %r; the previous settings are saved as %s", session.get("username"), backup)
+    return jsonify({"ok": True, "applied": True, "backup": backup, "report": report})
+
+
+# --- Diagnostics ------------------------------------------------------------
+
+
+def build_fingerprint() -> str:
+    """A short hash of app.py: the app has no version number of its own, and
+    this tells two builds apart when someone reports a problem."""
+    try:
+        with open(os.path.abspath(__file__), "rb") as handle:
+            return hashlib.sha256(handle.read()).hexdigest()[:10]
+    except OSError:
+        return "unknown"
+
+
+def _package_version(name: str) -> str:
+    try:
+        from importlib.metadata import version
+        return version(name)
+    except Exception:  # noqa: BLE001
+        return "unknown"
+
+
+_KIND_ALIAS = {"movie": "radarr", "series": "sonarr", "artist": "lidarr", "author": "readarr", "comic": "kapowarr"}
+
+
+def _service_aliases() -> list:
+    """(address, hostname, label) for every configured service, where the label
+    is the service type plus a number ('jellyfin-1') - what stands in for an
+    address when the person asks for it to be hidden."""
+    aliases, counts = [], {}
+
+    def add(label: str, url: str):
+        parts = urlsplit(url or "")
+        if not parts.netloc:
+            return
+        counts[label] = counts.get(label, 0) + 1
+        netloc = parts.netloc.rsplit("@", 1)[-1]
+        aliases.append((netloc, parts.hostname or "", f"{label}-{counts[label]}"))
+
+    for entry in CONFIG.get("instances", []):
+        add(_KIND_ALIAS.get(entry.get("kind"), "arr"), entry.get("url"))
+    for section in ("media_servers", "requesters", "downloaders", "indexers", "transcoders"):
+        for entry in CONFIG.get(section, []):
+            add(str(entry.get("type") or section), entry.get("url"))
+    for section in ("tautulli", "tracearr"):
+        add(section, (CONFIG.get(section) or {}).get("url"))
+    return aliases
+
+
+def hide_addresses(text: str) -> str:
+    for netloc, host, label in sorted(_service_aliases(), key=lambda a: -len(a[0])):
+        text = text.replace(netloc, label)
+        if host:
+            text = re.sub(rf"(?<![\w.-]){re.escape(host)}(?![\w.-])", label, text)
+    return re.sub(r"\b\d{1,3}(?:\.\d{1,3}){3}\b", "x.x.x.x", text)
+
+
+def _count_line(label: str, entries: list) -> str:
+    enabled = sum(1 for e in entries if e.get("enabled", True))
+    return f"  {label}: {len(entries)} ({enabled} enabled)"
+
+
+def build_diagnostics(hide: bool = True) -> str:
+    """A block of plain text for pasting into a bug report. It describes the
+    setup by type and count only - no names, URLs, keys or usernames."""
+    now = _utcnow()
+    lines = [
+        "arrVantage diagnostics",
+        f"Generated: {now.strftime('%Y-%m-%d %H:%M:%S')} UTC",
+        f"Build fingerprint: {build_fingerprint()}"
+        + (f" (version {os.environ['ARRVANTAGE_VERSION']})" if os.environ.get("ARRVANTAGE_VERSION") else
+           " (the app cannot see its own image tag - please add it when you report)"),
+        f"Running for: {int((time.time() - _PROCESS_STARTED) // 60)} min",
+        f"Python {platform.python_version()}, Flask {_package_version('flask')}, "
+        f"requests {_package_version('requests')}, gunicorn {_package_version('gunicorn')}",
+        f"Log level: {logging.getLevelName(resolve_log_level(os.environ.get('LOG_LEVEL')))}",
+        f"HTTPS-only cookies: {'on' if app.config.get('SESSION_COOKIE_SECURE') else 'off'}",
+        "",
+        "Set up:",
+    ]
+    by_kind = {}
+    for entry in CONFIG.get("instances", []):
+        by_kind.setdefault((KIND_META.get(entry.get("kind")) or {}).get("label", str(entry.get("kind"))), []).append(entry)
+    for label, entries in sorted(by_kind.items()):
+        lines.append(_count_line(label, entries))
+    for section, labels in (("media_servers", MEDIA_SERVER_TYPES), ("requesters", REQUESTER_TYPES),
+                            ("downloaders", DOWNLOADER_TYPES), ("indexers", INDEXER_SERVICE_TYPES),
+                            ("transcoders", TRANSCODER_TYPES)):
+        grouped = {}
+        for entry in CONFIG.get(section, []):
+            grouped.setdefault(labels.get(entry.get("type"), str(entry.get("type"))), []).append(entry)
+        for label, entries in sorted(grouped.items()):
+            lines.append(_count_line(label, entries))
+    for section, label in (("tautulli", "Tautulli"), ("tracearr", "Tracearr")):
+        if (CONFIG.get(section) or {}).get("url"):
+            lines.append(f"  {label}: configured")
+    lines.append(f"  Users: {len(CONFIG.get('users', []))}")
+    if not any(by_kind.values()) and len(lines) <= 9:
+        lines.append("  (nothing configured yet)")
+
+    cached = _ATTENTION_CACHE["data"]
+    lines += ["", "Last Needs attention check:"]
+    if cached:
+        summary = cached.get("summary") or {}
+        lines.append(f"  {summary.get('critical', 0)} critical, {summary.get('warning', 0)} warning"
+                     f"{'' if cached.get('complete', True) else ' (incomplete: some checks failed)'}")
+    else:
+        lines.append("  not run yet")
+
+    lines += ["", f"Recent warnings (newest last, up to {RECENT_WARNING_LIMIT}):"]
+    recent = list(_recent_warnings)
+    if not recent:
+        lines.append("  none since start")
+    for created, level, message in recent:
+        stamp = datetime.fromtimestamp(created, timezone.utc).strftime("%H:%M:%S")
+        lines.append(f"  {stamp} {level} {scrub_log_text(message, 400)}")
+
+    text = "\n".join(lines)
+    return hide_addresses(text) if hide else text
+
+
+@app.route("/api/diagnostics")
+@login_required
+@admin_required
+def api_diagnostics():
+    hide = request.args.get("hide_addresses", "1") != "0"
+    return jsonify({"ok": True, "text": build_diagnostics(hide)})
+
+
 @app.route("/settings", methods=["GET", "POST"])
 @login_required
 @admin_required
 def settings():
-    global CONFIG, APPS, MEDIA_SERVERS, REQUESTERS, DOWNLOADERS, INDEXERS, TRANSCODERS, USERS, TMDB, TVDB, FANART, THEAUDIODB, TAUTULLI, TRACEARR
-
     if request.method == "POST":
         new_config = {
             "instances": dedupe_names(parse_indexed_entries(
@@ -5404,22 +5994,7 @@ def settings():
 
         # Update the live in-memory config so the change applies
         # immediately, without needing to restart the app.
-        CONFIG = new_config
-        APPS = build_apps(CONFIG)
-        MEDIA_SERVERS = CONFIG["media_servers"]
-        REQUESTERS = CONFIG["requesters"]
-        DOWNLOADERS = CONFIG["downloaders"]
-        INDEXERS = CONFIG["indexers"]
-        TRANSCODERS = CONFIG["transcoders"]
-        USERS = CONFIG["users"]
-        TMDB = CONFIG["tmdb"]
-        TVDB = CONFIG["tvdb"]
-        _tvdb_token_cache["token"] = None
-        _tvdb_token_cache["obtained_at"] = 0.0
-        FANART = CONFIG["fanart"]
-        THEAUDIODB = CONFIG["theaudiodb"]
-        TAUTULLI = CONFIG["tautulli"]
-        TRACEARR = CONFIG["tracearr"]
+        apply_config(new_config)
 
         # Only the admin can reach this route, so keep their session
         # pointed at their account even if they just renamed themselves.

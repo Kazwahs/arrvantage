@@ -108,10 +108,14 @@ Everything else — media servers, downloaders, indexers, transcoders, request s
 
 None of these are required to get started — add only what you actually run, and expand later from Settings whenever you connect something new.
 
+## Backing up and moving
+
+The only thing that needs to survive is the data folder (`config.json`). For a copy you can keep elsewhere, or to move to a new server, use **Settings → Backup, restore and diagnostics**: *Export settings* with *Include API keys and password hashes* ticked gives you one file that *Restore from a file* can load on a fresh install. Treat that file like a password. Before any restore replaces your settings, the current ones are saved next to `config.json` as `config.backup-<date>.json`.
+
 ## Troubleshooting
 
 - **"Internal Server Error" saving Settings** — almost always the non-root-user permission issue described in step 3. Check container logs for a `PermissionError` on `config.json`.
 - **A redeploy doesn't seem to include your latest change** — confirm the GitHub Action actually finished (green checkmark) before redeploying; `pull_policy: always` only helps if a newer image genuinely exists to pull.
 - **Where are the logs?** arrVantage writes to the container's standard output only, so `docker logs arrvantage` (or the **Logs** button on the app in TrueNAS) is all you need. By default you only see problems: failed calls to your services (host, path and HTTP status or error type), failed Test buttons in Settings, failed sign-ins, and an unreadable `config.json`. Keys, tokens, passwords and query strings are never logged.
 - **Need more detail?** Add `LOG_LEVEL=DEBUG` to the container's environment and redeploy. Every call to your services is then logged with its status and timing, which usually shows straight away whether a service is rejecting a key (`HTTP 401`), is not answering (`ConnectionError`), or is being asked for the wrong path. Switch it back afterwards, since it is chatty. On TrueNAS add it under the app's environment variables.
-- **A specific integration behaves oddly** — check the container logs first (see above). Several integrations in this project were built against best-informed guesses at undocumented API shapes and later corrected once real data was available; if something looks wrong, it's usually a fixable field-name mismatch, not a fundamental problem.
+- **A specific integration behaves oddly** — check the container logs first (see above). When you report it, include the output of **Settings → Backup, restore and diagnostics → Copy diagnostics**: it describes your setup and the latest warnings without any keys, passwords or names. Several integrations in this project were built against best-informed guesses at undocumented API shapes and later corrected once real data was available; if something looks wrong, it's usually a fixable field-name mismatch, not a fundamental problem.

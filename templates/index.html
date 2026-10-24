@@ -188,6 +188,20 @@
                         </div>
                         <div class="sr-only" id="attention-status" role="status" aria-live="polite"></div>
                     </section>
+                    <section class="home-panel" data-panel="comingup" data-label="Coming Up" aria-labelledby="home-comingup-heading" hidden>
+                        <h2 class="modal-section-title" id="home-comingup-heading">Coming Up</h2>
+                        <div class="home-panel-body" id="home-comingup-body">
+                            <div class="comingup-bar">
+                                <div class="comingup-range" role="group" aria-label="How far ahead to look">
+                                    <button type="button" class="range-btn" data-days="7" aria-pressed="true">7 days</button>
+                                    <button type="button" class="range-btn" data-days="14" aria-pressed="false">14 days</button>
+                                    <button type="button" class="range-btn" data-days="30" aria-pressed="false">30 days</button>
+                                </div>
+                                <ul class="comingup-legend" id="comingup-legend" aria-label="Colour key"></ul>
+                            </div>
+                            <div id="comingup-days" aria-live="polite" aria-busy="true"></div>
+                        </div>
+                    </section>
                     <section class="home-panel" data-panel="libraries" data-label="Libraries" aria-labelledby="home-libraries-heading" hidden>
                         <h2 class="modal-section-title" id="home-libraries-heading">Libraries</h2>
                         <div class="home-panel-body stat-grid" id="home-libraries-body"></div>
@@ -594,11 +608,13 @@
 
             loadAttention();
             loadHomeStats();
+            loadComingUp();
         }
 
         function refreshHome() {
             loadAttention(true);
             loadHomeStats();
+            loadComingUp();
         }
 
         // --- Needs attention (Home) ---------------------------------------
@@ -892,6 +908,124 @@
             if (document.getElementById('home-view').style.display === 'none') return;
             loadAttention();
         }, 60000);
+
+        // --- Coming Up (Home) ----------------------------------------------
+        // Upcoming episodes, movie releases and albums from the Sonarr / Radarr /
+        // Lidarr-type instances, grouped by day and colour-coded with each
+        // instance's own colour (the bar is decoration: every item also names
+        // its instance in words). Timed items (episodes) land on the viewer's
+        // local day; date-only releases keep their date.
+        let comingUpDays = 7;
+        try { const saved = parseInt(localStorage.getItem('arrComingUpDays'), 10); if ([7, 14, 30].includes(saved)) comingUpDays = saved; } catch (e) { /* storage unavailable */ }
+        let comingUpRequest = 0;
+        let comingUpLoaded = false;
+
+        function syncComingUpRange() {
+            document.querySelectorAll('#home-comingup-body .range-btn').forEach(btn => {
+                btn.setAttribute('aria-pressed', String(Number(btn.dataset.days) === comingUpDays));
+            });
+        }
+
+        function localDateKey(date) {
+            const pad = n => String(n).padStart(2, '0');
+            return `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())}`;
+        }
+
+        function comingUpDayLabel(date, offset) {
+            const long = date.toLocaleDateString([], { weekday: 'short', month: 'short', day: 'numeric' });
+            if (offset === 0) return `Today, ${long}`;
+            if (offset === 1) return `Tomorrow, ${long}`;
+            return long;
+        }
+
+        function safeColor(value) {
+            return /^#[0-9a-fA-F]{6}$/.test(value || '') ? value : '#5b8cff';
+        }
+
+        function renderComingUp(data) {
+            const daysEl = document.getElementById('comingup-days');
+            const legend = document.getElementById('comingup-legend');
+            legend.innerHTML = data.instances.map(inst => `
+                <li class="cu-key" style="--cu-color:${safeColor(inst.color)}"><span class="cu-swatch" aria-hidden="true"></span>${escapeHtml(inst.name)}</li>
+            `).join('');
+
+            const byDay = {};
+            data.items.forEach(item => {
+                const when = item.all_day ? null : new Date(item.when);
+                const key = item.all_day ? item.when.slice(0, 10) : localDateKey(when);
+                (byDay[key] = byDay[key] || []).push({ item, when });
+            });
+
+            const start = new Date();
+            start.setHours(0, 0, 0, 0);
+            const cards = [];
+            for (let offset = 0; offset < comingUpDays; offset++) {
+                const day = new Date(start);
+                day.setDate(start.getDate() + offset);
+                const entries = (byDay[localDateKey(day)] || []).sort((a, b) => {
+                    if (a.item.all_day !== b.item.all_day) return a.item.all_day ? -1 : 1;
+                    return (a.when - b.when) || a.item.title.localeCompare(b.item.title);
+                });
+                // A month is mostly empty days: only list the ones with something on.
+                if (comingUpDays > 14 && !entries.length) continue;
+                const list = entries.length ? entries.map(({ item, when }) => {
+                    const time = when ? when.toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' }) : '';
+                    const meta = [item.instance, time, item.has_file ? 'Already downloaded' : ''].filter(Boolean).join(' \u00b7 ');
+                    return `
+                        <li><button type="button" class="cu-item" style="--cu-color:${safeColor(item.color)}" data-instance="${escapeAttr(item.instance)}">
+                            <span class="cu-title">${escapeHtml(item.title)}</span>
+                            ${item.detail ? `<span class="cu-detail">${escapeHtml(item.detail)}</span>` : ''}
+                            <span class="cu-meta">${escapeHtml(meta)}</span>
+                        </button></li>`;
+                }).join('') : '<li class="cu-none">Nothing scheduled</li>';
+                cards.push(`
+                    <section class="cu-day${entries.length ? '' : ' is-empty'}${offset === 0 ? ' is-today' : ''}" aria-label="${escapeAttr(comingUpDayLabel(day, offset))}">
+                        <h3 class="cu-day-title">${escapeHtml(comingUpDayLabel(day, offset))}</h3>
+                        <ul class="cu-list">${list}</ul>
+                    </section>`);
+            }
+
+            const errors = (data.errors || []).map(err =>
+                `<p class="cu-error" role="status">Could not load ${escapeHtml(err.instance)}: ${escapeHtml(err.error)}</p>`).join('');
+            const anything = data.items.length > 0;
+            daysEl.innerHTML = errors + (cards.length && (anything || comingUpDays <= 14)
+                ? `<div class="cu-grid">${cards.join('')}</div>`
+                : `<p class="cu-empty">Nothing is scheduled in the next ${comingUpDays} days.</p>`);
+            daysEl.setAttribute('aria-busy', 'false');
+        }
+
+        async function loadComingUp() {
+            const panel = document.querySelector('.home-panel[data-panel="comingup"]');
+            const token = ++comingUpRequest;
+            syncComingUpRange();
+            try {
+                const response = await fetch(`/api/coming-up?days=${comingUpDays}`);
+                if (!response.ok) throw new Error(`HTTP ${response.status}`);
+                const data = await response.json();
+                if (token !== comingUpRequest) return;  // a newer request replaced this one
+                panel.hidden = !data.instances.length;
+                if (data.instances.length) {
+                    renderComingUp(data);
+                    comingUpLoaded = true;
+                }
+            } catch (err) {
+                if (token !== comingUpRequest || comingUpLoaded) return;  // keep what is already shown
+                document.getElementById('comingup-days').innerHTML = '<p class="cu-error" role="status">Could not load Coming Up.</p>';
+            }
+            refreshPanelTools();
+        }
+
+        document.getElementById('home-comingup-body').addEventListener('click', event => {
+            const range = event.target.closest('.range-btn');
+            if (range) {
+                comingUpDays = Number(range.dataset.days);
+                try { localStorage.setItem('arrComingUpDays', String(comingUpDays)); } catch (e) { /* storage unavailable */ }
+                loadComingUp();
+                return;
+            }
+            const item = event.target.closest('.cu-item');
+            if (item && !arranging) selectInstance(item.dataset.instance);
+        });
 
         // Each Home panel is its own block (see #home-panels), so the order a
         // person chose survives every refresh: this only fills the bodies.
@@ -3598,6 +3732,7 @@
         }
         loadAttention();
         loadHomeStats();
+        loadComingUp();
     </script>
 
 </body>

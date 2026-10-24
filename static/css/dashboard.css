@@ -357,6 +357,80 @@ body {
 
 /* --- Home: needs attention --- */
 
+/* --- Home: Coming Up ---
+   Day cards in a wrapping grid. Each item has a bar in its instance's colour
+   (--cu-color, set per item from the instance's own colour); the instance is
+   also named in words, so colour is never the only signal. */
+
+.comingup-bar {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    justify-content: space-between;
+    gap: var(--space-3);
+    margin-bottom: var(--space-3);
+}
+.comingup-range { display: inline-flex; border: 1px solid var(--border); border-radius: var(--radius); overflow: hidden; }
+.range-btn {
+    background: var(--panel);
+    border: none;
+    border-right: 1px solid var(--border);
+    color: var(--muted);
+    font: inherit;
+    font-size: var(--text-sm);
+    padding: 0.4rem 0.8rem;
+    cursor: pointer;
+}
+.range-btn:last-child { border-right: none; }
+.range-btn:hover { color: var(--text); }
+.range-btn[aria-pressed="true"] { background: var(--accent); color: var(--on-accent); font-weight: 600; }
+
+.comingup-legend { display: flex; flex-wrap: wrap; gap: var(--space-1) var(--space-3); list-style: none; margin: 0; padding: 0; }
+.cu-key { display: inline-flex; align-items: center; gap: 0.35rem; color: var(--muted); font-size: var(--text-sm); }
+.cu-swatch { width: 0.7rem; height: 0.7rem; border-radius: 2px; background: var(--cu-color); }
+
+.cu-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(190px, 1fr)); gap: var(--space-3); }
+.cu-day {
+    background: var(--panel);
+    border: 1px solid var(--border);
+    border-radius: var(--radius-md);
+    padding: var(--space-3);
+    min-width: 0;
+}
+.cu-day.is-today { border-color: var(--accent); }
+.cu-day.is-empty { background: transparent; }
+.cu-day-title { margin: 0 0 var(--space-2) 0; font-size: var(--text-sm); font-weight: 600; color: var(--text); }
+.cu-day.is-empty .cu-day-title { color: var(--muted); font-weight: 500; }
+.cu-list { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: var(--space-2); }
+.cu-none { color: var(--muted); font-size: var(--text-sm); }
+
+.cu-item {
+    display: flex;
+    flex-direction: column;
+    gap: 0.1rem;
+    width: 100%;
+    text-align: left;
+    font: inherit;
+    color: var(--text);
+    background: var(--sidebar);
+    border: 1px solid var(--border);
+    border-left: 4px solid var(--cu-color);
+    border-radius: var(--radius-sm);
+    padding: 0.4rem 0.55rem;
+    cursor: pointer;
+}
+.cu-item:hover { border-color: var(--cu-color); }
+.cu-title { font-size: var(--text-md); font-weight: 600; overflow-wrap: anywhere; }
+.cu-detail { font-size: var(--text-sm); color: var(--text); overflow-wrap: anywhere; }
+.cu-meta { font-size: var(--text-xs); color: var(--muted); }
+.cu-error { color: var(--error-text); font-size: var(--text-sm); margin: 0 0 var(--space-2) 0; }
+.cu-empty { color: var(--muted); font-size: var(--text-md); margin: 0; }
+.is-arranging .home-panel[data-panel="comingup"] .cu-item { pointer-events: none; }
+
+@media (max-width: 600px) {
+    .cu-grid { grid-template-columns: 1fr; }
+}
+
 /* --- Home: arrangeable panels ---
    Home is a stack of .home-panel blocks. Normally they are just content;
    while #home-view has .is-arranging each one shows its move controls and
