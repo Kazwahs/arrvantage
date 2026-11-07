@@ -1,4 +1,4 @@
-{# One instance's panels (library, request, queue, history, system).
+{# One instance's panels (library, request, queue, history, system; plus Search for Librarr).
    Rendered on demand by /fragment/instance/<name> and injected into the
    dashboard the first time that instance is opened - it is not part of the
    main page. Expects: instance (see build_instance_view), can_search. #}
@@ -11,9 +11,13 @@
     {% if instance.library_error %}
         <div class="error">{{ instance.library_error }}</div>
     {% elif instance.library_items|length == 0 %}
-        <div class="empty">Nothing in the library yet</div>
+        <div class="empty">{% if instance.library_kind == "librarr" %}Nothing imported by Librarr yet{% else %}Nothing in the library yet{% endif %}</div>
     {% else %}
+        {% if instance.library_kind == "librarr" %}
+        <p class="librarr-note-line">Librarr lists the files it has imported itself, grouped by title.{% if not instance.library_complete %} Only the first {{ instance.library_file_count }} files are shown.{% endif %}</p>
+        {% endif %}
         <div class="filter-row">
+            {% if instance.library_kind != "librarr" %}
             <select id="status-filter-{{ instance.name }}" aria-label="Filter by status" onchange="filterLibrary('{{ instance.name }}')">
                 <option value="all">All statuses</option>
                 {% for s in instance.status_options %}<option value="{{ s }}">{{ s }}</option>{% endfor %}
@@ -22,6 +26,7 @@
                 <option value="all">All genres</option>
                 {% for g in instance.genre_options %}<option value="{{ g }}">{{ g }}</option>{% endfor %}
             </select>
+            {% endif %}
             <select id="sort-{{ instance.name }}" aria-label="Sort by" onchange="sortLibrary('{{ instance.name }}')">
                 <option value="title">Sort: Alphabetical</option>
                 {% if instance.library_kind in ("movie", "series") %}
@@ -57,7 +62,7 @@
                     <span class="status-badge status-{{ item.status|lower }}">{{ item.status }}</span>
                 </div>
                 <div class="card-title">{{ item.title }}</div>
-                <div class="card-genre">{{ item.genre }}</div>
+                <div class="card-genre">{% if instance.library_kind == "librarr" %}{{ item.detail }}{% else %}{{ item.genre }}{% endif %}</div>
                 {% if item.status == "Missing" and can_search %}
                 <div class="card-actions">
                     <button class="mini-btn" onclick="event.stopPropagation(); triggerAutoSearch(this, '{{ instance.name }}', {{ item.item_id }})">Auto Search</button>
@@ -137,6 +142,9 @@
 
 <!-- Queue panel -->
 <div class="panel" data-instance="{{ instance.name }}" data-view="queue">
+    {% if instance.library_kind == "librarr" %}
+    <div class="librarr-toolbar"><button type="button" class="mini-btn" data-librarr-refresh>Refresh</button></div>
+    {% endif %}
     {% if instance.error %}
         <div class="error">{{ instance.error }}</div>
     {% elif instance.queue_items|length == 0 %}
@@ -163,6 +171,9 @@
             {% for msg in item.status_messages %}
             <div class="queue-status-msg is-error">{{ msg }}</div>
             {% endfor %}
+            {% if item.job_id and item.status == "failed" and can_search %}
+            <div class="card-actions"><button type="button" class="mini-btn" data-librarr-retry="{{ item.job_id }}">Retry</button></div>
+            {% endif %}
         </div>
         {% endfor %}
     {% endif %}
@@ -204,6 +215,7 @@
         {% endfor %}
     {% endif %}
 
+    {% if instance.library_kind != "librarr" %}
     <div class="section-heading">Disk space</div>
     {% if instance.diskspace_error %}
         <div class="error">{{ instance.diskspace_error }}</div>
@@ -229,7 +241,24 @@
         </div>
         {% endfor %}
     {% endif %}
+    {% endif %}
 </div>
+
+{% if instance.library_kind == "librarr" %}
+<!-- Search panel (Librarr only): look for manga and send one to Librarr -->
+<div class="panel" data-instance="{{ instance.name }}" data-view="search">
+    {% if can_search %}
+    <form class="search-row librarr-form">
+        <input type="search" name="q" maxlength="100" required autocomplete="off"
+               placeholder="Search manga to download" aria-label="Search manga to download">
+        <button type="submit">Search</button>
+    </form>
+    <div class="librarr-results" aria-live="polite"></div>
+    {% else %}
+    <div class="placeholder">Your account can't search or send downloads.</div>
+    {% endif %}
+</div>
+{% endif %}
 {% if instance.library_kind == "movie" %}
 <script type="application/json" class="collections-data">{{ instance.collections | tojson }}</script>
 {% endif %}

@@ -328,6 +328,20 @@ KIND_META = {
         "label": "Comics (Kapowarr-type)",
         "backend": "kapowarr",
     },
+    # Librarr (manga / books fetcher) is not a Servarr app either: its key goes
+    # in an X-Api-Key header but its endpoints and answers are its own, so the
+    # fetch_* functions dispatch to fetch_librarr_* (see "backend"). It has no
+    # Overseerr link; manga are searched and sent from its own Search tab.
+    "librarr": {
+        "queue_endpoint": "/api/downloads",
+        "history_endpoint": "/api/activity",
+        "library_endpoint": "/api/library/manga",
+        "health_endpoint": "/health",
+        "diskspace_endpoint": "",
+        "seerr_media_type": None,
+        "label": "Manga and books (Librarr)",
+        "backend": "librarr",
+    },
 }
 
 # Media server types we can actually talk to correctly. Jellyfin and Emby
@@ -398,7 +412,6 @@ SEERR_REQUEST_STATUS_CLASS = {
 DOWNLOADER_TYPES = {
     "qbittorrent": "qBittorrent",
     "sabnzbd": "SABnzbd",
-    "librarr": "Librarr",
 }
 
 # Indexer manager types. Only Prowlarr is supported today, but kept as
@@ -429,11 +442,52 @@ EMPTY_CONFIG = {
 }
 
 
+def migrate_librarr_downloaders(cfg: dict) -> bool:
+    """
+    Librarr was briefly a download-client type (in the development build before this one); it is an instance kind
+    now. Moves any such entry from "downloaders" to "instances", keeping its
+    name, address, key, colour and on/off switch, and renaming it only if an
+    instance already has that name. Returns True when something moved. Safe to
+    run again - once moved there is nothing left to move.
+    """
+    downloaders = cfg.get("downloaders")
+    if not isinstance(downloaders, list):
+        return False
+    moving = [d for d in downloaders if isinstance(d, dict) and d.get("type") == "librarr"]
+    if not moving:
+        return False
+    instances = cfg.get("instances")
+    if not isinstance(instances, list):
+        instances = cfg["instances"] = []
+    taken = {i.get("name") for i in instances if isinstance(i, dict)}
+    for old in moving:
+        name = old.get("name") if isinstance(old.get("name"), str) and old.get("name") else "Librarr"
+        unique, number = name, 1
+        while unique in taken:
+            number += 1
+            unique = f"{name} ({number})"
+        taken.add(unique)
+        instances.append({
+            "name": unique, "kind": "librarr", "url": old.get("url", ""), "api_key": old.get("api_key", ""),
+            "color": old.get("color") or "#5b8cff", "enabled": old.get("enabled", True),
+        })
+    cfg["downloaders"] = [d for d in downloaders if not (isinstance(d, dict) and d.get("type") == "librarr")]
+    return True
+
+
 def load_config() -> dict:
     if os.path.exists(CONFIG_PATH):
         try:
             with open(CONFIG_PATH, "r") as f:
-                return json.load(f)
+                cfg = json.load(f)
+            if isinstance(cfg, dict) and migrate_librarr_downloaders(cfg):
+                log.info("Moved Librarr from Downloaders to Instances")
+                try:
+                    save_config(cfg)
+                except OSError as err:
+                    log.error("Could not save the Librarr move to config.json (%s); it will be redone on next start",
+                              err.__class__.__name__)
+            return cfg
         except (json.JSONDecodeError, OSError) as err:
             # Falls through to writing a fresh empty config below, so say so.
             log.error("config.json could not be read (%s: %s); starting from an empty config",
@@ -876,6 +930,8 @@ def get_queue_status_messages(record: dict) -> list:
 def fetch_queue(name: str, config: dict) -> dict:
     if config.get("backend") == "kapowarr":
         return fetch_kapowarr_queue(name, config)
+    if config.get("backend") == "librarr":
+        return fetch_librarr_queue(name, config)
 
     url = config["url"].rstrip("/") + config["queue_endpoint"]
     headers = {"X-Api-Key": config["api_key"]}
@@ -932,6 +988,8 @@ def get_history_event(record: dict) -> str:
 def fetch_history(name: str, config: dict) -> dict:
     if config.get("backend") == "kapowarr":
         return fetch_kapowarr_history(name, config)
+    if config.get("backend") == "librarr":
+        return fetch_librarr_history(name, config)
 
     url = config["url"].rstrip("/") + config["history_endpoint"]
     headers = {"X-Api-Key": config["api_key"]}
@@ -971,6 +1029,8 @@ def fetch_history(name: str, config: dict) -> dict:
 def fetch_health(name: str, config: dict) -> dict:
     if config.get("backend") == "kapowarr":
         return fetch_kapowarr_health(name, config)
+    if config.get("backend") == "librarr":
+        return fetch_librarr_health(name, config)
 
     url = config["url"].rstrip("/") + config["health_endpoint"]
     headers = {"X-Api-Key": config["api_key"]}
@@ -1002,6 +1062,8 @@ def fetch_health(name: str, config: dict) -> dict:
 def fetch_diskspace(name: str, config: dict) -> dict:
     if config.get("backend") == "kapowarr":
         return fetch_kapowarr_diskspace(name, config)
+    if config.get("backend") == "librarr":
+        return fetch_librarr_diskspace(name, config)
 
     url = config["url"].rstrip("/") + config["diskspace_endpoint"]
     headers = {"X-Api-Key": config["api_key"]}
@@ -1410,6 +1472,8 @@ def get_library_item(record: dict, kind: str, config: dict) -> dict:
 def fetch_library(name: str, config: dict) -> dict:
     if config.get("backend") == "kapowarr":
         return fetch_kapowarr_library(name, config)
+    if config.get("backend") == "librarr":
+        return fetch_librarr_library(name, config)
 
     url = config["url"].rstrip("/") + config["library_endpoint"]
     headers = {"X-Api-Key": config["api_key"]}
@@ -1754,6 +1818,11 @@ def api_details(instance_name, item_id):
             return jsonify(fetch_author_books(config, item_id))
         if kind == "comic":
             return jsonify(fetch_kapowarr_issues(config, item_id))
+        if kind == "librarr":
+            details = librarr_item_details(instance_name, config, item_id)
+            if details is None:
+                return jsonify({"error": "that title is no longer in Librarr's library"}), 404
+            return jsonify(details)
         return jsonify({"error": "unsupported library kind"}), 400
     except requests.exceptions.RequestException as err:
         return jsonify({"error": str(err)}), 502
@@ -2842,27 +2911,6 @@ def api_downloader_status(name):
     elif downloader["type"] == "sabnzbd":
         result = fetch_sabnzbd_queue(downloader)
         return jsonify({"type": "sabnzbd", "error": result["error"], "items": result["items"], "summary": result["summary"]})
-    elif downloader["type"] == "librarr":
-        try:
-            downloads = librarr_get(downloader, "/api/downloads")
-        except requests.exceptions.JSONDecodeError:
-            return jsonify({"type": "librarr", "error": "unexpected answer - is this the right address?"})
-        except requests.exceptions.RequestException as err:
-            return jsonify({"type": "librarr", "error": short_request_error(err)})
-        except ValueError:
-            return jsonify({"type": "librarr", "error": "unexpected answer - is this the right address?"})
-        try:
-            activity = librarr_get(downloader, "/api/activity", {"limit": 20})
-        except (requests.exceptions.RequestException, ValueError):
-            activity = None
-        health = fetch_librarr_health(downloader)
-        items = librarr_jobs(downloads)
-        return jsonify({
-            "type": "librarr", "error": None, "items": items, "recent": librarr_recent_imports(activity),
-            "summary": {"version": health.get("version") or "", "sources_enabled": health.get("sources_enabled"),
-                        "library_items": health.get("library_items"),
-                        "failed": sum(1 for i in items if i["group"] == "failed")},
-        })
     return jsonify({"error": "unknown downloader type"}), 400
 
 
@@ -2886,8 +2934,6 @@ def api_downloader_action(name):
             qbt_torrent_action(downloader, action, item_id, delete_files=bool(body.get("delete_files")))
         elif downloader["type"] == "sabnzbd":
             sabnzbd_action(downloader, action, item_id)
-        elif downloader["type"] == "librarr":
-            librarr_action(downloader, action, item_id)
         else:
             return jsonify({"ok": False, "error": "unknown downloader type"}), 400
     except (requests.exceptions.RequestException, ValueError) as err:
@@ -3051,8 +3097,6 @@ def fetch_download_client(downloader: dict) -> dict:
             if isinstance(data, dict) and data.get("error"):
                 return {"error": "SABnzbd refused the request - check the API key"}
             return sab_downloads_view(data)
-        if downloader["type"] == "librarr":
-            return fetch_librarr_card(downloader)
     except requests.exceptions.JSONDecodeError:
         return {"error": "unexpected answer - is this the right address?"}
     except requests.exceptions.RequestException as err:
@@ -3092,9 +3136,9 @@ def api_downloads():
 
 
 # ---------------------------------------------------------------------------
-# Librarr - a book / manga / audiobook fetcher, added as a download-client
-# type (name, address, API key). Checked against its README and a real
-# server (v1.5.0):
+# Librarr - a book / manga / audiobook fetcher, added as an instance kind
+# (name, address, API key). Checked against its README and a real server
+# (v1.5.0):
 # - GET /health needs no sign-in: {"status": "ok", "version", "uptime_seconds",
 #   "library_items", "sources_enabled", "sources": [...]}.
 # - Everything else takes the API key as an X-Api-Key header (README: "every
@@ -3105,7 +3149,11 @@ def api_downloads():
 #   defensively and unknown progress is shown as unknown, never as 0%.
 # - GET /api/activity -> {"events": [{id, event_type, title, detail, job_id,
 #   timestamp}], total}; event_type includes download_start, torrent_import
-#   and nzb_import.
+#   and nzb_import, and also sign-in and settings events that are left out.
+# - GET /api/library/manga?page=N -> {"items": [...], "page", "pages",
+#   "total"}, 100 per page. One item is one FILE (a series with ten volumes is
+#   ten items sharing a title): {id, title, author, file_format, file_path,
+#   file_size, added_at, source, media_type}. The cards group files by title.
 # - GET /api/search/manga?q= -> {"results": [...], "sources": [...],
 #   "metadata", "search_time_ms"}. It asks about a dozen sources and took
 #   ~30 s, which would freeze the single gunicorn worker, so the search runs
@@ -3128,28 +3176,44 @@ LIBRARR_SEARCH_KEEP_SECONDS = 600
 LIBRARR_SEARCH_MAX_KEPT = 20
 LIBRARR_SEARCH_MAX_RUNNING = 3
 LIBRARR_RESULT_LIMIT = 40
-LIBRARR_RECENT_LIMIT = 3
+LIBRARR_HISTORY_LIMIT = 25
+LIBRARR_LIBRARY_MAX_PAGES = 30       # 100 files a page: lists up to 3,000 files
+LIBRARR_LIBRARY_BUDGET_SECONDS = 20  # stop asking for pages after this long
+LIBRARR_HISTORY_HIDDEN = {"login", "logout", "settings_changed"}
+LIBRARR_HISTORY_LABELS = {"download_start": "Started", "torrent_import": "Imported", "nzb_import": "Imported"}
 LIBRARR_JOB_ID = re.compile(r"^[A-Za-z0-9_-]{1,80}$")
 _LIBRARR_SEARCHES: dict = {}
 _LIBRARR_LOCK = threading.Lock()
 
 
-def librarr_headers(downloader: dict) -> dict:
-    return {"X-Api-Key": downloader.get("api_key", ""), "Accept": "application/json"}
+def librarr_headers(config: dict) -> dict:
+    return {"X-Api-Key": config.get("api_key", ""), "Accept": "application/json"}
 
 
-def librarr_get(downloader: dict, path: str, params=None, timeout: float = LIBRARR_TIMEOUT):
-    response = requests.get(f"{downloader['url'].rstrip('/')}{path}", headers=librarr_headers(downloader),
+def librarr_get(config: dict, path: str, params=None, timeout: float = LIBRARR_TIMEOUT):
+    response = requests.get(f"{config['url'].rstrip('/')}{path}", headers=librarr_headers(config),
                             params=params, timeout=timeout)
     response.raise_for_status()
     return response.json()
 
 
-def fetch_librarr_health(downloader: dict) -> dict:
+def librarr_call(config: dict, path: str, params=None, timeout: float = LIBRARR_TIMEOUT):
+    """librarr_get that returns (data, None) or (None, "a few plain words")."""
+    try:
+        return librarr_get(config, path, params, timeout), None
+    except requests.exceptions.JSONDecodeError:
+        return None, "unexpected answer - is this the right address?"
+    except requests.exceptions.RequestException as err:
+        return None, short_request_error(err)
+    except ValueError:
+        return None, "unexpected answer - is this the right address?"
+
+
+def librarr_probe(config: dict) -> dict:
     """Is Librarr answering? /health needs no key, so a wrong key can never
     make a running server look down. One more try after a refused connection
     or a timeout before it counts."""
-    url = f"{downloader['url'].rstrip('/')}/health"
+    url = f"{config['url'].rstrip('/')}/health"
     error = "could not connect"
     for _ in range(2):
         try:
@@ -3207,13 +3271,18 @@ def _librarr_progress(job: dict):
     for key in ("progress", "percent", "percentage"):
         value = job.get(key)
         if isinstance(value, (int, float)) and not isinstance(value, bool) and 0 <= value <= 100:
-            return _percent(value)
+            return round(value)
     return None
 
 
-def librarr_jobs(downloads) -> list:
-    """Librarr's /api/downloads answer -> the jobs still to do or failed, as
-    plain items. Pure; finished jobs are dropped."""
+LIBRARR_GROUP_LABELS = {"downloading": "Downloading", "preparing": "Preparing", "queued": "Queued", "failed": "Failed"}
+
+
+def librarr_queue_items(downloads) -> list:
+    """Librarr's /api/downloads answer -> queue rows in the shape every
+    instance's Queue tab uses. Pure; finished jobs are dropped. A failed job
+    has status "failed" and a message, so Needs attention picks it up the way
+    it does for Kapowarr."""
     rows = downloads.get("downloads") if isinstance(downloads, dict) else None
     items = []
     for job in rows if isinstance(rows, list) else []:
@@ -3223,67 +3292,183 @@ def librarr_jobs(downloads) -> list:
         if group == "done":
             continue
         job_id = str(job.get("job_id") or "")
+        note = scrub_log_text(str(job.get("error") or ""), 120) if group == "failed" else ""
         items.append({
-            "name": scrub_log_text(str(job.get("title") or "(unknown)"), 200), "progress": _librarr_progress(job),
-            "speed": 0, "eta": "", "group": group, "job_id": job_id if LIBRARR_JOB_ID.match(job_id) else "",
-            "source": scrub_log_text(str(job.get("source") or ""), 40),
-            "note": scrub_log_text(str(job.get("error") or ""), 120) if group == "failed" else "",
+            "title": scrub_log_text(str(job.get("title") or "(unknown)"), 200),
+            "time_left": LIBRARR_GROUP_LABELS[group], "status": group, "progress_pct": _librarr_progress(job),
+            "status_messages": [note or "Download failed"] if group == "failed" else [],
+            "indexer": scrub_log_text(str(job.get("source") or ""), 40), "download_client": "", "protocol": "",
+            "quality": "", "custom_format_score": 0, "size_human": "",
+            "job_id": job_id if LIBRARR_JOB_ID.match(job_id) else "",
         })
-    items.sort(key=lambda i: {"downloading": 0, "preparing": 1, "queued": 2, "failed": 3}[i["group"]])
+    items.sort(key=lambda i: ["downloading", "preparing", "queued", "failed"].index(i["status"]))
     return items
 
 
-def librarr_recent_imports(activity) -> list:
-    """The latest finished imports from /api/activity, newest first. Pure."""
+def fetch_librarr_queue(name: str, config: dict) -> dict:
+    data, error = librarr_call(config, "/api/downloads")
+    if error:
+        return {"error": error, "queue_items": []}
+    return {"error": None, "queue_items": librarr_queue_items(data)}
+
+
+def librarr_history_items(activity) -> list:
+    """Librarr's /api/activity answer -> history rows, newest first. Pure.
+    Sign-in and settings events are left out; they are not about books."""
     events = activity.get("events") if isinstance(activity, dict) else None
-    imports = [e for e in events or [] if isinstance(e, dict) and str(e.get("event_type") or "").endswith("import")]
-    imports.sort(key=lambda e: e.get("id") if isinstance(e.get("id"), int) else 0, reverse=True)
-    recent = []
-    for event in imports[:LIBRARR_RECENT_LIMIT]:
+    rows = [e for e in events or [] if isinstance(e, dict) and str(e.get("event_type") or "") not in LIBRARR_HISTORY_HIDDEN]
+    rows.sort(key=lambda e: e.get("id") if isinstance(e.get("id"), int) else 0, reverse=True)
+    items = []
+    for event in rows[:LIBRARR_HISTORY_LIMIT]:
+        kind = str(event.get("event_type") or "")
         when = str(event.get("timestamp") or "")
         try:
             datetime.fromisoformat(when)
         except ValueError:
             when = ""
-        recent.append({"title": scrub_log_text(str(event.get("title") or "(unknown)"), 200), "when": when})
-    return recent
+        items.append({
+            "title": scrub_log_text(str(event.get("title") or event.get("detail") or "(unknown)"), 200),
+            "event": LIBRARR_HISTORY_LABELS.get(kind) or scrub_log_text(kind.replace("_", " ").capitalize() or "Event", 40),
+            "date": when[:10],
+        })
+    return items
 
 
-def librarr_downloads_view(downloads, activity=None) -> dict:
-    """Librarr's answers -> the Home panel's card. Pure. Librarr reports no
-    transfer speed, so the speeds are None and the panel leaves them out."""
-    items = librarr_jobs(downloads)
-    counts = {"downloading": 0, "preparing": 0, "queued": 0, "failed": 0}
-    for item in items:
-        counts[item["group"]] += 1
-    active = counts["downloading"] + counts["preparing"]
-    return {
-        "error": None, "paused": False, "down_speed": None, "up_speed": None, "connection": "",
-        "counts": counts, "total": len(items), "state": "downloading" if active else ("waiting" if counts["queued"] else "idle"),
-        "items": items[:DOWNLOADS_ITEM_LIMIT], "recent": librarr_recent_imports(activity),
-    }
+def fetch_librarr_history(name: str, config: dict) -> dict:
+    data, error = librarr_call(config, "/api/activity", {"limit": LIBRARR_HISTORY_LIMIT * 2})
+    if error:
+        return {"error": error, "history_items": []}
+    return {"error": None, "history_items": librarr_history_items(data)}
 
 
-def fetch_librarr_card(downloader: dict) -> dict:
-    downloads = librarr_get(downloader, "/api/downloads")
-    try:
-        activity = librarr_get(downloader, "/api/activity", {"limit": 20})
-    except (requests.exceptions.RequestException, ValueError):
-        activity = None  # recent imports are a bonus; the queue still shows
-    return librarr_downloads_view(downloads, activity)
+def fetch_librarr_health(name: str, config: dict) -> dict:
+    """System tab: Librarr's own /health. A server that answers is a notice;
+    no search source switched on is a warning, because every search would be
+    empty."""
+    probe = librarr_probe(config)
+    if probe["error"]:
+        return {"error": probe["error"], "health_items": []}
+    parts = [f"Librarr {probe['version']} is running" if probe.get("version") else "Librarr is running"]
+    if probe.get("sources_enabled") is not None:
+        parts.append(f"{probe['sources_enabled']} search source{'' if probe['sources_enabled'] == 1 else 's'} on")
+    items = [{"type": "notice", "source": "Librarr", "message": ", ".join(parts), "wiki_url": ""}]
+    if probe.get("sources_enabled") == 0:
+        items.append({"type": "warning", "source": "Librarr", "wiki_url": "",
+                      "message": "No search sources are switched on, so searches will find nothing"})
+    return {"error": None, "health_items": items}
 
 
-def librarr_action(downloader: dict, action: str, job_id: str) -> None:
-    if action != "retry" or not LIBRARR_JOB_ID.match(str(job_id or "")):
-        raise ValueError("unknown action")
-    response = requests.post(f"{downloader['url'].rstrip('/')}/api/downloads/jobs/{job_id}/retry",
-                             headers=librarr_headers(downloader), timeout=15)
+def fetch_librarr_diskspace(name: str, config: dict) -> dict:
+    return {"error": None, "diskspace_items": []}  # Librarr does not report free space
+
+
+def _librarr_size(size) -> str:
+    """A file size in plain words: KB, MB or GB, whichever reads best."""
+    if not isinstance(size, int) or isinstance(size, bool) or size <= 0:
+        return ""
+    if size < 1024 ** 2:
+        return f"{max(1, round(size / 1024))} KB"
+    return f"{size / (1024 ** 2):.0f} MB" if size < 1024 ** 3 else format_size_gb(size)
+
+
+def _librarr_file_name(path) -> str:
+    return re.split(r"[\\/]", str(path or ""))[-1][:200]
+
+
+def librarr_group_files(files: list) -> list:
+    """Librarr's one-item-per-file library -> one card per title. Pure. A card
+    keeps the file names (never full paths) for the details window, and its
+    item_id is its lowest file id, which stays put while the title is there."""
+    groups = {}
+    for record in files:
+        if not isinstance(record, dict) or not isinstance(record.get("id"), int) or isinstance(record.get("id"), bool):
+            continue
+        title = scrub_log_text(str(record.get("title") or "(untitled)"), 200)
+        groups.setdefault(title.strip().casefold(), []).append((title, record))
+    cards = []
+    for rows in groups.values():
+        rows.sort(key=lambda r: (_librarr_file_name(r[1].get("file_path")).casefold(), r[1]["id"]))
+        size = sum(r["file_size"] for _, r in rows if isinstance(r.get("file_size"), int) and not isinstance(r.get("file_size"), bool))
+        added = max((str(r.get("added_at") or "") for _, r in rows), default="")
+        formats = sorted({str(r.get("file_format") or "").lower() for _, r in rows if r.get("file_format")})
+        count = len(rows)
+        cards.append({
+            "title": rows[0][0], "detail": f"{count} file{'' if count == 1 else 's'}" + (f" · {', '.join(formats)}" if formats else ""),
+            "status": "Downloaded", "genre": "Unknown", "cover_url": "", "item_id": min(r["id"] for _, r in rows),
+            "tmdb_id": None, "tvdb_id": None, "foreign_artist_id": None, "release_date": "", "date_added": added,
+            "episode_have": None, "episode_total": None, "size_bytes": size, "file_count": count,
+            "librarr_files": [{
+                "name": scrub_log_text(_librarr_file_name(r.get("file_path")) or title, 200),
+                "format": scrub_log_text(str(r.get("file_format") or ""), 12).lower(),
+                "size_human": _librarr_size(r.get("file_size")),
+                "added": str(r.get("added_at") or "")[:10], "source": scrub_log_text(str(r.get("source") or ""), 40),
+            } for title, r in rows],
+        })
+    cards.sort(key=lambda c: c["title"].lower())
+    return cards
+
+
+def fetch_librarr_library(name: str, config: dict) -> dict:
+    empty = {"library_items": [], "status_options": [], "genre_options": []}
+    files, complete, started = [], False, time.monotonic()
+    for page in range(1, LIBRARR_LIBRARY_MAX_PAGES + 1):
+        data, error = librarr_call(config, "/api/library/manga", {"page": page}, timeout=15)
+        rows = data.get("items") if isinstance(data, dict) else None
+        if error or not isinstance(rows, list):
+            if page == 1:
+                return {"error": error or "unexpected answer - is this the right address?", **empty}
+            break  # a later page failed: show what came back, marked as not complete
+        files.extend(r for r in rows if isinstance(r, dict))
+        pages = data.get("pages")
+        if not rows or (isinstance(pages, int) and page >= pages):
+            complete = True
+            break
+        if time.monotonic() - started > LIBRARR_LIBRARY_BUDGET_SECONDS:
+            break
+    cards = librarr_group_files(files)
+    return {"error": None, "library_items": cards, "status_options": ["Downloaded"] if cards else [], "genre_options": [],
+            "file_count": len(files), "complete": complete}
+
+
+def librarr_item_details(name: str, config: dict, item_id: int):
+    """The details window for one title: its files. None if it is gone."""
+    library = fetch_library_cached(name, config)
+    if library.get("error"):
+        return {"error": library["error"]}
+    card = next((c for c in library["library_items"] if c.get("item_id") == item_id), None)
+    if card is None:
+        return None
+    return {"title": card["title"], "files": card["librarr_files"], "file_count": card["file_count"],
+            "total_size": _librarr_size(card["size_bytes"])}
+
+
+def librarr_retry(config: dict, job_id: str) -> None:
+    if not LIBRARR_JOB_ID.match(str(job_id or "")):
+        raise ValueError("unknown job")
+    response = requests.post(f"{config['url'].rstrip('/')}/api/downloads/jobs/{job_id}/retry",
+                             headers=librarr_headers(config), timeout=15)
     response.raise_for_status()
 
 
-def _librarr_downloader(name: str):
-    downloader = get_downloader(name)
-    return downloader if downloader and downloader.get("type") == "librarr" else None
+def _librarr_instance(name: str):
+    config = APPS.get(name)
+    return config if config and config.get("backend") == "librarr" and config.get("enabled", True) else None
+
+
+@app.route("/api/librarr/retry/<name>/<job_id>", methods=["POST"])
+@login_required
+@permission_required("searching")
+def api_librarr_retry(name, job_id):
+    config = _librarr_instance(name)
+    if not config:
+        return jsonify({"ok": False, "error": "unknown Librarr"}), 404
+    try:
+        librarr_retry(config, job_id)
+    except ValueError as err:
+        return jsonify({"ok": False, "error": str(err)}), 400
+    except requests.exceptions.RequestException as err:
+        return jsonify({"ok": False, "error": short_request_error(err)}), 502
+    return jsonify({"ok": True})
 
 
 def librarr_search_results(data) -> tuple:
@@ -3343,10 +3528,10 @@ def _librarr_prune(now: float) -> None:
         del _LIBRARR_SEARCHES[oldest]
 
 
-def _run_librarr_search(sid: str, downloader: dict, query: str) -> None:
+def _run_librarr_search(sid: str, config: dict, query: str) -> None:
     error, rows, raw, took = None, [], {}, 0
     try:
-        data = librarr_get(downloader, "/api/search/manga", {"q": query}, timeout=LIBRARR_SEARCH_TIMEOUT)
+        data = librarr_get(config, "/api/search/manga", {"q": query}, timeout=LIBRARR_SEARCH_TIMEOUT)
         rows, raw = librarr_search_results(data)
         took = data.get("search_time_ms") if isinstance(data, dict) and isinstance(data.get("search_time_ms"), (int, float)) else 0
     except requests.exceptions.JSONDecodeError:
@@ -3365,8 +3550,8 @@ def _run_librarr_search(sid: str, downloader: dict, query: str) -> None:
 @login_required
 @permission_required("searching")
 def api_librarr_search_start(name):
-    downloader = _librarr_downloader(name)
-    if not downloader:
+    config = _librarr_instance(name)
+    if not config:
         return jsonify({"error": "unknown Librarr"}), 404
     body = request.get_json(silent=True) or {}
     query = " ".join(str(body.get("q") or "").split())
@@ -3384,7 +3569,7 @@ def api_librarr_search_start(name):
         sid = secrets.token_urlsafe(9)
         _LIBRARR_SEARCHES[sid] = {"client": name, "owner": owner, "query": query, "state": "running", "started": now,
                                   "error": None, "rows": [], "raw": {}, "took_ms": 0}
-    threading.Thread(target=_run_librarr_search, args=(sid, dict(downloader), query), name="arrv-librarr-search", daemon=True).start()
+    threading.Thread(target=_run_librarr_search, args=(sid, dict(config), query), name="arrv-librarr-search", daemon=True).start()
     return jsonify({"id": sid})
 
 
@@ -3409,8 +3594,8 @@ def api_librarr_search_result(name, sid):
 @login_required
 @permission_required("searching")
 def api_librarr_grab(name, sid, token):
-    downloader = _librarr_downloader(name)
-    if not downloader:
+    config = _librarr_instance(name)
+    if not config:
         return jsonify({"ok": False, "error": "unknown Librarr"}), 404
     with _LIBRARR_LOCK:
         entry = _librarr_search_entry(name, sid)
@@ -3419,7 +3604,7 @@ def api_librarr_grab(name, sid, token):
         return jsonify({"ok": False, "error": "that result has expired - search again"}), 404
     force = bool((request.get_json(silent=True) or {}).get("force"))
     try:
-        response = requests.post(f"{downloader['url'].rstrip('/')}/api/download", headers=librarr_headers(downloader),
+        response = requests.post(f"{config['url'].rstrip('/')}/api/download", headers=librarr_headers(config),
                                  json=librarr_grab_body(result, force), timeout=20)
         try:
             answer = response.json()
@@ -3435,8 +3620,8 @@ def api_librarr_grab(name, sid, token):
             return jsonify({"ok": False, "error": reason}), 502
     except requests.exceptions.RequestException as err:
         return jsonify({"ok": False, "error": short_request_error(err)}), 502
-    with _DOWNLOADS_LOCK:
-        _DOWNLOADS_CACHE["at"] = 0.0  # Home should show the new job on its next look
+    with _ATTENTION_LOCK:
+        _ATTENTION_CACHE["data"] = None  # a new job can change Needs attention on its next look
     return jsonify({"ok": True, "job_id": scrub_log_text(str(answer.get("job_id") or ""), 80)})
 
 
@@ -4844,6 +5029,25 @@ def fetch_home_stats() -> dict:
                 "size_display": format_size_gb(size_bytes),
                 "error": None,
             })
+        elif config["library_kind"] == "librarr":
+            # Librarr lists files, not titles, and only what it imported itself,
+            # so the card says titles and files and has no "missing". The size
+            # is left out when the list was cut short: a partial total would
+            # read as the real one.
+            files = library.get("file_count") or 0
+            complete = library.get("complete", True)
+            instance_stats.append({
+                "name": name,
+                "kind": "librarr",
+                "icon_url": INSTANCE_ICONS.get("librarr", ""),
+                "total": len(items),
+                "downloaded": len(items),
+                "missing": 0,
+                "unit": "titles",
+                "detail_text": f"{files:,} file{'' if files == 1 else 's'}" + ("" if complete else " (list cut short)"),
+                "size_display": format_size_gb(size_bytes) if complete else "",
+                "error": None,
+            })
         else:
             # "Complete"/"Downloaded" count as downloaded; everything else
             # (Missing, Partial, Unknown) counts as missing - Partial items
@@ -5065,6 +5269,8 @@ def build_instance_view(name: str, config: dict, perms: dict) -> dict:
         "history_error": history["error"],
         "library_items": library["library_items"],
         "library_error": library["error"],
+        "library_file_count": library.get("file_count"),
+        "library_complete": library.get("complete", True),
         "status_options": library["status_options"],
         "genre_options": library["genre_options"],
         "request_items": seerr["request_items"],
@@ -5388,8 +5594,6 @@ def probe_downloader(downloader: dict) -> dict:
         return fetch_qbittorrent_transfer_info(downloader)
     if downloader["type"] == "sabnzbd":
         return {"error": fetch_sabnzbd_queue(downloader)["error"]}
-    if downloader["type"] == "librarr":
-        return {"error": fetch_librarr_health(downloader)["error"]}
     return {"error": None}
 
 
@@ -6040,6 +6244,21 @@ def _run_settings_test():
                 f"{url.rstrip('/')}/api/system/status",
                 params={"api_key": credential}, timeout=8,
             )
+        elif category == "instance" and kind_or_type == "librarr":
+            # /health needs no key, so it cannot say whether the key works:
+            # ask for the download list, which does.
+            response = requests.get(
+                f"{url.rstrip('/')}/api/downloads",
+                headers={"X-Api-Key": credential, "Accept": "application/json"}, timeout=8,
+            )
+            response.raise_for_status()
+            try:
+                body = response.json()
+                shaped = isinstance(body, dict) and "downloads" in body
+            except ValueError:
+                shaped = False
+            if not shaped:
+                return jsonify({"ok": False, "error": "answered, but not like Librarr - check the address and the API key"})
         elif category == "instance":
             meta = KIND_META.get(kind_or_type)
             if not meta:
@@ -6089,21 +6308,6 @@ def _run_settings_test():
             )
             if response.ok and "error" in response.json():
                 return jsonify({"ok": False, "error": response.json()["error"]})
-        elif category == "downloader" and kind_or_type == "librarr":
-            # /health needs no key, so it cannot say whether the key works:
-            # ask for the download list, which does.
-            response = requests.get(
-                f"{url.rstrip('/')}/api/downloads",
-                headers={"X-Api-Key": credential, "Accept": "application/json"}, timeout=8,
-            )
-            response.raise_for_status()
-            try:
-                body = response.json()
-                shaped = isinstance(body, dict) and "downloads" in body
-            except ValueError:
-                shaped = False
-            if not shaped:
-                return jsonify({"ok": False, "error": "answered, but not like Librarr - check the address and the API key"})
         elif category == "indexerserver" and kind_or_type == "prowlarr":
             response = requests.get(
                 f"{url.rstrip('/')}/api/v1/system/status",
@@ -6455,6 +6659,10 @@ def plan_import(file_data, current: dict):
         return None, report
     report["includes_secrets"] = includes_secrets
     carry_secrets = not includes_secrets
+    if isinstance(incoming.get("instances"), list):
+        incoming = copy.deepcopy(incoming)  # an older file kept Librarr under Downloaders
+        if migrate_librarr_downloaders(incoming):
+            report["notes"].append("Librarr was a download client in this file; it will be added as an instance instead.")
 
     new_config = {"secret_key": current.get("secret_key", "")}
     try:
@@ -6557,7 +6765,7 @@ def _package_version(name: str) -> str:
         return "unknown"
 
 
-_KIND_ALIAS = {"movie": "radarr", "series": "sonarr", "artist": "lidarr", "author": "readarr", "comic": "kapowarr"}
+_KIND_ALIAS = {"movie": "radarr", "series": "sonarr", "artist": "lidarr", "author": "readarr", "comic": "kapowarr", "librarr": "librarr"}
 
 
 def _service_aliases() -> list:

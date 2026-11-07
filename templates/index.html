@@ -241,6 +241,7 @@
             <div class="view-tabs">
                 <button class="view-tab active" data-view="library" onclick="selectView('library')">Library</button>
                 <button class="view-tab" data-view="request" onclick="selectView('request')">Request</button>
+                <button class="view-tab hidden" data-view="search" onclick="selectView('search')">Search</button>
                 <button class="view-tab" data-view="queue" onclick="selectView('queue')">Queue <span id="queue-tab-count">0</span></button>
                 <button class="view-tab" data-view="history" onclick="selectView('history')">History</button>
                 <button class="view-tab" data-view="system" onclick="selectView('system')">System <span id="system-tab-badge"></span></button>
@@ -1106,18 +1107,8 @@
             return `${(mb / 1024).toFixed(1)} GB/s`;
         }
 
-        function agoText(iso) {
-            const then = Date.parse(iso);
-            if (!then) return '';
-            const s = Math.max(0, (Date.now() - then) / 1000);
-            if (s < 90) return 'just now';
-            if (s < 5400) return `${Math.round(s / 60)} min ago`;
-            if (s < 129600) return `${Math.round(s / 3600)} h ago`;
-            return `${Math.round(s / 86400)} d ago`;
-        }
-
         function downloadItemHTML(item) {
-            // Some clients (Librarr) do not report progress: say nothing rather than 0%.
+            // A client that does not report progress shows none rather than 0%.
             const known = item.progress !== null && item.progress !== undefined;
             const pct = known ? Math.max(0, Math.min(100, Number(item.progress) || 0)) : 0;
             const meta = known ? [`${pct.toFixed(pct % 1 ? 1 : 0)}%`] : [];
@@ -1134,12 +1125,6 @@
                     ${bar}
                     <span class="dl-meta">${escapeHtml(meta.filter(Boolean).join(' \u00b7 '))}</span>
                 </li>`;
-        }
-
-        function downloadRecentHTML(recent) {
-            if (!recent || !recent.length) return '';
-            return `<p class="dl-recent-title">Recently imported</p><ul class="dl-recent">${recent.map(r => `
-                <li><span class="dl-name" title="${escapeAttr(r.title)}">${escapeHtml(r.title)}</span>${r.when ? `<span class="dl-meta">${escapeHtml(agoText(r.when))}</span>` : ''}</li>`).join('')}</ul>`;
         }
 
         function downloadCardHTML(client) {
@@ -1165,7 +1150,7 @@
             else if (client.state === 'paused') body = '<p class="dl-quiet">The queue is paused.</p>';
             else if (client.total) body = `<p class="dl-quiet">${client.total} in the queue, none moving.</p>`;
             else body = '<p class="dl-quiet">Nothing downloading.</p>';
-            return `<div class="dl-card" style="--cu-color:${safeColor(client.color)}">${head}${speeds}${body}${counts && client.items.length ? `<p class="dl-counts">${escapeHtml(counts)}</p>` : ''}${downloadRecentHTML(client.recent)}</div>`;
+            return `<div class="dl-card" style="--cu-color:${safeColor(client.color)}">${head}${speeds}${body}${counts && client.items.length ? `<p class="dl-counts">${escapeHtml(counts)}</p>` : ''}</div>`;
         }
 
         function renderDownloads(data) {
@@ -1233,10 +1218,10 @@
                             <div class="stat-value">${inst.total.toLocaleString()}</div>
                             <div class="stat-label">${escapeHtml(inst.unit)} in library</div>
                             <div class="stat-detail">
-                                <span class="test-ok">${inst.downloaded.toLocaleString()} downloaded</span>
-                                &middot; <span class="test-fail">${inst.missing.toLocaleString()} missing</span>
+                                ${inst.detail_text ? escapeHtml(inst.detail_text) : `<span class="test-ok">${inst.downloaded.toLocaleString()} downloaded</span>
+                                &middot; <span class="test-fail">${inst.missing.toLocaleString()} missing</span>`}
                             </div>
-                            <div class="stat-foot">${escapeHtml(inst.size_display)} on disk</div>
+                            ${inst.size_display ? `<div class="stat-foot">${escapeHtml(inst.size_display)} on disk</div>` : ''}
                         </div>
                     `).join('');
             }
@@ -2734,11 +2719,6 @@
                     return;
                 }
 
-                if (data.type === 'librarr') {
-                    renderLibrarr(name, listEl, data);
-                    return;
-                }
-
                 // The summary bar (global speed/connection/disk space)
                 // is worth showing even when nothing is actively
                 // downloading right now - that's exactly when a paused
@@ -2867,72 +2847,69 @@
             }
         }
 
-        // --- Librarr: its queue, recent imports and a manga search --------------
-        // The status block is redrawn on every refresh; the search form and its
-        // results are built once so a refresh never wipes what was typed or found.
-        let librarrRun = 0;
+        // --- Librarr: a Search tab (manga search and send) and queue Retry ------
+        // Librarr is an instance, so its Library, Queue, History and System tabs
+        // come from the server like any other's. The Search tab is built once
+        // per instance and is not part of those panels, so reloading the queue
+        // never wipes what was typed or found.
+        const librarrRuns = {};
 
-        function librarrEnsure(name, listEl) {
-            if (listEl.querySelector('.librarr-status')) return;
-            listEl.innerHTML = `
-                <div class="librarr-status"></div>
-                <form class="search-row librarr-form">
-                    <input type="search" name="q" maxlength="100" required autocomplete="off"
-                           placeholder="Search manga to download" aria-label="Search manga to download">
-                    <button type="submit">Search</button>
-                </form>
-                <div class="librarr-results" aria-live="polite"></div>`;
-            if (listEl.dataset.librarrBound) return;
-            listEl.dataset.librarrBound = '1';
-            listEl.addEventListener('submit', event => {
-                if (!event.target.closest('.librarr-form')) return;
-                event.preventDefault();
-                librarrSearch(name, listEl);
-            });
-            listEl.addEventListener('click', event => {
-                const grab = event.target.closest('[data-librarr-grab]');
-                if (grab && !grab.disabled) librarrGrab(name, grab);
-            });
+        function librarrPanel(name) {
+            return document.querySelector(`.panel[data-instance="${CSS.escape(name)}"][data-view="search"]`);
         }
 
-        function librarrJobHTML(name, item) {
-            const meta = [{ downloading: 'Downloading', preparing: 'Preparing', queued: 'Queued', failed: 'Failed' }[item.group] || ''];
-            if (item.progress !== null && item.progress !== undefined) meta.push(`${item.progress}%`);
-            if (item.source) meta.push(item.source);
-            if (item.note) meta.push(item.note);
-            const retry = item.group === 'failed' && item.job_id
-                ? `<div class="card-actions card-actions--flush"><button class="mini-btn" type="button" onclick="downloaderAction(${escapeAttr(JSON.stringify(name))}, 'retry', ${escapeAttr(JSON.stringify(item.job_id))}, this)">Retry</button></div>`
-                : '';
-            return `<div class="request-row"><div class="request-info"><div class="request-title">${escapeHtml(item.name)}</div>
-                <div class="request-meta">${escapeHtml(meta.filter(Boolean).join(' · '))}</div></div>${retry}</div>`;
+        // Re-fetches an instance's panels and swaps in only the live ones
+        // (queue, history, system), leaving the Search tab and library as they are.
+        async function refreshInstanceLive(name) {
+            try {
+                const response = await fetch(`/fragment/instance/${encodeURIComponent(name)}`);
+                if (!response.ok) return;
+                const doc = new DOMParser().parseFromString(await response.text(), 'text/html');
+                const host = document.querySelector(`.instance-panels[data-instance-panels="${CSS.escape(name)}"]`);
+                if (!host) return;
+                ['queue', 'history', 'system'].forEach(view => {
+                    const fresh = doc.querySelector(`.panel[data-view="${view}"]`);
+                    const old = host.querySelector(`.panel[data-view="${view}"]`);
+                    if (fresh && old) old.replaceWith(fresh);
+                });
+                const fragment = doc.querySelector('.instance-fragment');
+                const tab = document.querySelector(`.instance-tab[data-instance="${CSS.escape(name)}"]`);
+                if (fragment && tab) {
+                    tab.dataset.queueCount = fragment.dataset.queueCount;
+                    tab.dataset.healthCount = fragment.dataset.healthCount;
+                }
+                refreshInstanceChrome();
+            } catch (err) { /* the old panels stay; Refresh can be pressed again */ }
         }
 
-        function renderLibrarr(name, listEl, data) {
-            librarrEnsure(name, listEl);
-            const s = data.summary || {};
-            const parts = [];
-            if (s.version) parts.push(`Librarr ${escapeHtml(s.version)}`);
-            if (typeof s.sources_enabled === 'number') parts.push(`${s.sources_enabled} sources on`);
-            if (typeof s.library_items === 'number') parts.push(`${s.library_items.toLocaleString()} in library`);
-            if (s.failed) parts.push(`<span class="inline-badge badge-warning">${s.failed} failed</span>`);
-            const summary = parts.length ? `<div class="queue-item-meta queue-item-meta--spaced">${parts.join(' &middot; ')}</div>` : '';
-            const jobs = data.items.length ? data.items.map(item => librarrJobHTML(name, item)).join('') : '<div class="empty">Nothing active right now</div>';
-            const recent = (data.recent || []).length
-                ? `<p class="dl-recent-title">Recently imported</p>${data.recent.map(r => `<div class="request-row"><div class="request-info"><div class="request-title">${escapeHtml(r.title)}</div>${r.when ? `<div class="request-meta">${escapeHtml(agoText(r.when))}</div>` : ''}</div></div>`).join('')}`
-                : '';
-            listEl.querySelector('.librarr-status').innerHTML = summary + jobs + recent;
+        async function librarrRetry(name, jobId, button) {
+            button.disabled = true;
+            button.textContent = 'Retrying...';
+            try {
+                const response = await fetch(`/api/librarr/retry/${encodeURIComponent(name)}/${encodeURIComponent(jobId)}`, { method: 'POST' });
+                const data = await response.json();
+                if (data.ok) {
+                    await refreshInstanceLive(name);
+                    return;
+                }
+                button.textContent = 'Failed';
+                button.title = data.error || 'Unknown error';
+            } catch (err) {
+                button.textContent = 'Failed';
+            }
+            button.disabled = false;
         }
 
-        async function librarrSearch(name, listEl) {
-            const form = listEl.querySelector('.librarr-form');
-            const out = listEl.querySelector('.librarr-results');
+        async function librarrSearch(name, panel) {
+            const form = panel.querySelector('.librarr-form');
+            const out = panel.querySelector('.librarr-results');
             const button = form.querySelector('button');
             const query = form.q.value.trim();
             if (query.length < 2) {
                 out.innerHTML = '<div class="empty">Type at least 2 characters.</div>';
                 return;
             }
-            const run = ++librarrRun;
+            const run = (librarrRuns[name] = (librarrRuns[name] || 0) + 1);
             button.disabled = true;
             out.innerHTML = '<div class="empty">Searching every source. This can take up to a minute.</div>';
             const base = `/api/librarr/search/${encodeURIComponent(name)}`;
@@ -2941,9 +2918,9 @@
                 const started = await start.json();
                 if (!start.ok) throw new Error(started.error || `HTTP ${start.status}`);
                 const deadline = Date.now() + 120000;
-                while (run === librarrRun) {
+                while (run === librarrRuns[name]) {
                     await new Promise(resolve => setTimeout(resolve, 1500));
-                    if (run !== librarrRun) return;
+                    if (run !== librarrRuns[name]) return;
                     const poll = await fetch(`${base}/${encodeURIComponent(started.id)}`);
                     const data = await poll.json();
                     if (!poll.ok) throw new Error(data.error || `HTTP ${poll.status}`);
@@ -2956,9 +2933,9 @@
                     return;
                 }
             } catch (err) {
-                if (run === librarrRun) out.innerHTML = `<div class="test-fail">Search failed: ${escapeHtml(err.message)}</div>`;
+                if (run === librarrRuns[name]) out.innerHTML = `<div class="test-fail">Search failed: ${escapeHtml(err.message)}</div>`;
             } finally {
-                if (run === librarrRun) button.disabled = false;
+                if (run === librarrRuns[name]) button.disabled = false;
             }
         }
 
@@ -2998,9 +2975,8 @@
                 const data = await response.json();
                 if (data.ok) {
                     button.textContent = 'Sent';
-                    note.textContent = 'Librarr started the download. It will show above.';
-                    loadDownloaderStatus(name);
-                    loadDownloads(true);
+                    note.textContent = 'Librarr started the download. It will show in the Queue tab.';
+                    refreshInstanceLive(name);
                     return;
                 }
                 if (data.already_in_library) {
@@ -3018,6 +2994,33 @@
             button.disabled = false;
         }
 
+        // One set of listeners for every Librarr instance: the instance name
+        // rides on the element, so panels loaded later need no wiring.
+        document.addEventListener('submit', event => {
+            const form = event.target.closest('.librarr-form');
+            if (!form) return;
+            event.preventDefault();
+            const panel = form.closest('.panel');
+            librarrSearch(panel.dataset.instance, panel);
+        });
+        document.addEventListener('click', event => {
+            const grab = event.target.closest('[data-librarr-grab]');
+            if (grab && !grab.disabled) {
+                librarrGrab(grab.closest('.panel').dataset.instance, grab);
+                return;
+            }
+            const retry = event.target.closest('[data-librarr-retry]');
+            if (retry && !retry.disabled) {
+                librarrRetry(retry.closest('.panel').dataset.instance, retry.dataset.librarrRetry, retry);
+                return;
+            }
+            const refresh = event.target.closest('[data-librarr-refresh]');
+            if (refresh) {
+                refresh.disabled = true;
+                refreshInstanceLive(refresh.closest('.panel').dataset.instance);
+            }
+        });
+
         function selectView(view) {
             currentView = view;
             document.querySelectorAll('.view-tab').forEach(el => {
@@ -3034,8 +3037,12 @@
             const requestTab = document.querySelector('.view-tab[data-view="request"]');
             requestTab.classList.toggle('hidden', !hasRequests);
 
-            // If Request was selected but this instance doesn't support it, bounce back to Library
-            if (!hasRequests && currentView === 'request') {
+            // Librarr instances get a Search tab (manga search and send) instead of Request
+            const hasSearch = activeInstanceEl.dataset.kind === 'librarr' && CAN_SEARCH;
+            document.querySelector('.view-tab[data-view="search"]').classList.toggle('hidden', !hasSearch);
+
+            // If a tab was selected but this instance doesn't have it, bounce back to Library
+            if ((!hasRequests && currentView === 'request') || (!hasSearch && currentView === 'search')) {
                 selectView('library');
             }
         }
@@ -3438,8 +3445,9 @@
                 else if (kind === 'artist') renderArtistModal(instance, data);
                 else if (kind === 'author') renderAuthorModal(data);
                 else if (kind === 'comic') renderComicModal(data);
+                else if (kind === 'librarr') renderLibrarrModal(data);
 
-                loadPlayLinks(title, kind); // no-op for 'author'/'comic' - books and comics aren't playable
+                loadPlayLinks(title, kind); // no-op for 'author'/'comic'/'librarr' - books, comics and manga aren't playable
             } catch (err) {
                 body.innerHTML = '<div class="modal-loading">Something went wrong loading details.</div>';
             }
@@ -3939,6 +3947,22 @@
             `;
         }
 
+        function renderLibrarrModal(data) {
+            const content = document.getElementById('modal-body');
+            const rows = data.files.map(f => `
+                <div class="item">
+                    <span>${escapeHtml(f.name)}</span>
+                    <span class="col-muted">${escapeHtml([f.format.toUpperCase(), f.size_human, f.added].filter(Boolean).join(' · '))}</span>
+                </div>
+            `).join('');
+            const summary = `${data.file_count} file${data.file_count === 1 ? '' : 's'}${data.total_size ? ' · ' + data.total_size : ''}`;
+            content.innerHTML = `
+                <div class="modal-overview">${escapeHtml(summary)}</div>
+                <div class="modal-section-title">Files</div>
+                ${rows || '<div class="modal-empty">No files listed</div>'}
+            `;
+        }
+
         function renderCast(instance, cast, available) {
             if (!available) return '<div class="modal-empty">Cast info not available for this instance.</div>';
             if (!cast || cast.length === 0) return '<div class="modal-empty">No cast listed.</div>';
@@ -4022,7 +4046,7 @@
         // by title rather than reading arr's own data. ---
 
         async function loadPlayLinks(title, kind) {
-            if (kind === 'author' || kind === 'comic') return; // books and comics aren't playable
+            if (kind === 'author' || kind === 'comic' || kind === 'librarr') return; // books, comics and manga aren't playable
 
             try {
                 const response = await fetch(`/api/play-links?title=${encodeURIComponent(title)}&kind=${kind}`);
