@@ -1106,18 +1106,40 @@
             return `${(mb / 1024).toFixed(1)} GB/s`;
         }
 
+        function agoText(iso) {
+            const then = Date.parse(iso);
+            if (!then) return '';
+            const s = Math.max(0, (Date.now() - then) / 1000);
+            if (s < 90) return 'just now';
+            if (s < 5400) return `${Math.round(s / 60)} min ago`;
+            if (s < 129600) return `${Math.round(s / 3600)} h ago`;
+            return `${Math.round(s / 86400)} d ago`;
+        }
+
         function downloadItemHTML(item) {
-            const pct = Math.max(0, Math.min(100, Number(item.progress) || 0));
-            const meta = [`${pct.toFixed(pct % 1 ? 1 : 0)}%`];
+            // Some clients (Librarr) do not report progress: say nothing rather than 0%.
+            const known = item.progress !== null && item.progress !== undefined;
+            const pct = known ? Math.max(0, Math.min(100, Number(item.progress) || 0)) : 0;
+            const meta = known ? [`${pct.toFixed(pct % 1 ? 1 : 0)}%`] : [];
             if (item.group === 'downloading' && item.speed >= 1024) meta.push(formatSpeed(item.speed));
             if (item.eta) meta.push(`${item.eta} left`);
-            if (item.group !== 'downloading') meta.push({ stalled: 'Stalled', queued: 'Queued', preparing: 'Preparing' }[item.group] || '');
+            if (item.group !== 'downloading') meta.push({ stalled: 'Stalled', queued: 'Queued', preparing: 'Preparing', failed: 'Failed' }[item.group] || '');
+            if (item.note) meta.push(item.note);
+            const bar = known
+                ? `<span class="dl-bar" role="progressbar" aria-valuemin="0" aria-valuemax="100" aria-valuenow="${pct}" aria-label="${escapeAttr(item.name)}"><span style="width:${pct}%"></span></span>`
+                : '';
             return `
                 <li class="dl-item">
                     <span class="dl-name" title="${escapeAttr(item.name)}">${escapeHtml(item.name)}</span>
-                    <span class="dl-bar" role="progressbar" aria-valuemin="0" aria-valuemax="100" aria-valuenow="${pct}" aria-label="${escapeAttr(item.name)}"><span style="width:${pct}%"></span></span>
+                    ${bar}
                     <span class="dl-meta">${escapeHtml(meta.filter(Boolean).join(' \u00b7 '))}</span>
                 </li>`;
+        }
+
+        function downloadRecentHTML(recent) {
+            if (!recent || !recent.length) return '';
+            return `<p class="dl-recent-title">Recently imported</p><ul class="dl-recent">${recent.map(r => `
+                <li><span class="dl-name" title="${escapeAttr(r.title)}">${escapeHtml(r.title)}</span>${r.when ? `<span class="dl-meta">${escapeHtml(agoText(r.when))}</span>` : ''}</li>`).join('')}</ul>`;
         }
 
         function downloadCardHTML(client) {
@@ -1130,11 +1152,12 @@
             if (client.error) {
                 return `<div class="dl-card" style="--cu-color:${safeColor(client.color)}">${head}<div class="test-fail stat-error">Not answering: ${escapeHtml(client.error)}</div></div>`;
             }
-            const speeds = `<div class="dl-speeds"><span><span aria-hidden="true">&darr;</span><span class="sr-only">Download</span> ${formatSpeed(client.down_speed)}</span>${client.up_speed === null ? '' : `<span><span aria-hidden="true">&uarr;</span><span class="sr-only">Upload</span> ${formatSpeed(client.up_speed)}</span>`}</div>`;
+            const speeds = client.down_speed === null ? '' : `<div class="dl-speeds"><span><span aria-hidden="true">&darr;</span><span class="sr-only">Download</span> ${formatSpeed(client.down_speed)}</span>${client.up_speed === null ? '' : `<span><span aria-hidden="true">&uarr;</span><span class="sr-only">Upload</span> ${formatSpeed(client.up_speed)}</span>`}</div>`;
             const c = client.counts || {};
             const counts = [
                 c.downloading ? `${c.downloading} downloading` : '', c.preparing ? `${c.preparing} preparing` : '',
                 c.stalled ? `${c.stalled} stalled` : '', c.queued ? `${c.queued} queued` : '', c.paused ? `${c.paused} paused` : '',
+                c.failed ? `${c.failed} failed` : '',
             ].filter(Boolean).join(' \u00b7 ');
             const more = client.total > client.items.length ? `<p class="dl-more">and ${client.total - client.items.length} more</p>` : '';
             let body;
@@ -1142,7 +1165,7 @@
             else if (client.state === 'paused') body = '<p class="dl-quiet">The queue is paused.</p>';
             else if (client.total) body = `<p class="dl-quiet">${client.total} in the queue, none moving.</p>`;
             else body = '<p class="dl-quiet">Nothing downloading.</p>';
-            return `<div class="dl-card" style="--cu-color:${safeColor(client.color)}">${head}${speeds}${body}${counts && client.items.length ? `<p class="dl-counts">${escapeHtml(counts)}</p>` : ''}</div>`;
+            return `<div class="dl-card" style="--cu-color:${safeColor(client.color)}">${head}${speeds}${body}${counts && client.items.length ? `<p class="dl-counts">${escapeHtml(counts)}</p>` : ''}${downloadRecentHTML(client.recent)}</div>`;
         }
 
         function renderDownloads(data) {
@@ -2711,6 +2734,11 @@
                     return;
                 }
 
+                if (data.type === 'librarr') {
+                    renderLibrarr(name, listEl, data);
+                    return;
+                }
+
                 // The summary bar (global speed/connection/disk space)
                 // is worth showing even when nothing is actively
                 // downloading right now - that's exactly when a paused
@@ -2837,6 +2865,157 @@
                 btn.textContent = 'Failed';
                 row.querySelectorAll('button').forEach(b => b.disabled = false);
             }
+        }
+
+        // --- Librarr: its queue, recent imports and a manga search --------------
+        // The status block is redrawn on every refresh; the search form and its
+        // results are built once so a refresh never wipes what was typed or found.
+        let librarrRun = 0;
+
+        function librarrEnsure(name, listEl) {
+            if (listEl.querySelector('.librarr-status')) return;
+            listEl.innerHTML = `
+                <div class="librarr-status"></div>
+                <form class="search-row librarr-form">
+                    <input type="search" name="q" maxlength="100" required autocomplete="off"
+                           placeholder="Search manga to download" aria-label="Search manga to download">
+                    <button type="submit">Search</button>
+                </form>
+                <div class="librarr-results" aria-live="polite"></div>`;
+            if (listEl.dataset.librarrBound) return;
+            listEl.dataset.librarrBound = '1';
+            listEl.addEventListener('submit', event => {
+                if (!event.target.closest('.librarr-form')) return;
+                event.preventDefault();
+                librarrSearch(name, listEl);
+            });
+            listEl.addEventListener('click', event => {
+                const grab = event.target.closest('[data-librarr-grab]');
+                if (grab && !grab.disabled) librarrGrab(name, grab);
+            });
+        }
+
+        function librarrJobHTML(name, item) {
+            const meta = [{ downloading: 'Downloading', preparing: 'Preparing', queued: 'Queued', failed: 'Failed' }[item.group] || ''];
+            if (item.progress !== null && item.progress !== undefined) meta.push(`${item.progress}%`);
+            if (item.source) meta.push(item.source);
+            if (item.note) meta.push(item.note);
+            const retry = item.group === 'failed' && item.job_id
+                ? `<div class="card-actions card-actions--flush"><button class="mini-btn" type="button" onclick="downloaderAction(${escapeAttr(JSON.stringify(name))}, 'retry', ${escapeAttr(JSON.stringify(item.job_id))}, this)">Retry</button></div>`
+                : '';
+            return `<div class="request-row"><div class="request-info"><div class="request-title">${escapeHtml(item.name)}</div>
+                <div class="request-meta">${escapeHtml(meta.filter(Boolean).join(' · '))}</div></div>${retry}</div>`;
+        }
+
+        function renderLibrarr(name, listEl, data) {
+            librarrEnsure(name, listEl);
+            const s = data.summary || {};
+            const parts = [];
+            if (s.version) parts.push(`Librarr ${escapeHtml(s.version)}`);
+            if (typeof s.sources_enabled === 'number') parts.push(`${s.sources_enabled} sources on`);
+            if (typeof s.library_items === 'number') parts.push(`${s.library_items.toLocaleString()} in library`);
+            if (s.failed) parts.push(`<span class="inline-badge badge-warning">${s.failed} failed</span>`);
+            const summary = parts.length ? `<div class="queue-item-meta queue-item-meta--spaced">${parts.join(' &middot; ')}</div>` : '';
+            const jobs = data.items.length ? data.items.map(item => librarrJobHTML(name, item)).join('') : '<div class="empty">Nothing active right now</div>';
+            const recent = (data.recent || []).length
+                ? `<p class="dl-recent-title">Recently imported</p>${data.recent.map(r => `<div class="request-row"><div class="request-info"><div class="request-title">${escapeHtml(r.title)}</div>${r.when ? `<div class="request-meta">${escapeHtml(agoText(r.when))}</div>` : ''}</div></div>`).join('')}`
+                : '';
+            listEl.querySelector('.librarr-status').innerHTML = summary + jobs + recent;
+        }
+
+        async function librarrSearch(name, listEl) {
+            const form = listEl.querySelector('.librarr-form');
+            const out = listEl.querySelector('.librarr-results');
+            const button = form.querySelector('button');
+            const query = form.q.value.trim();
+            if (query.length < 2) {
+                out.innerHTML = '<div class="empty">Type at least 2 characters.</div>';
+                return;
+            }
+            const run = ++librarrRun;
+            button.disabled = true;
+            out.innerHTML = '<div class="empty">Searching every source. This can take up to a minute.</div>';
+            const base = `/api/librarr/search/${encodeURIComponent(name)}`;
+            try {
+                const start = await fetch(base, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ q: query }) });
+                const started = await start.json();
+                if (!start.ok) throw new Error(started.error || `HTTP ${start.status}`);
+                const deadline = Date.now() + 120000;
+                while (run === librarrRun) {
+                    await new Promise(resolve => setTimeout(resolve, 1500));
+                    if (run !== librarrRun) return;
+                    const poll = await fetch(`${base}/${encodeURIComponent(started.id)}`);
+                    const data = await poll.json();
+                    if (!poll.ok) throw new Error(data.error || `HTTP ${poll.status}`);
+                    if (data.state === 'running') {
+                        if (Date.now() > deadline) throw new Error('the search is taking too long');
+                        continue;
+                    }
+                    if (data.state === 'error') throw new Error(data.error || 'the search failed');
+                    renderLibrarrResults(started.id, out, data);
+                    return;
+                }
+            } catch (err) {
+                if (run === librarrRun) out.innerHTML = `<div class="test-fail">Search failed: ${escapeHtml(err.message)}</div>`;
+            } finally {
+                if (run === librarrRun) button.disabled = false;
+            }
+        }
+
+        function renderLibrarrResults(sid, out, data) {
+            if (!data.results.length) {
+                out.innerHTML = `<div class="empty">No results for “${escapeHtml(data.query)}”.</div>`;
+                return;
+            }
+            const took = data.took_ms ? ` in ${Math.max(1, Math.round(data.took_ms / 1000))} s` : '';
+            out.innerHTML = `<p class="librarr-count">${data.results.length} result${data.results.length === 1 ? '' : 's'} for “${escapeHtml(data.query)}”${took}</p>` +
+                data.results.map(r => {
+                    const meta = [r.source, r.size, r.format, typeof r.seeders === 'number' ? `${r.seeders} seeder${r.seeders === 1 ? '' : 's'}` : '',
+                        typeof r.score === 'number' ? `match ${r.score}` : '', r.in_library ? `already in your library${r.library_title ? ': ' + r.library_title : ''}` : ''];
+                    return `<div class="request-row">
+                        <div class="request-info">
+                            <div class="request-title">${escapeHtml(r.title)}</div>
+                            <div class="request-meta">${escapeHtml(meta.filter(Boolean).join(' · '))}</div>
+                            <div class="request-meta librarr-note" role="status"></div>
+                        </div>
+                        <div class="card-actions card-actions--flush">
+                            <button type="button" class="request-btn" data-librarr-grab data-sid="${escapeAttr(sid)}" data-token="${escapeAttr(r.token)}" data-force="0"
+                                    aria-label="Download ${escapeAttr(r.title)}">Download</button>
+                        </div>
+                    </div>`;
+                }).join('');
+        }
+
+        async function librarrGrab(name, button) {
+            const note = button.closest('.request-row').querySelector('.librarr-note');
+            button.disabled = true;
+            button.textContent = 'Sending...';
+            note.textContent = '';
+            try {
+                const response = await fetch(
+                    `/api/librarr/grab/${encodeURIComponent(name)}/${encodeURIComponent(button.dataset.sid)}/${encodeURIComponent(button.dataset.token)}`,
+                    { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ force: button.dataset.force === '1' }) });
+                const data = await response.json();
+                if (data.ok) {
+                    button.textContent = 'Sent';
+                    note.textContent = 'Librarr started the download. It will show above.';
+                    loadDownloaderStatus(name);
+                    loadDownloads(true);
+                    return;
+                }
+                if (data.already_in_library) {
+                    button.dataset.force = '1';
+                    button.textContent = 'Send anyway';
+                    note.textContent = `Already in your library${data.library_title ? ': ' + data.library_title : ''}. Choose Send anyway to download it again.`;
+                } else {
+                    button.textContent = 'Try again';
+                    note.textContent = `Could not send: ${data.error || 'unknown error'}`;
+                }
+            } catch (err) {
+                button.textContent = 'Try again';
+                note.textContent = 'Could not send: no answer from the server.';
+            }
+            button.disabled = false;
         }
 
         function selectView(view) {

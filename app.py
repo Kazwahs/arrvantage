@@ -38,7 +38,7 @@ import time
 # same commit, so the image, the About panel, Copy diagnostics and the GitHub
 # release tag all say the same thing. (ARRVANTAGE_VERSION in the environment
 # wins, for a build that wants to stamp its own - the image does not today.)
-APP_VERSION = "1.3.0"
+APP_VERSION = "1.4.0"
 
 
 def resolve_app_version(raw=None) -> str:
@@ -398,6 +398,7 @@ SEERR_REQUEST_STATUS_CLASS = {
 DOWNLOADER_TYPES = {
     "qbittorrent": "qBittorrent",
     "sabnzbd": "SABnzbd",
+    "librarr": "Librarr",
 }
 
 # Indexer manager types. Only Prowlarr is supported today, but kept as
@@ -2841,6 +2842,27 @@ def api_downloader_status(name):
     elif downloader["type"] == "sabnzbd":
         result = fetch_sabnzbd_queue(downloader)
         return jsonify({"type": "sabnzbd", "error": result["error"], "items": result["items"], "summary": result["summary"]})
+    elif downloader["type"] == "librarr":
+        try:
+            downloads = librarr_get(downloader, "/api/downloads")
+        except requests.exceptions.JSONDecodeError:
+            return jsonify({"type": "librarr", "error": "unexpected answer - is this the right address?"})
+        except requests.exceptions.RequestException as err:
+            return jsonify({"type": "librarr", "error": short_request_error(err)})
+        except ValueError:
+            return jsonify({"type": "librarr", "error": "unexpected answer - is this the right address?"})
+        try:
+            activity = librarr_get(downloader, "/api/activity", {"limit": 20})
+        except (requests.exceptions.RequestException, ValueError):
+            activity = None
+        health = fetch_librarr_health(downloader)
+        items = librarr_jobs(downloads)
+        return jsonify({
+            "type": "librarr", "error": None, "items": items, "recent": librarr_recent_imports(activity),
+            "summary": {"version": health.get("version") or "", "sources_enabled": health.get("sources_enabled"),
+                        "library_items": health.get("library_items"),
+                        "failed": sum(1 for i in items if i["group"] == "failed")},
+        })
     return jsonify({"error": "unknown downloader type"}), 400
 
 
@@ -2864,6 +2886,8 @@ def api_downloader_action(name):
             qbt_torrent_action(downloader, action, item_id, delete_files=bool(body.get("delete_files")))
         elif downloader["type"] == "sabnzbd":
             sabnzbd_action(downloader, action, item_id)
+        elif downloader["type"] == "librarr":
+            librarr_action(downloader, action, item_id)
         else:
             return jsonify({"ok": False, "error": "unknown downloader type"}), 400
     except (requests.exceptions.RequestException, ValueError) as err:
@@ -3027,6 +3051,8 @@ def fetch_download_client(downloader: dict) -> dict:
             if isinstance(data, dict) and data.get("error"):
                 return {"error": "SABnzbd refused the request - check the API key"}
             return sab_downloads_view(data)
+        if downloader["type"] == "librarr":
+            return fetch_librarr_card(downloader)
     except requests.exceptions.JSONDecodeError:
         return {"error": "unexpected answer - is this the right address?"}
     except requests.exceptions.RequestException as err:
@@ -3050,7 +3076,7 @@ def gather_downloads(force: bool = False) -> dict:
         card = {"name": d["name"], "type": d["type"], "color": d.get("color") or _DEFAULT_COLOR,
                 "icon_url": DOWNLOADER_ICONS.get(d["type"], ""), **view}
         if not card.get("error"):
-            down += card["down_speed"]
+            down += card["down_speed"] or 0
             up += card["up_speed"] or 0
         cards.append(card)
     result = {"clients": cards, "down_speed": down, "up_speed": up}
@@ -3063,6 +3089,355 @@ def gather_downloads(force: bool = False) -> dict:
 @login_required
 def api_downloads():
     return jsonify(gather_downloads(force=request.args.get("refresh") == "1"))
+
+
+# ---------------------------------------------------------------------------
+# Librarr - a book / manga / audiobook fetcher, added as a download-client
+# type (name, address, API key). Checked against its README and a real
+# server (v1.5.0):
+# - GET /health needs no sign-in: {"status": "ok", "version", "uptime_seconds",
+#   "library_items", "sources_enabled", "sources": [...]}.
+# - Everything else takes the API key as an X-Api-Key header (README: "every
+#   endpoint accepts" it; not yet tried against a real server).
+# - GET /api/downloads -> {"downloads": [{source, title, status, job_id,
+#   error, max_retries}]}. Only a failed job has been seen: the other status
+#   words and any progress field are not documented, so they are read
+#   defensively and unknown progress is shown as unknown, never as 0%.
+# - GET /api/activity -> {"events": [{id, event_type, title, detail, job_id,
+#   timestamp}], total}; event_type includes download_start, torrent_import
+#   and nzb_import.
+# - GET /api/search/manga?q= -> {"results": [...], "sources": [...],
+#   "metadata", "search_time_ms"}. It asks about a dozen sources and took
+#   ~30 s, which would freeze the single gunicorn worker, so the search runs
+#   on its own thread and the page polls for it. A result carries source,
+#   title, size_human, seeders, score, in_library and download_url /
+#   info_hash...; those links can hold an indexer's own API key, so they
+#   stay on the server and the page only gets a token.
+# - POST /api/download takes the fields Librarr's own page sends (title,
+#   download_url, abb_url, source, source_id, md5, author, info_hash, magnet,
+#   media_type, download_protocol, force) and answers {"success", "job_id"};
+#   a book already owned answers 409 {"code": "already_in_library"} unless
+#   force is true. (The README's /api/download/torrent is not what its page
+#   uses.)
+# - POST /api/downloads/jobs/<id>/retry retries a failed job.
+# ---------------------------------------------------------------------------
+
+LIBRARR_TIMEOUT = 8
+LIBRARR_SEARCH_TIMEOUT = 90
+LIBRARR_SEARCH_KEEP_SECONDS = 600
+LIBRARR_SEARCH_MAX_KEPT = 20
+LIBRARR_SEARCH_MAX_RUNNING = 3
+LIBRARR_RESULT_LIMIT = 40
+LIBRARR_RECENT_LIMIT = 3
+LIBRARR_JOB_ID = re.compile(r"^[A-Za-z0-9_-]{1,80}$")
+_LIBRARR_SEARCHES: dict = {}
+_LIBRARR_LOCK = threading.Lock()
+
+
+def librarr_headers(downloader: dict) -> dict:
+    return {"X-Api-Key": downloader.get("api_key", ""), "Accept": "application/json"}
+
+
+def librarr_get(downloader: dict, path: str, params=None, timeout: float = LIBRARR_TIMEOUT):
+    response = requests.get(f"{downloader['url'].rstrip('/')}{path}", headers=librarr_headers(downloader),
+                            params=params, timeout=timeout)
+    response.raise_for_status()
+    return response.json()
+
+
+def fetch_librarr_health(downloader: dict) -> dict:
+    """Is Librarr answering? /health needs no key, so a wrong key can never
+    make a running server look down. One more try after a refused connection
+    or a timeout before it counts."""
+    url = f"{downloader['url'].rstrip('/')}/health"
+    error = "could not connect"
+    for _ in range(2):
+        try:
+            response = requests.get(url, headers={"Accept": "application/json"}, timeout=10)
+            response.raise_for_status()
+        except requests.exceptions.HTTPError:
+            error = f"HTTP {response.status_code} - is this Librarr's address?"
+            continue
+        except requests.exceptions.Timeout:
+            error = "timed out"
+            continue
+        except requests.exceptions.ConnectionError:
+            error = "could not connect"
+            continue
+        except requests.exceptions.RequestException:
+            error = "request failed"
+            continue
+        try:
+            body = response.json()
+        except ValueError:
+            return {"error": "answered, but not like Librarr - check the address"}
+        if not isinstance(body, dict):
+            return {"error": "answered, but not like Librarr - check the address"}
+        status = str(body.get("status", "")).strip().lower()
+        if status != "ok":
+            return {"error": f"Librarr reports a problem (status: {scrub_log_text(status or 'unknown', 40)})"}
+
+        def count(key):
+            value = body.get(key)
+            return value if isinstance(value, int) and not isinstance(value, bool) else None
+
+        return {"error": None, "version": scrub_log_text(str(body.get("version") or ""), 30),
+                "sources_enabled": count("sources_enabled"), "library_items": count("library_items")}
+    return {"error": error}
+
+
+def _librarr_group(status) -> str:
+    """Librarr's job status word -> failed / preparing / done / queued /
+    downloading. Only "error" has been seen on a real server, so the rest is
+    matched by meaning; an unknown word counts as downloading (shown, not hidden)."""
+    word = str(status or "").strip().lower()
+    if any(w in word for w in ("error", "fail")):
+        return "failed"
+    if any(w in word for w in ("import", "process", "extract", "convert")) and "imported" not in word:
+        return "preparing"
+    if any(w in word for w in ("complete", "done", "finish", "success", "imported")):
+        return "done"
+    if any(w in word for w in ("queue", "pending", "wait")):
+        return "queued"
+    return "downloading"
+
+
+def _librarr_progress(job: dict):
+    """A percentage if the job carries one (0-100), else None = unknown."""
+    for key in ("progress", "percent", "percentage"):
+        value = job.get(key)
+        if isinstance(value, (int, float)) and not isinstance(value, bool) and 0 <= value <= 100:
+            return _percent(value)
+    return None
+
+
+def librarr_jobs(downloads) -> list:
+    """Librarr's /api/downloads answer -> the jobs still to do or failed, as
+    plain items. Pure; finished jobs are dropped."""
+    rows = downloads.get("downloads") if isinstance(downloads, dict) else None
+    items = []
+    for job in rows if isinstance(rows, list) else []:
+        if not isinstance(job, dict):
+            continue
+        group = _librarr_group(job.get("status"))
+        if group == "done":
+            continue
+        job_id = str(job.get("job_id") or "")
+        items.append({
+            "name": scrub_log_text(str(job.get("title") or "(unknown)"), 200), "progress": _librarr_progress(job),
+            "speed": 0, "eta": "", "group": group, "job_id": job_id if LIBRARR_JOB_ID.match(job_id) else "",
+            "source": scrub_log_text(str(job.get("source") or ""), 40),
+            "note": scrub_log_text(str(job.get("error") or ""), 120) if group == "failed" else "",
+        })
+    items.sort(key=lambda i: {"downloading": 0, "preparing": 1, "queued": 2, "failed": 3}[i["group"]])
+    return items
+
+
+def librarr_recent_imports(activity) -> list:
+    """The latest finished imports from /api/activity, newest first. Pure."""
+    events = activity.get("events") if isinstance(activity, dict) else None
+    imports = [e for e in events or [] if isinstance(e, dict) and str(e.get("event_type") or "").endswith("import")]
+    imports.sort(key=lambda e: e.get("id") if isinstance(e.get("id"), int) else 0, reverse=True)
+    recent = []
+    for event in imports[:LIBRARR_RECENT_LIMIT]:
+        when = str(event.get("timestamp") or "")
+        try:
+            datetime.fromisoformat(when)
+        except ValueError:
+            when = ""
+        recent.append({"title": scrub_log_text(str(event.get("title") or "(unknown)"), 200), "when": when})
+    return recent
+
+
+def librarr_downloads_view(downloads, activity=None) -> dict:
+    """Librarr's answers -> the Home panel's card. Pure. Librarr reports no
+    transfer speed, so the speeds are None and the panel leaves them out."""
+    items = librarr_jobs(downloads)
+    counts = {"downloading": 0, "preparing": 0, "queued": 0, "failed": 0}
+    for item in items:
+        counts[item["group"]] += 1
+    active = counts["downloading"] + counts["preparing"]
+    return {
+        "error": None, "paused": False, "down_speed": None, "up_speed": None, "connection": "",
+        "counts": counts, "total": len(items), "state": "downloading" if active else ("waiting" if counts["queued"] else "idle"),
+        "items": items[:DOWNLOADS_ITEM_LIMIT], "recent": librarr_recent_imports(activity),
+    }
+
+
+def fetch_librarr_card(downloader: dict) -> dict:
+    downloads = librarr_get(downloader, "/api/downloads")
+    try:
+        activity = librarr_get(downloader, "/api/activity", {"limit": 20})
+    except (requests.exceptions.RequestException, ValueError):
+        activity = None  # recent imports are a bonus; the queue still shows
+    return librarr_downloads_view(downloads, activity)
+
+
+def librarr_action(downloader: dict, action: str, job_id: str) -> None:
+    if action != "retry" or not LIBRARR_JOB_ID.match(str(job_id or "")):
+        raise ValueError("unknown action")
+    response = requests.post(f"{downloader['url'].rstrip('/')}/api/downloads/jobs/{job_id}/retry",
+                             headers=librarr_headers(downloader), timeout=15)
+    response.raise_for_status()
+
+
+def _librarr_downloader(name: str):
+    downloader = get_downloader(name)
+    return downloader if downloader and downloader.get("type") == "librarr" else None
+
+
+def librarr_search_results(data) -> tuple:
+    """Librarr's search answer -> (rows for the page, raw results by token).
+    Pure. Best score first. The rows carry no links - only a token, because a
+    result's download link can contain an indexer's API key."""
+    results = data.get("results") if isinstance(data, dict) else None
+    labels = {}
+    for source in data.get("sources") or [] if isinstance(data, dict) else []:
+        if isinstance(source, dict) and source.get("name"):
+            labels[str(source["name"])] = str(source.get("label") or source["name"])
+
+    def number(value):
+        return int(value) if isinstance(value, (int, float)) and not isinstance(value, bool) else None
+
+    raw_results = [r for r in results if isinstance(r, dict)] if isinstance(results, list) else []
+    raw_results.sort(key=lambda r: -(number(r.get("score")) or 0))
+    rows, raw = [], {}
+    for index, result in enumerate(raw_results[:LIBRARR_RESULT_LIMIT]):
+        token = str(index)
+        source = str(result.get("source") or "")
+        raw[token] = result
+        rows.append({
+            "token": token, "title": scrub_log_text(str(result.get("title") or "(untitled)"), 200),
+            "source": scrub_log_text(str(result.get("indexer") or labels.get(source) or source), 40),
+            "size": scrub_log_text(str(result.get("size_human") or ""), 40),
+            "seeders": number(result.get("seeders")), "score": number(result.get("score")),
+            "format": scrub_log_text(str(result.get("format") or ""), 20),
+            "in_library": bool(result.get("in_library")),
+            "library_title": scrub_log_text(str(result.get("library_title") or ""), 200),
+        })
+    return rows, raw
+
+
+def librarr_grab_body(result: dict, force: bool) -> dict:
+    """The request body Librarr's own page sends for a result."""
+    def text(key):
+        return str(result.get(key) or "")
+
+    return {
+        "title": text("title"), "download_url": text("download_url") or text("url") or text("epub_url"),
+        "abb_url": text("abb_url"), "source": text("source"), "source_id": text("source_id"), "md5": text("md5"),
+        "author": text("author"), "info_hash": text("info_hash"), "magnet": text("magnet"),
+        "media_type": text("media_type"), "download_protocol": text("download_protocol"), "force": bool(force),
+    }
+
+
+def _librarr_prune(now: float) -> None:
+    """Forget old searches (caller holds the lock)."""
+    for sid in [s for s, e in _LIBRARR_SEARCHES.items() if now - e["started"] > LIBRARR_SEARCH_KEEP_SECONDS and e["state"] != "running"]:
+        del _LIBRARR_SEARCHES[sid]
+    while len(_LIBRARR_SEARCHES) > LIBRARR_SEARCH_MAX_KEPT:
+        oldest = min((s for s, e in _LIBRARR_SEARCHES.items() if e["state"] != "running"),
+                     key=lambda s: _LIBRARR_SEARCHES[s]["started"], default=None)
+        if oldest is None:
+            break
+        del _LIBRARR_SEARCHES[oldest]
+
+
+def _run_librarr_search(sid: str, downloader: dict, query: str) -> None:
+    error, rows, raw, took = None, [], {}, 0
+    try:
+        data = librarr_get(downloader, "/api/search/manga", {"q": query}, timeout=LIBRARR_SEARCH_TIMEOUT)
+        rows, raw = librarr_search_results(data)
+        took = data.get("search_time_ms") if isinstance(data, dict) and isinstance(data.get("search_time_ms"), (int, float)) else 0
+    except requests.exceptions.JSONDecodeError:
+        error = "unexpected answer - is this the right address?"
+    except requests.exceptions.RequestException as err:
+        error = short_request_error(err)
+    except (ValueError, AttributeError, TypeError):
+        error = "unexpected answer - is this the right address?"
+    with _LIBRARR_LOCK:
+        entry = _LIBRARR_SEARCHES.get(sid)
+        if entry:
+            entry.update({"state": "error" if error else "done", "error": error, "rows": rows, "raw": raw, "took_ms": int(took)})
+
+
+@app.route("/api/librarr/search/<name>", methods=["POST"])
+@login_required
+@permission_required("searching")
+def api_librarr_search_start(name):
+    downloader = _librarr_downloader(name)
+    if not downloader:
+        return jsonify({"error": "unknown Librarr"}), 404
+    body = request.get_json(silent=True) or {}
+    query = " ".join(str(body.get("q") or "").split())
+    if len(query) < 2 or len(query) > 100:
+        return jsonify({"error": "type 2 to 100 characters to search for"}), 400
+    owner = session.get("username")
+    now = time.monotonic()
+    with _LIBRARR_LOCK:
+        _librarr_prune(now)
+        for sid, entry in _LIBRARR_SEARCHES.items():  # the same search already running: share it
+            if entry["state"] == "running" and entry["client"] == name and entry["owner"] == owner and entry["query"].lower() == query.lower():
+                return jsonify({"id": sid})
+        if sum(1 for e in _LIBRARR_SEARCHES.values() if e["state"] == "running") >= LIBRARR_SEARCH_MAX_RUNNING:
+            return jsonify({"error": "several searches are already running - try again in a moment"}), 429
+        sid = secrets.token_urlsafe(9)
+        _LIBRARR_SEARCHES[sid] = {"client": name, "owner": owner, "query": query, "state": "running", "started": now,
+                                  "error": None, "rows": [], "raw": {}, "took_ms": 0}
+    threading.Thread(target=_run_librarr_search, args=(sid, dict(downloader), query), name="arrv-librarr-search", daemon=True).start()
+    return jsonify({"id": sid})
+
+
+def _librarr_search_entry(name: str, sid: str):
+    entry = _LIBRARR_SEARCHES.get(sid)
+    return entry if entry and entry["client"] == name and entry["owner"] == session.get("username") else None
+
+
+@app.route("/api/librarr/search/<name>/<sid>")
+@login_required
+@permission_required("searching")
+def api_librarr_search_result(name, sid):
+    with _LIBRARR_LOCK:
+        entry = _librarr_search_entry(name, sid)
+        if not entry:
+            return jsonify({"error": "that search has expired - search again"}), 404
+        return jsonify({"state": entry["state"], "error": entry["error"], "query": entry["query"],
+                        "results": entry["rows"], "took_ms": entry["took_ms"]})
+
+
+@app.route("/api/librarr/grab/<name>/<sid>/<token>", methods=["POST"])
+@login_required
+@permission_required("searching")
+def api_librarr_grab(name, sid, token):
+    downloader = _librarr_downloader(name)
+    if not downloader:
+        return jsonify({"ok": False, "error": "unknown Librarr"}), 404
+    with _LIBRARR_LOCK:
+        entry = _librarr_search_entry(name, sid)
+        result = entry["raw"].get(token) if entry else None
+    if result is None:
+        return jsonify({"ok": False, "error": "that result has expired - search again"}), 404
+    force = bool((request.get_json(silent=True) or {}).get("force"))
+    try:
+        response = requests.post(f"{downloader['url'].rstrip('/')}/api/download", headers=librarr_headers(downloader),
+                                 json=librarr_grab_body(result, force), timeout=20)
+        try:
+            answer = response.json()
+        except ValueError:
+            answer = {}
+        answer = answer if isinstance(answer, dict) else {}
+        if response.status_code == 409 or answer.get("code") == "already_in_library":
+            return jsonify({"ok": False, "already_in_library": True,
+                            "library_title": scrub_log_text(str(answer.get("library_title") or result.get("title") or ""), 200)})
+        if not response.ok or answer.get("success") is False:
+            reason = scrub_log_text(str(answer.get("error") or ""), 160) or short_request_error(
+                requests.exceptions.HTTPError(response=response))
+            return jsonify({"ok": False, "error": reason}), 502
+    except requests.exceptions.RequestException as err:
+        return jsonify({"ok": False, "error": short_request_error(err)}), 502
+    with _DOWNLOADS_LOCK:
+        _DOWNLOADS_CACHE["at"] = 0.0  # Home should show the new job on its next look
+    return jsonify({"ok": True, "job_id": scrub_log_text(str(answer.get("job_id") or ""), 80)})
 
 
 # ---------------------------------------------------------------------------
@@ -5013,6 +5388,8 @@ def probe_downloader(downloader: dict) -> dict:
         return fetch_qbittorrent_transfer_info(downloader)
     if downloader["type"] == "sabnzbd":
         return {"error": fetch_sabnzbd_queue(downloader)["error"]}
+    if downloader["type"] == "librarr":
+        return {"error": fetch_librarr_health(downloader)["error"]}
     return {"error": None}
 
 
@@ -5712,6 +6089,21 @@ def _run_settings_test():
             )
             if response.ok and "error" in response.json():
                 return jsonify({"ok": False, "error": response.json()["error"]})
+        elif category == "downloader" and kind_or_type == "librarr":
+            # /health needs no key, so it cannot say whether the key works:
+            # ask for the download list, which does.
+            response = requests.get(
+                f"{url.rstrip('/')}/api/downloads",
+                headers={"X-Api-Key": credential, "Accept": "application/json"}, timeout=8,
+            )
+            response.raise_for_status()
+            try:
+                body = response.json()
+                shaped = isinstance(body, dict) and "downloads" in body
+            except ValueError:
+                shaped = False
+            if not shaped:
+                return jsonify({"ok": False, "error": "answered, but not like Librarr - check the address and the API key"})
         elif category == "indexerserver" and kind_or_type == "prowlarr":
             response = requests.get(
                 f"{url.rstrip('/')}/api/v1/system/status",

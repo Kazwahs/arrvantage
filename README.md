@@ -16,7 +16,7 @@ Actively developed — expect rough edges and breaking changes between releases.
 - **Needs attention** on Home: stalled or failed downloads, unreachable apps and services, health warnings and low disk space, merged so the same problem is shown once. Warnings you do not care about can be hidden; outages cannot
 - **Coming Up** on Home: the next 7, 14 or 30 days of episodes (Sonarr), movie releases (Radarr), albums (Lidarr) and books (Readarr / Chaptarr), colour-coded with each instance's own colour, and each instance's name above the calendar switches it off and on (remembered in your browser) if one of them is too busy
 - **Service history** and **push alerts**: arrVantage checks your stack in the background, records when each service went down and came back, and can tell you by ntfy or a webhook (see [Alerts and service history](#alerts-and-service-history))
-- **Downloads** on Home: a card per download client (qBittorrent, SABnzbd) with its speed, whether it is downloading, waiting, paused or idle, and the few downloads that are actually moving with progress and time left. It refreshes itself every 10 seconds while Home is open
+- **Downloads** on Home: a card per download client (qBittorrent, SABnzbd, Librarr) with its speed, whether it is downloading, waiting, paused or idle, and the few downloads that are actually moving with progress and time left. It refreshes itself every 10 seconds while Home is open
 - Indexer visibility (Prowlarr)
 - Request management via Seerr (Overseerr / Jellyseerr / Seerr)
 - Media server status (Plex / Jellyfin / Emby / Komga), plus BookOrbit (uptime check and a link)
@@ -97,7 +97,7 @@ arrVantage runs the same checks as **Needs attention** in the background, every 
   - **Webhook:** arrVantage sends a JSON `POST` to the address, for Home Assistant, n8n and the like:
 
     ```json
-    {"app": "arrVantage", "version": "1.3.0", "event": "opened", "title": "Radarr can't be reached",
+    {"app": "arrVantage", "version": "1.4.0", "event": "opened", "title": "Radarr can't be reached",
      "message": "Connection refused", "severity": "critical", "kind": "unreachable",
      "services": ["Radarr"], "since": "2026-11-01T10:00:00Z", "ended": null}
     ```
@@ -131,7 +131,7 @@ It's still evolving — I'm actively using it myself and tweaking it as I go. Fe
 |---|---|
 | \*Arr apps | Radarr (movies), Sonarr (TV), Lidarr (music), Chaptarr / Readarr-style book managers, Kapowarr (comics) |
 | Indexers | Prowlarr — indexer health status, individual and bulk testing |
-| Downloaders | qBittorrent, SABnzbd |
+| Downloaders | qBittorrent, SABnzbd. Librarr (book, manga and audiobook fetcher): its queue and recent imports on Home, a Retry button for failed jobs, an outage warning if it stops answering, and a manga search box that sends the result you pick to Librarr. Librarr has no transfer speed, so its card shows none |
 | Requests | Overseerr, Jellyseerr |
 | Media servers | Plex, Jellyfin, Emby — Now Playing, Recently Added, Watch History, Users, library rescan. Komga for comics and manga libraries. BookOrbit for ebooks, comics and audiobooks: arrVantage checks that it is up (it needs no token, just its address), warns you on Home and in the alerts when it is not, and links to it. Browsing its library inside arrVantage is not built, because BookOrbit has no documented API for it yet |
 | Activity data | Tautulli and/or Tracearr, for richer Now Playing / Watch History / Users than the media servers' own APIs provide alone |
@@ -154,6 +154,7 @@ What exists today, and what is on the list. The unchecked items are ideas, not p
 - [x] A Downloads panel on Home: qBittorrent and SABnzbd speeds and active queue in one place
 - [x] Book releases in Coming Up (Readarr / Chaptarr). Built from Readarr's published API; please report it if Chaptarr answers differently
 - [x] BookOrbit: uptime check, alerts and a link (its library is not browsable here until BookOrbit documents an API for it)
+- [x] Librarr: queue, recent imports, retry, outage alerts and manga search (built from its README and a real 1.5.0 server; only the failed-job shape was seen live, so please report anything it shows wrongly)
 - [ ] Support for more book and comic library apps
 
 ## Contributing / Feedback

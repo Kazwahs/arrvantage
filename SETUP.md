@@ -98,6 +98,7 @@ Everything else — media servers, downloaders, indexers, transcoders, request s
 | Overseerr / Jellyseerr | Settings → General → API Key |
 | qBittorrent | No API key — use your normal Web UI username and password |
 | SABnzbd | Config → General → API Key |
+| Librarr | The `API_KEY` you set in Librarr's own settings or environment. Add it under Downloaders with Librarr's address (for example `http://192.168.1.20:5050`); the Test button checks the key. Keep Librarr on your LAN |
 | Prowlarr | Settings → General → Security → API Key |
 | Tautulli | Settings → Web Interface → API Key |
 | Tracearr | Settings → General → generate a Public API key (format `trr_pub_...`) |
