@@ -929,6 +929,16 @@
         try { const saved = parseInt(localStorage.getItem('arrComingUpDays'), 10); if ([7, 14, 30].includes(saved)) comingUpDays = saved; } catch (e) { /* storage unavailable */ }
         let comingUpRequest = 0;
         let comingUpLoaded = false;
+        let comingUpData = null;  // the last answer, so a toggle can redraw without asking again
+        // Sources (instances) a person switched off in the legend, remembered per browser.
+        let comingUpHidden = new Set();
+        try {
+            const saved = JSON.parse(localStorage.getItem('arrComingUpHidden') || '[]');
+            if (Array.isArray(saved)) comingUpHidden = new Set(saved.filter(n => typeof n === 'string').slice(0, 50));
+        } catch (e) { /* storage unavailable or unreadable */ }
+        function saveComingUpHidden() {
+            try { localStorage.setItem('arrComingUpHidden', JSON.stringify([...comingUpHidden])); } catch (e) { /* storage unavailable */ }
+        }
 
         function syncComingUpRange() {
             document.querySelectorAll('#home-comingup-body .range-btn').forEach(btn => {
@@ -953,14 +963,31 @@
         }
 
         function renderComingUp(data) {
+            comingUpData = data;
             const daysEl = document.getElementById('comingup-days');
             const legend = document.getElementById('comingup-legend');
-            legend.innerHTML = data.instances.map(inst => `
-                <li class="cu-key" style="--cu-color:${safeColor(inst.color)}"><span class="cu-swatch" aria-hidden="true"></span>${escapeHtml(inst.name)}</li>
-            `).join('');
+            // With more than one source the colour key doubles as the filter:
+            // each entry is a toggle, shown struck through when switched off.
+            // (A lone source has nothing to filter, so it stays a plain label.)
+            const canToggle = data.instances.length > 1;
+            legend.innerHTML = data.instances.map(inst => {
+                const color = safeColor(inst.color);
+                if (!canToggle) {
+                    return `<li class="cu-key" style="--cu-color:${color}"><span class="cu-swatch" aria-hidden="true"></span>${escapeHtml(inst.name)}</li>`;
+                }
+                const on = !comingUpHidden.has(inst.name);
+                return `<li><button type="button" class="cu-toggle" style="--cu-color:${color}" aria-pressed="${on}" data-instance="${escapeAttr(inst.name)}" title="${on ? 'Hide' : 'Show'} ${escapeAttr(inst.name)}">
+                    <span class="cu-swatch" aria-hidden="true"></span>${escapeHtml(inst.name)}</button></li>`;
+            }).join('');
+            legend.setAttribute('aria-label', canToggle ? 'Show or hide each source' : 'Colour key');
+
+            const hiddenNames = canToggle ? comingUpHidden : new Set();
+            const shown = data.items.filter(item => !hiddenNames.has(item.instance));
+            const hiddenCount = data.items.length - shown.length;
+            const allOff = canToggle && data.instances.every(inst => hiddenNames.has(inst.name));
 
             const byDay = {};
-            data.items.forEach(item => {
+            shown.forEach(item => {
                 const when = item.all_day ? null : new Date(item.when);
                 const key = item.all_day ? item.when.slice(0, 10) : localDateKey(when);
                 (byDay[key] = byDay[key] || []).push({ item, when });
@@ -995,12 +1022,15 @@
                     </section>`);
             }
 
-            const errors = (data.errors || []).map(err =>
+            const errors = (data.errors || []).filter(err => !hiddenNames.has(err.instance)).map(err =>
                 `<p class="cu-error" role="status">Could not load ${escapeHtml(err.instance)}: ${escapeHtml(err.error)}</p>`).join('');
-            const anything = data.items.length > 0;
-            daysEl.innerHTML = errors + (cards.length && (anything || comingUpDays <= 14)
-                ? `<div class="cu-grid">${cards.join('')}</div>`
-                : `<p class="cu-empty">Nothing is scheduled in the next ${comingUpDays} days.</p>`);
+            const anything = shown.length > 0;
+            const note = hiddenCount ? ` (${hiddenCount} hidden)` : '';
+            daysEl.innerHTML = errors + (allOff
+                ? '<p class="cu-empty">Every source is switched off. Use the names above to turn one back on.</p>'
+                : cards.length && (anything || comingUpDays <= 14)
+                    ? `<div class="cu-grid">${cards.join('')}</div>${hiddenCount ? `<p class="cu-filter-note" role="status">${hiddenCount} ${hiddenCount === 1 ? 'item is' : 'items are'} hidden by the filter above.</p>` : ''}`
+                    : `<p class="cu-empty">Nothing is scheduled in the next ${comingUpDays} days${note}.</p>`);
             daysEl.setAttribute('aria-busy', 'false');
         }
 
@@ -1031,6 +1061,20 @@
                 comingUpDays = Number(range.dataset.days);
                 try { localStorage.setItem('arrComingUpDays', String(comingUpDays)); } catch (e) { /* storage unavailable */ }
                 loadComingUp();
+                return;
+            }
+            const toggle = event.target.closest('.cu-toggle');
+            if (toggle) {
+                const name = toggle.dataset.instance;
+                if (comingUpHidden.has(name)) comingUpHidden.delete(name); else comingUpHidden.add(name);
+                // Forget sources that no longer exist, so the saved list cannot grow without end.
+                const known = new Set((comingUpData ? comingUpData.instances : []).map(i => i.name));
+                comingUpHidden.forEach(n => { if (!known.has(n)) comingUpHidden.delete(n); });
+                saveComingUpHidden();
+                if (comingUpData) renderComingUp(comingUpData);
+                // The legend was redrawn: put keyboard focus back on the same toggle.
+                const again = [...document.querySelectorAll('#comingup-legend .cu-toggle')].find(b => b.dataset.instance === name);
+                if (again) again.focus();
                 return;
             }
             const item = event.target.closest('.cu-item');

@@ -387,7 +387,18 @@ body {
 
 .comingup-legend { display: flex; flex-wrap: wrap; gap: var(--space-1) var(--space-3); list-style: none; margin: 0; padding: 0; }
 .cu-key { display: inline-flex; align-items: center; gap: 0.35rem; color: var(--muted); font-size: var(--text-sm); }
-.cu-swatch { width: 0.7rem; height: 0.7rem; border-radius: 2px; background: var(--cu-color); }
+.cu-swatch { width: 0.7rem; height: 0.7rem; border-radius: 2px; background: var(--cu-color); border: 2px solid var(--cu-color); box-sizing: border-box; }
+/* The legend as a filter: switched off = hollow swatch, muted and struck through (never colour alone). */
+.cu-toggle {
+    display: inline-flex; align-items: center; gap: 0.4rem;
+    background: var(--panel); border: 1px solid var(--border); border-radius: var(--radius);
+    color: var(--text); font: inherit; font-size: var(--text-sm);
+    padding: 0.3rem 0.65rem; min-height: 1.75rem; cursor: pointer;
+}
+.cu-toggle:hover { border-color: var(--muted); }
+.cu-toggle[aria-pressed="false"] { color: var(--muted); text-decoration: line-through; }
+.cu-toggle[aria-pressed="false"] .cu-swatch { background: transparent; }
+.cu-filter-note { margin: var(--space-3) 0 0; color: var(--muted); font-size: var(--text-sm); }
 
 .cu-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(190px, 1fr)); gap: var(--space-3); }
 .cu-day {
