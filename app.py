@@ -34,6 +34,22 @@ import concurrent.futures
 import threading
 import time
 
+# The release this code belongs to. Change it when you cut a release, in the
+# same commit, so the image, the About panel, Copy diagnostics and the GitHub
+# release tag all say the same thing. (ARRVANTAGE_VERSION in the environment
+# wins, for a build that wants to stamp its own - the image does not today.)
+APP_VERSION = "1.2.0"
+
+
+def resolve_app_version(raw=None) -> str:
+    """APP_VERSION, unless the environment names one: 'v1.2.3' and '1.2.3'
+    both read as 1.2.3. Anything that isn't a plain version is ignored, so a
+    stray value can never put odd text into the page."""
+    text = str(raw if raw is not None else os.environ.get("ARRVANTAGE_VERSION") or "").strip()
+    text = text[1:] if text[:1] in ("v", "V") else text
+    return text if re.fullmatch(r"\d+\.\d+\.\d+(?:[-+][0-9A-Za-z.-]{1,30})?", text) else APP_VERSION
+
+
 app = Flask(__name__)
 
 # Trusts X-Forwarded-* headers from exactly one reverse proxy hop in
@@ -178,14 +194,26 @@ def _install_request_logging() -> None:
     Session.send = send
 
 
+# Set by the alert senders for the length of one call: a webhook address is
+# itself a secret (a Discord or Home Assistant webhook carries its key in the
+# path), so while it is set a request is described by host alone and an error
+# is reduced to its type, since a requests error quotes the whole address.
+_log_ctx = threading.local()
+
+
 def _note_request(request, response, err, started) -> None:
     try:
-        what = describe_request(request.method, request.url)
+        redact = getattr(_log_ctx, "redact_path", False)
+        if redact:
+            host = urlsplit(request.url).netloc.rsplit("@", 1)[-1]
+            what = f"{request.method} {host}/[path hidden]"
+        else:
+            what = describe_request(request.method, request.url)
         ms = int((time.monotonic() - started) * 1000)
         shape = re.sub(r"\d+", "#", what)
         if err is not None:
             log_problem(("request", shape, err.__class__.__name__), "%s failed: %s: %s (%d ms)",
-                        what, err.__class__.__name__, scrub_log_text(err), ms)
+                        what, err.__class__.__name__, "" if redact else scrub_log_text(err), ms)
         elif response.status_code >= 400:
             log_problem(("request", shape, response.status_code), "%s -> HTTP %s (%d ms)",
                         what, response.status_code, ms)
@@ -5511,7 +5539,7 @@ def parse_users(form, existing_users: list) -> list:
         # Saving Settings rebuilds every user from the form, which has no
         # field for per-user preferences (Home layout, theme, accent, hidden
         # warnings) - carry them forward so they aren't wiped.
-        for kept in ("home_layout", "theme", "accent", "hidden_attention"):
+        for kept in ("home_layout", "theme", "accent", "hidden_attention", "notify"):
             if existing and existing.get(kept):
                 entry[kept] = existing[kept]
         users.append(entry)
@@ -5539,7 +5567,8 @@ EXPORT_SECTIONS = ("instances", "media_servers", "requesters", "downloaders", "i
 # What "include API keys" covers. The session signing key (secret_key) is
 # never exported or imported: it is not a setting, and replacing it would sign
 # everyone out.
-EXPORT_SECRET_FIELDS = ("api_key", "credential", "password_hash", "pin")
+EXPORT_SECRET_FIELDS = ("api_key", "credential", "password_hash", "pin",
+                        "topic", "token", "webhook_url")  # the last three: an account's alert destinations
 IMPORT_MAX_BYTES = 1_000_000
 CONFIG_BACKUPS_KEPT = 10
 _DEFAULT_COLOR = "#5b8cff"
@@ -5715,6 +5744,9 @@ def _import_users(raw, notes: list) -> list:
             user["home_layout"] = normalize_home_layout(item["home_layout"])
         if isinstance(item.get("hidden_attention"), list):
             user["hidden_attention"] = [k for k in item["hidden_attention"] if valid_hide_key(k)][:MAX_HIDDEN_ATTENTION]
+        notify = normalize_notify(item.get("notify")) if role == "admin" else None
+        if notify:
+            user["notify"] = notify
         users.append(user)
     if skipped:
         notes.append(f"Users: {skipped} account{'' if skipped == 1 else 's'} in the file could not be used and will be skipped.")
@@ -5894,9 +5926,7 @@ def build_diagnostics(hide: bool = True) -> str:
     lines = [
         "arrVantage diagnostics",
         f"Generated: {now.strftime('%Y-%m-%d %H:%M:%S')} UTC",
-        f"Build fingerprint: {build_fingerprint()}"
-        + (f" (version {os.environ['ARRVANTAGE_VERSION']})" if os.environ.get("ARRVANTAGE_VERSION") else
-           " (the app cannot see its own image tag - please add it when you report)"),
+        f"Version: {resolve_app_version()} (build {build_fingerprint()})",
         f"Running for: {int((time.time() - _PROCESS_STARTED) // 60)} min",
         f"Python {platform.python_version()}, Flask {_package_version('flask')}, "
         f"requests {_package_version('requests')}, gunicorn {_package_version('gunicorn')}",
@@ -5934,6 +5964,23 @@ def build_diagnostics(hide: bool = True) -> str:
     else:
         lines.append("  not run yet")
 
+    # Counts only - no names, no addresses, no topics.
+    status = monitor_status()
+    with _HISTORY_LOCK:
+        history_state = _history_state()
+        open_count = sum(1 for i in history_state["open"].values() if i.get("announced"))
+        recorded = len(history_state["history"])
+    lines += ["", "Monitor and alerts:"]
+    lines.append(f"  Background check: every {status['interval']} s" if status["enabled"] else "  Background check: off")
+    if status["last_check"]:
+        lines.append(f"  Last background check: {status['last_check']}")
+    lines.append(f"  Problems open now: {open_count}; outages in the history: {recorded}")
+    admins = [normalize_notify(u.get("notify")) for u in CONFIG.get("users", []) if u.get("role") == "admin"]
+    admins = [n for n in admins if n]
+    lines.append(f"  Administrators with alerts: {len(admins)} "
+                 f"(ntfy: {sum(1 for n in admins if n.get('ntfy'))}, webhook: {sum(1 for n in admins if n.get('webhook'))}, "
+                 f"everything level: {sum(1 for n in admins if n['level'] == 'all')})")
+
     lines += ["", f"Recent warnings (newest last, up to {RECENT_WARNING_LIMIT}):"]
     recent = list(_recent_warnings)
     if not recent:
@@ -5952,6 +5999,606 @@ def build_diagnostics(hide: bool = True) -> str:
 def api_diagnostics():
     hide = request.args.get("hide_addresses", "1") != "0"
     return jsonify({"ok": True, "text": build_diagnostics(hide)})
+
+
+# ---------------------------------------------------------------------------
+# Monitor, service history and alerts
+# ---------------------------------------------------------------------------
+#
+# Needs attention used to be checked only while somebody had the dashboard
+# open. A small background thread now runs the same check every
+# MONITOR_INTERVAL seconds, remembers when a problem started and ended (the
+# service history), and tells the administrators who asked to hear about it
+# (ntfy, or a webhook). It is a thread of the one gunicorn worker, like the
+# other in-process state; MONITOR_INTERVAL=0 switches it off.
+
+MONITOR_DEFAULT_INTERVAL = 60
+MONITOR_MIN_INTERVAL = 30
+MONITOR_MAX_INTERVAL = 3600
+MONITOR_FIRST_DELAY = 15       # seconds after start before the first check
+MONITOR_CONFIRM_CHECKS = 2     # checks in a row before a problem or a recovery counts
+HISTORY_KEEP_DAYS = 90
+HISTORY_MAX_ENTRIES = 500
+HISTORY_API_LIMIT = 100
+HISTORY_PATH = os.path.join(CONFIG_DIR, "history.json")
+NOTIFY_TIMEOUT_SECONDS = 10
+NOTIFY_MAX_SEPARATE = 3        # more events than this in one check become one summary message
+DEFAULT_NTFY_SERVER = "https://ntfy.sh"
+NOTIFY_LEVELS = {
+    "critical": "Outages and critical problems only",
+    "all": "Everything, warnings included",
+}
+_NTFY_TOPIC_RE = re.compile(r"^[-_A-Za-z0-9]{1,64}$")
+_TIME_FORMAT = "%Y-%m-%dT%H:%M:%SZ"
+
+
+def resolve_monitor_interval(raw) -> int:
+    """Seconds between background checks. Nothing or nonsense means the default;
+    0 turns the monitor off; otherwise it is kept between 30 s and an hour (the
+    services are being asked every time, so a tight loop would be unkind)."""
+    text = str(raw if raw is not None else "").strip()
+    try:
+        value = int(text)
+    except ValueError:
+        return MONITOR_DEFAULT_INTERVAL
+    if value == 0:
+        return 0
+    if value < 0:
+        return MONITOR_DEFAULT_INTERVAL
+    return max(MONITOR_MIN_INTERVAL, min(value, MONITOR_MAX_INTERVAL))
+
+
+def _iso_now() -> str:
+    return time.strftime(_TIME_FORMAT, time.gmtime())
+
+
+def _parse_time(value):
+    try:
+        return datetime.strptime(value, _TIME_FORMAT).replace(tzinfo=timezone.utc)
+    except (TypeError, ValueError):
+        return None
+
+
+def human_duration(seconds) -> str:
+    """'45 s', '4 min', '2 h 5 min', '3 d 2 h' - how long something lasted."""
+    seconds = max(0, int(seconds))
+    if seconds < 90:
+        return f"{seconds} s"
+    minutes = seconds // 60
+    if minutes < 60:
+        return f"{minutes} min"
+    hours, minutes = divmod(minutes, 60)
+    if hours < 24:
+        return f"{hours} h {minutes} min" if minutes else f"{hours} h"
+    days, hours = divmod(hours, 24)
+    return f"{days} d {hours} h" if hours else f"{days} d"
+
+
+def _between(start, end) -> str:
+    a, b = _parse_time(start), _parse_time(end)
+    return human_duration((b - a).total_seconds()) if a and b else "a while"
+
+
+# --- Tracking problems over time (pure) ---------------------------------------
+
+
+def incident_key(item: dict) -> str:
+    """What makes two sightings 'the same problem'. A warning that can be hidden
+    already has a stable key for exactly this (a disk's key ignores how much is
+    free); everything else keeps one id."""
+    return str(item.get("hide_key") or item.get("id") or "")
+
+
+def is_outage(item: dict) -> bool:
+    """A service that is down or a critical problem - what the history lists,
+    and all that the 'outages only' alert level sends."""
+    return item.get("kind") in ("unreachable", "service") or item.get("severity") == "critical"
+
+
+def empty_history() -> dict:
+    return {"version": 1, "open": {}, "history": []}
+
+
+def _ensure_history_entry(history: list, incident: dict) -> None:
+    if any(entry["key"] == incident["key"] and entry["end"] is None for entry in history):
+        return
+    history.append({
+        "key": incident["key"], "title": incident["title"], "detail": incident["detail"],
+        "severity": incident["severity"], "kind": incident["kind"],
+        "services": list(incident["services"]), "start": incident["since"], "end": None,
+    })
+
+
+def track_incidents(state: dict, data: dict, now: str, confirm: int = MONITOR_CONFIRM_CHECKS):
+    """
+    Pure. `state` is what the last check left behind, `data` a
+    summarize_attention() result, `now` an ISO time. Returns (new_state, events).
+
+    A problem is only announced once it has been seen `confirm` checks in a row,
+    and only called over once it has been absent that many times, so one slow
+    answer neither raises an alarm nor ends an outage. A check where something
+    failed to answer (complete is False) cannot prove a *warning* has cleared -
+    its call may be the very thing that failed - so only a service that is
+    itself being probed (unreachable / service items) can end then.
+    """
+    state = copy.deepcopy(state)
+    open_incidents, history = state["open"], state["history"]
+    complete = bool(data.get("complete"))
+    present = {}
+    for item in data.get("items") or []:
+        key = incident_key(item)
+        if key:
+            present.setdefault(key, item)
+
+    events = []
+    for key, item in present.items():
+        incident = open_incidents.get(key)
+        if incident is None:
+            incident = open_incidents[key] = {"key": key, "since": now, "seen": 0, "missing": 0, "announced": False}
+        incident.update({
+            "title": str(item.get("title") or ""), "detail": str(item.get("detail") or ""),
+            "severity": item.get("severity") or "warning", "kind": item.get("kind") or "",
+            "services": [str(s) for s in item.get("services") or []], "outage": is_outage(item),
+        })
+        incident["seen"] = min(incident["seen"] + 1, confirm)  # capped, so a long outage doesn't rewrite the file every check
+        incident["missing"] = 0
+        if not incident["announced"] and incident["seen"] >= confirm:
+            incident["announced"] = True
+            events.append({"type": "opened", "incident": copy.deepcopy(incident)})
+        if incident["announced"] and incident["outage"]:
+            _ensure_history_entry(history, incident)  # also catches a warning that became critical
+
+    for key in list(open_incidents):
+        if key in present:
+            continue
+        incident = open_incidents[key]
+        if not (complete or incident.get("kind") in ("unreachable", "service")):
+            continue
+        if not incident["announced"]:
+            del open_incidents[key]  # a blip that never counted
+            continue
+        incident["missing"] += 1
+        if incident["missing"] >= confirm:
+            del open_incidents[key]
+            events.append({"type": "cleared", "incident": copy.deepcopy(incident), "ended": now})
+            for entry in reversed(history):
+                if entry["key"] == key and entry["end"] is None:
+                    entry["end"] = now
+                    break
+    return state, events
+
+
+def prune_history(history: list, now: str, keep_days: int = HISTORY_KEEP_DAYS, limit: int = HISTORY_MAX_ENTRIES) -> list:
+    stamp = _parse_time(now) or datetime.now(timezone.utc)
+    cutoff = (stamp - timedelta(days=keep_days)).strftime(_TIME_FORMAT)
+    kept = [entry for entry in history if entry["end"] is None or entry["end"] >= cutoff]
+    return kept[-limit:]
+
+
+def _clean_history_state(raw) -> dict:
+    """history.json is read back from disk, so trust nothing in it."""
+    state = empty_history()
+    if not isinstance(raw, dict):
+        return state
+
+    def text(value, limit=300):
+        return value[:limit] if isinstance(value, str) else ""
+
+    def when(value):
+        return value if _parse_time(value) else None
+
+    for key, inc in (raw.get("open") if isinstance(raw.get("open"), dict) else {}).items():
+        if isinstance(key, str) and isinstance(inc, dict) and when(inc.get("since")):
+            state["open"][key[:300]] = {
+                "key": key[:300], "since": inc["since"], "seen": MONITOR_CONFIRM_CHECKS if inc.get("announced") is True else 0,
+                "missing": 0, "announced": inc.get("announced") is True, "title": text(inc.get("title")),
+                "detail": text(inc.get("detail")), "severity": "critical" if inc.get("severity") == "critical" else "warning",
+                "kind": text(inc.get("kind"), 40), "outage": inc.get("outage") is True,
+                "services": [text(s, 100) for s in (inc.get("services") if isinstance(inc.get("services"), list) else [])][:20],
+            }
+    for entry in (raw.get("history") if isinstance(raw.get("history"), list) else []):
+        if isinstance(entry, dict) and when(entry.get("start")) and isinstance(entry.get("key"), str):
+            end = when(entry.get("end"))
+            if end is None and entry["key"] not in state["open"]:
+                end = entry["start"]  # an outage nothing remembers ending: don't show it as still going
+            state["history"].append({
+                "key": entry["key"][:300], "title": text(entry.get("title")), "detail": text(entry.get("detail")),
+                "severity": "critical" if entry.get("severity") == "critical" else "warning",
+                "kind": text(entry.get("kind"), 40),
+                "services": [text(s, 100) for s in (entry.get("services") if isinstance(entry.get("services"), list) else [])][:20],
+                "start": entry["start"], "end": end,
+            })
+    return state
+
+
+# --- Storing it ---------------------------------------------------------------
+
+_HISTORY_LOCK = threading.Lock()
+_HISTORY = {"state": None}
+_MONITOR = {"thread": None, "interval": None, "last_check": None, "checks": 0}
+
+
+def load_history() -> dict:
+    try:
+        with open(HISTORY_PATH, "r") as handle:
+            return _clean_history_state(json.load(handle))
+    except FileNotFoundError:
+        return empty_history()
+    except (OSError, ValueError) as err:
+        log.warning("history.json could not be read (%s); the service history starts again", err.__class__.__name__)
+        return empty_history()
+
+
+def save_history(state: dict) -> None:
+    """Written to a temporary file and moved into place, so a restart in the
+    middle of a write cannot leave half a file behind."""
+    tmp = HISTORY_PATH + ".tmp"
+    try:
+        fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+        with os.fdopen(fd, "w") as handle:
+            json.dump(state, handle)
+        os.replace(tmp, HISTORY_PATH)
+    except OSError as err:
+        log_problem(("history-save", err.__class__.__name__),
+                    "The service history could not be saved (%s: %s)", err.__class__.__name__, scrub_log_text(err))
+
+
+def _history_state() -> dict:
+    """The live history, read from disk the first time. Callers hold _HISTORY_LOCK."""
+    if _HISTORY["state"] is None:
+        _HISTORY["state"] = load_history()
+    return _HISTORY["state"]
+
+
+# --- Alert destinations (per administrator) ----------------------------------
+
+
+def _clean_url(value, limit: int = 500) -> str:
+    text = value.strip()[:limit] if isinstance(value, str) else ""
+    try:
+        parts = urlsplit(text)
+    except ValueError:
+        return ""
+    return text if parts.scheme in ("http", "https") and parts.netloc else ""
+
+
+def normalize_notify(raw):
+    """
+    The clean form of an account's alert settings, or None when no destination
+    is set up:
+        {"level": "critical" | "all",
+         "ntfy":    {"server", "topic", "token"?},
+         "webhook": {"webhook_url"}}
+    Anything unusable is dropped rather than raised, because this also reads
+    config.json and uploaded files.
+    """
+    if not isinstance(raw, dict):
+        return None
+    out = {"level": raw.get("level") if raw.get("level") in NOTIFY_LEVELS else "critical"}
+    ntfy = raw.get("ntfy")
+    if isinstance(ntfy, dict):
+        topic = ntfy.get("topic").strip() if isinstance(ntfy.get("topic"), str) else ""
+        if _NTFY_TOPIC_RE.match(topic):
+            entry = {"server": _clean_url(ntfy.get("server"), 300) or DEFAULT_NTFY_SERVER, "topic": topic}
+            token = ntfy.get("token").strip()[:200] if isinstance(ntfy.get("token"), str) else ""
+            if token:
+                entry["token"] = token
+            out["ntfy"] = entry
+    webhook = raw.get("webhook")
+    if isinstance(webhook, dict):
+        url = _clean_url(webhook.get("webhook_url"))
+        if url:
+            out["webhook"] = {"webhook_url": url}
+    return out if ("ntfy" in out or "webhook" in out) else None
+
+
+def notify_view(notify) -> dict:
+    """What the browser may be told about an account's alert settings: whether
+    each secret is set, never the secret."""
+    notify = notify or {}
+    ntfy, webhook = notify.get("ntfy"), notify.get("webhook")
+    return {
+        "level": notify.get("level", "critical"),
+        "ntfy": {"server": ntfy["server"], "topic_set": True, "token_set": bool(ntfy.get("token"))} if ntfy else
+                {"server": DEFAULT_NTFY_SERVER, "topic_set": False, "token_set": False},
+        "webhook": {"set": True, "host": urlsplit(webhook["webhook_url"]).netloc.rsplit("@", 1)[-1]} if webhook else
+                   {"set": False, "host": ""},
+    }
+
+
+# --- Writing the messages (pure) ------------------------------------------------
+
+
+def _message_for(event: dict) -> dict:
+    incident = event["incident"]
+    base = {
+        "severity": incident["severity"], "kind": incident["kind"], "services": incident["services"],
+        "since": incident["since"], "key": incident["key"],
+    }
+    if event["type"] == "opened":
+        return {**base, "event": "opened", "title": incident["title"][:200],
+                "message": (incident["detail"] or "Needs attention.")[:1000], "ended": None}
+    return {**base, "event": "cleared", "title": f"Resolved: {incident['title']}"[:200],
+            "message": f"Back to normal after {_between(incident['since'], event['ended'])}.", "ended": event["ended"]}
+
+
+def _summary_message(kind: str, events: list) -> dict:
+    titles = [e["incident"]["title"] for e in events]
+    shown = "; ".join(titles[:6]) + (f"; and {len(titles) - 6} more" if len(titles) > 6 else "")
+    services = []
+    for e in events:
+        for name in e["incident"]["services"]:
+            if name not in services:
+                services.append(name)
+    opened = kind == "opened"
+    return {
+        "event": kind, "key": "", "kind": "summary", "services": services[:20], "since": min(e["incident"]["since"] for e in events),
+        "ended": None if opened else max(e["ended"] for e in events),
+        "severity": "critical" if opened and any(e["incident"]["severity"] == "critical" for e in events) else "warning",
+        "title": f"{len(events)} new problems" if opened else f"{len(events)} problems resolved",
+        "message": shown[:1000],
+    }
+
+
+def compose_messages(events: list, max_separate: int = NOTIFY_MAX_SEPARATE) -> list:
+    """One message per event - unless a lot happen in one check (a switch or
+    the router going down takes the whole stack with it), when they become one
+    summary, so a person's phone isn't buried."""
+    messages = []
+    for kind in ("opened", "cleared"):
+        group = [e for e in events if e["type"] == kind]
+        if len(group) > max_separate:
+            messages.append(_summary_message(kind, group))
+        else:
+            messages.extend(_message_for(e) for e in group)
+    return messages
+
+
+def events_for_level(events: list, level: str, hidden=()) -> list:
+    """What an account on this alert level should hear. A warning the person
+    has hidden on Home stays quiet here too; a critical one cannot be hidden."""
+    hidden = set(hidden or [])
+    keep = []
+    for event in events:
+        incident = event["incident"]
+        if level != "all" and not incident.get("outage"):
+            continue
+        if incident["key"] in hidden and incident["severity"] != "critical":
+            continue
+        keep.append(event)
+    return keep
+
+
+# --- Sending ---------------------------------------------------------------------
+
+
+def _post_json(url: str, body: dict, headers=None):
+    """POSTs JSON and says what happened in words that are safe to show and to
+    log: never the address (it may hold a secret) and never the reply."""
+    _log_ctx.redact_path = True
+    try:
+        response = requests.post(url, json=body, headers=headers or {}, timeout=NOTIFY_TIMEOUT_SECONDS,
+                                 allow_redirects=False)
+    except requests.exceptions.Timeout:
+        return False, "timed out"
+    except requests.exceptions.SSLError:
+        return False, "the certificate was not accepted"
+    except requests.exceptions.ConnectionError:
+        return False, "could not connect"
+    except requests.exceptions.RequestException as err:
+        return False, err.__class__.__name__
+    finally:
+        _log_ctx.redact_path = False
+    code = response.status_code
+    if 300 <= code < 400:
+        return False, f"redirected (HTTP {code}) - use the address it redirects to"
+    if code in (401, 403):
+        return False, f"HTTP {code} - the server refused it (check the access token)"
+    if code >= 400:
+        return False, f"HTTP {code}"
+    return True, f"HTTP {code}"
+
+
+def send_ntfy(settings: dict, message: dict):
+    """ntfy's JSON publish: one POST to the server's root with the topic in the body."""
+    opened = message["event"] == "opened"
+    if message["event"] == "test":
+        priority, tags = 3, ["bell"]
+    elif not opened:
+        priority, tags = 3, ["white_check_mark"]
+    elif message["severity"] == "critical":
+        priority, tags = 4, ["rotating_light"]
+    else:
+        priority, tags = 3, ["warning"]
+    body = {"topic": settings["topic"], "title": message["title"], "message": message["message"],
+            "priority": priority, "tags": tags}
+    headers = {"Authorization": f"Bearer {settings['token']}"} if settings.get("token") else {}
+    return _post_json(settings["server"].rstrip("/") + "/", body, headers)
+
+
+def send_webhook(settings: dict, message: dict):
+    body = {
+        "app": "arrVantage", "version": resolve_app_version(), "event": message["event"],
+        "title": message["title"], "message": message["message"], "severity": message["severity"],
+        "kind": message["kind"], "services": message["services"], "since": message["since"], "ended": message["ended"],
+    }
+    return _post_json(settings["webhook_url"], body)
+
+
+def send_message(notify: dict, message: dict) -> list:
+    """Sends one message to every destination an account has. Returns
+    [(channel, ok, detail)]; a failure is logged once in a while, without the address."""
+    results = []
+    for channel, sender in (("ntfy", send_ntfy), ("webhook", send_webhook)):
+        if notify.get(channel):
+            ok, detail = sender(notify[channel], message)
+            if not ok:
+                log_problem(("alert", channel, detail), "Could not send an alert by %s: %s", channel, detail)
+            results.append((channel, ok, detail))
+    return results
+
+
+def deliver_events(events: list) -> None:
+    for user in list(USERS):
+        notify = normalize_notify(user.get("notify")) if user.get("role") == "admin" else None
+        if not notify:
+            continue
+        mine = events_for_level(events, notify["level"], user.get("hidden_attention"))
+        for message in compose_messages(mine):
+            send_message(notify, message)
+
+
+# --- The check itself --------------------------------------------------------------
+
+
+def monitor_once(deliver: bool = True) -> list:
+    """One background check: run Needs attention, update the history, send the
+    alerts that are due. Returns the events (for tests)."""
+    data = gather_attention()
+    now = _iso_now()
+    with _HISTORY_LOCK:
+        before = _history_state()
+        after, events = track_incidents(before, data, now)
+        after["history"] = prune_history(after["history"], now)
+        _HISTORY["state"] = after
+        if after != before:
+            save_history(after)
+    _MONITOR["last_check"] = now
+    _MONITOR["checks"] += 1
+    if events and deliver:
+        deliver_events(events)
+    return events
+
+
+def _monitor_loop(interval: int) -> None:
+    time.sleep(MONITOR_FIRST_DELAY)
+    while True:
+        try:
+            monitor_once()
+        except Exception as err:  # noqa: BLE001 - the monitor must outlive any one bad check
+            log_problem(("monitor", err.__class__.__name__), "A background check failed: %s: %s",
+                        err.__class__.__name__, scrub_log_text(err))
+        time.sleep(interval)
+
+
+def start_monitor() -> bool:
+    """Starts the background thread (once). False when it is switched off or already running."""
+    interval = resolve_monitor_interval(os.environ.get("MONITOR_INTERVAL"))
+    _MONITOR["interval"] = interval
+    thread = _MONITOR["thread"]
+    if interval == 0 or (thread is not None and thread.is_alive()):
+        return False
+    thread = threading.Thread(target=_monitor_loop, args=(interval,), name="arrv-monitor", daemon=True)
+    _MONITOR["thread"] = thread
+    thread.start()
+    return True
+
+
+def monitor_status() -> dict:
+    interval = _MONITOR["interval"]
+    if interval is None:
+        interval = resolve_monitor_interval(os.environ.get("MONITOR_INTERVAL"))
+    return {"enabled": interval > 0, "interval": interval, "last_check": _MONITOR["last_check"], "checks": _MONITOR["checks"]}
+
+
+@app.route("/api/history")
+@login_required
+def api_history():
+    """The recorded outages, newest first; `end: null` means still going."""
+    with _HISTORY_LOCK:
+        entries = copy.deepcopy(_history_state()["history"])
+    entries.reverse()
+    return jsonify({"ok": True, "now": _iso_now(), "monitor": monitor_status(), "history": entries[:HISTORY_API_LIMIT]})
+
+
+# --- Alert settings (administrators only; each sets their own) -----------------
+
+
+@app.route("/api/notifications")
+@login_required
+@admin_required
+def api_notifications():
+    return jsonify({"ok": True, "levels": NOTIFY_LEVELS, "notify": notify_view(normalize_notify(current_user().get("notify"))),
+                    "monitor": monitor_status()})
+
+
+@app.route("/api/notifications", methods=["POST"])
+@login_required
+@admin_required
+def api_notifications_save():
+    """
+    {"level": ..., "ntfy": {"server", "topic", "token", "remove"}, "webhook": {"webhook_url", "remove"}}
+    A secret left blank keeps what is saved (the browser is never sent them);
+    "remove": true clears a destination.
+    """
+    payload = request.get_json(silent=True)
+    if not isinstance(payload, dict):
+        return jsonify({"ok": False, "errors": ["Expected a JSON object."]}), 400
+    user = current_user()
+    current = normalize_notify(user.get("notify")) or {}
+    errors = []
+
+    level = payload.get("level", current.get("level", "critical"))
+    if level not in NOTIFY_LEVELS:
+        errors.append("Choose what to be alerted about.")
+
+    new = {"level": level if level in NOTIFY_LEVELS else "critical"}
+
+    ntfy_in = payload.get("ntfy") if isinstance(payload.get("ntfy"), dict) else {}
+    old = current.get("ntfy")
+    if ntfy_in.get("remove") is True:
+        pass
+    else:
+        server_in = ntfy_in.get("server").strip() if isinstance(ntfy_in.get("server"), str) else ""
+        topic_in = ntfy_in.get("topic").strip() if isinstance(ntfy_in.get("topic"), str) else ""
+        token_in = ntfy_in.get("token").strip() if isinstance(ntfy_in.get("token"), str) else ""
+        if server_in and not _clean_url(server_in, 300):
+            errors.append("The ntfy server address must start with http:// or https://.")
+        if topic_in and not _NTFY_TOPIC_RE.match(topic_in):
+            errors.append("An ntfy topic can only use letters, numbers, - and _ (up to 64 characters).")
+        topic = topic_in or (old or {}).get("topic", "")
+        if topic and not errors:
+            entry = {"server": _clean_url(server_in, 300) or (old or {}).get("server") or DEFAULT_NTFY_SERVER, "topic": topic}
+            token = token_in or ("" if ntfy_in.get("clear_token") is True else (old or {}).get("token", ""))
+            if token:
+                entry["token"] = token[:200]
+            new["ntfy"] = entry
+        elif token_in and not topic:
+            errors.append("Enter the ntfy topic as well as the access token.")
+
+    hook_in = payload.get("webhook") if isinstance(payload.get("webhook"), dict) else {}
+    if hook_in.get("remove") is not True:
+        url_in = hook_in.get("webhook_url").strip() if isinstance(hook_in.get("webhook_url"), str) else ""
+        if url_in and not _clean_url(url_in):
+            errors.append("The webhook address must start with http:// or https://.")
+        elif url_in:
+            new["webhook"] = {"webhook_url": _clean_url(url_in)}
+        elif current.get("webhook"):
+            new["webhook"] = current["webhook"]
+
+    if errors:
+        return jsonify({"ok": False, "errors": errors}), 400
+    cleaned = normalize_notify(new)
+    if cleaned:
+        user["notify"] = cleaned
+    else:
+        user.pop("notify", None)
+    save_config(CONFIG)
+    return jsonify({"ok": True, "notify": notify_view(cleaned)})
+
+
+@app.route("/api/notifications/test", methods=["POST"])
+@login_required
+@admin_required
+def api_notifications_test():
+    """Sends a test message to the signed-in administrator's saved destinations."""
+    notify = normalize_notify(current_user().get("notify"))
+    if not notify:
+        return jsonify({"ok": False, "error": "Save a destination first, then send the test."}), 400
+    message = {"event": "test", "title": "arrVantage test alert", "message": "If you can read this, alerts reach you.",
+               "severity": "warning", "kind": "test", "services": [], "since": _iso_now(), "ended": None, "key": ""}
+    results = [{"channel": channel, "ok": ok, "detail": detail} for channel, ok, detail in send_message(notify, message)]
+    return jsonify({"ok": all(r["ok"] for r in results), "results": results})
 
 
 @app.route("/settings", methods=["GET", "POST"])
@@ -6012,7 +6659,9 @@ def settings():
         downloaders=CONFIG.get("downloaders", []),
         indexers=CONFIG.get("indexers", []),
         transcoders=CONFIG.get("transcoders", []),
-        users=CONFIG.get("users", []),
+        # An account's alert destinations are secrets and are edited in their
+        # own box (Alerts), never through this page's data.
+        users=[{k: v for k, v in u.items() if k != "notify"} for u in CONFIG.get("users", [])],
         tmdb=CONFIG.get("tmdb", {"api_key": ""}),
         tvdb=CONFIG.get("tvdb", {"api_key": "", "pin": ""}),
         fanart=CONFIG.get("fanart", {"api_key": ""}),
@@ -6112,11 +6761,21 @@ def index():
         can_request=perms["requesting"], can_search=perms["searching"],
         csrf_token=ensure_csrf_token(),
         home_layout=normalize_home_layout(user.get("home_layout")),
+        app_version=resolve_app_version(),
     )
 
+
+# gunicorn imports this module, so that is where the background monitor starts
+# (the tests set ARRVANTAGE_NO_MONITOR so they never get a thread of their own).
+if __name__ != "__main__" and os.environ.get("ARRVANTAGE_NO_MONITOR") != "1":
+    start_monitor()
 
 if __name__ == "__main__":
     # This only runs for local `python app.py` use - Docker's gunicorn
     # entrypoint imports the app object directly and never reaches here.
     debug_mode = os.environ.get("FLASK_DEBUG", "true").lower() == "true"
+    # Flask's reloader runs this file twice; only the process that serves
+    # requests (WERKZEUG_RUN_MAIN) gets the monitor, or alerts would double.
+    if not debug_mode or os.environ.get("WERKZEUG_RUN_MAIN") == "true":
+        start_monitor()
     app.run(host="0.0.0.0", port=5000, debug=debug_mode)

@@ -508,6 +508,63 @@
             </div>
         </form>
 
+        <details class="group" id="alerts-group">
+            <summary>Alerts</summary>
+            <div class="group-body">
+                <div class="tool-block">
+                    <h2 class="tool-title">Push alerts for {{ session.get('username', 'your account') }}</h2>
+                    <p class="tool-hint">Get a message on your phone when a service stops answering, and another when it is back. arrVantage checks in the background, so this works with the dashboard closed. Each administrator sets up their own alerts; they are not shared. A problem is only reported once it has been seen on two checks in a row, so one slow answer does not wake you up.</p>
+                    <p class="tool-hint" id="alerts-monitor-off" hidden>Background checks are switched off (MONITOR_INTERVAL=0), so no alerts will be sent.</p>
+
+                    <div class="field">
+                        <label for="alerts-level">Tell me about</label>
+                        <select id="alerts-level" aria-describedby="alerts-level-hint"></select>
+                        <p class="tool-hint" id="alerts-level-hint"></p>
+                    </div>
+
+                    <div class="metadata-service-label">ntfy</div>
+                    <p class="tool-hint">Install the ntfy app, subscribe to a topic of your choice, and enter the same topic here. Anyone who knows the topic can read your alerts on the public ntfy.sh server, so make it hard to guess, or use your own ntfy server.</p>
+                    <div class="field">
+                        <label for="alerts-ntfy-server">Server</label>
+                        <input type="text" id="alerts-ntfy-server" placeholder="https://ntfy.sh" autocomplete="off">
+                    </div>
+                    <div class="field">
+                        <label for="alerts-ntfy-topic">Topic</label>
+                        <div class="key-row">
+                            <input type="password" id="alerts-ntfy-topic" autocomplete="new-password" spellcheck="false">
+                            <button type="button" class="toggle-btn" onclick="toggleField('alerts-ntfy-topic', this)">Show</button>
+                        </div>
+                    </div>
+                    <div class="field">
+                        <label for="alerts-ntfy-token">Access token (only if your server needs one)</label>
+                        <div class="key-row">
+                            <input type="password" id="alerts-ntfy-token" autocomplete="new-password" spellcheck="false">
+                            <button type="button" class="toggle-btn" onclick="toggleField('alerts-ntfy-token', this)">Show</button>
+                        </div>
+                    </div>
+                    <div class="tool-row"><button type="button" class="test-btn" id="alerts-ntfy-remove" hidden>Remove ntfy</button></div>
+
+                    <div class="metadata-service-label">Webhook</div>
+                    <p class="tool-hint">arrVantage sends a JSON message to this address (a POST with app, version, event, title, message, severity, kind, services, since and ended). Use it for Home Assistant, n8n, Discord-compatible bridges and the like. The address is stored like an API key, because many include a secret.</p>
+                    <div class="field">
+                        <label for="alerts-webhook-url">Address</label>
+                        <div class="key-row">
+                            <input type="password" id="alerts-webhook-url" autocomplete="new-password" spellcheck="false">
+                            <button type="button" class="toggle-btn" onclick="toggleField('alerts-webhook-url', this)">Show</button>
+                        </div>
+                    </div>
+                    <div class="tool-row"><button type="button" class="test-btn" id="alerts-webhook-remove" hidden>Remove webhook</button></div>
+
+                    <div class="tool-row">
+                        <button type="button" class="test-btn" id="alerts-save">Save alerts</button>
+                        <button type="button" class="test-btn" id="alerts-test">Send a test alert</button>
+                        <span class="test-status" id="alerts-status" role="status" aria-live="polite"></span>
+                    </div>
+                    <p class="tool-hint">The test goes to what you last saved. Passwords, tokens and addresses are never shown here again once saved, and a blank box keeps what is saved.</p>
+                </div>
+            </div>
+        </details>
+
         <details class="group" id="backup-group">
             <summary>Backup, restore and diagnostics</summary>
             <div class="group-body">
@@ -732,6 +789,106 @@
                     setStatus(diagStatus, 'Could not collect diagnostics: ' + err.message, 'test-fail');
                 }
             });
+        })();
+
+        // ---------------------------------------------------------------
+        // Alerts (ntfy / webhook), for the signed-in administrator
+        // ---------------------------------------------------------------
+        (function () {
+            const $ = (id) => document.getElementById(id);
+            const level = $('alerts-level');
+            const status = $('alerts-status');
+            let levels = {};
+            let monitorState = null;
+
+            function say(text, cls) {
+                status.textContent = text;
+                status.className = 'test-status' + (cls ? ' ' + cls : '');
+            }
+
+            function describeLevel() {
+                $('alerts-level-hint').textContent = level.value === 'all'
+                    ? 'Every item on Needs attention, including stalled downloads and health warnings (warnings you have hidden on Home stay quiet).'
+                    : 'A service that stops answering, every indexer failing, a critically low disk, or another critical problem.';
+            }
+
+            function show(notify) {
+                level.replaceChildren();
+                Object.keys(levels).forEach((key) => {
+                    const option = document.createElement('option');
+                    option.value = key;
+                    option.textContent = levels[key];
+                    level.appendChild(option);
+                });
+                level.value = notify.level;
+                describeLevel();
+                $('alerts-ntfy-server').value = notify.ntfy.server;
+                $('alerts-ntfy-topic').value = '';
+                $('alerts-ntfy-topic').placeholder = notify.ntfy.topic_set ? 'Saved. Type a new topic to replace it.' : 'for example arrvantage-7f3k2m';
+                $('alerts-ntfy-token').value = '';
+                $('alerts-ntfy-token').placeholder = notify.ntfy.token_set ? 'Saved. Type a new token to replace it.' : 'optional';
+                $('alerts-webhook-url').value = '';
+                $('alerts-webhook-url').placeholder = notify.webhook.set ? 'Saved (' + notify.webhook.host + '). Type a new address to replace it.' : 'https://...';
+                $('alerts-ntfy-remove').hidden = !notify.ntfy.topic_set;
+                $('alerts-webhook-remove').hidden = !notify.webhook.set;
+                $('alerts-test').disabled = !(notify.ntfy.topic_set || notify.webhook.set);
+                $('alerts-monitor-off').hidden = !monitorState || monitorState.enabled;
+            }
+
+            async function post(url, body) {
+                const response = await fetch(url, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
+                let data = {};
+                try { data = await response.json(); } catch (e) { /* not JSON */ }
+                return data;
+            }
+
+            async function save(extra) {
+                say('Saving…');
+                const body = Object.assign({
+                    level: level.value,
+                    ntfy: { server: $('alerts-ntfy-server').value, topic: $('alerts-ntfy-topic').value, token: $('alerts-ntfy-token').value },
+                    webhook: { webhook_url: $('alerts-webhook-url').value },
+                }, extra || {});
+                try {
+                    const data = await post('/api/notifications', body);
+                    if (!data.ok) { say((data.errors || [data.error || 'Could not save.']).join(' '), 'test-fail'); return false; }
+                    show(data.notify);
+                    say('Saved.', 'test-ok');
+                    return true;
+                } catch (err) {
+                    say('Could not reach the server: ' + err.message, 'test-fail');
+                    return false;
+                }
+            }
+
+            level.addEventListener('change', describeLevel);
+            $('alerts-save').addEventListener('click', () => save());
+            $('alerts-ntfy-remove').addEventListener('click', () => save({ ntfy: { remove: true } }));
+            $('alerts-webhook-remove').addEventListener('click', () => save({ webhook: { remove: true } }));
+            $('alerts-test').addEventListener('click', async () => {
+                say('Sending…');
+                try {
+                    const data = await post('/api/notifications/test', {});
+                    if (data.error) { say(data.error, 'test-fail'); return; }
+                    const parts = (data.results || []).map((r) => (r.channel === 'ntfy' ? 'ntfy' : 'Webhook') + ': ' + (r.ok ? 'sent' : 'failed - ' + r.detail));
+                    say(parts.join('. ') + '.', data.ok ? 'test-ok' : 'test-fail');
+                } catch (err) {
+                    say('Could not reach the server: ' + err.message, 'test-fail');
+                }
+            });
+
+            (async function load() {
+                try {
+                    const response = await fetch('/api/notifications');
+                    const data = await response.json();
+                    if (!data.ok) throw new Error('failed');
+                    levels = data.levels;
+                    monitorState = data.monitor;
+                    show(data.notify);
+                } catch (err) {
+                    say('Could not load your alert settings.', 'test-fail');
+                }
+            })();
         })();
 
         // ---------------------------------------------------------------

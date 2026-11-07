@@ -1442,3 +1442,32 @@ body {
 }
 /* "Theme default" has no colour of its own to show, so it reads as an empty ring. */
 .accent-dot--default { background: transparent; border: 2px dashed var(--muted); }
+
+/* Needs attention: the header row, and the History link beside it */
+.attention-head { display: flex; align-items: center; justify-content: space-between; gap: 0.75rem; margin: 0 0 0.6rem 0; }
+.attention-head .attention-heading { margin: 0; }
+.attention-history-btn { padding: 0.25rem 0; flex: none; }
+
+/* A line under a slide-over's title (the version, or what the list is) */
+.modal-meta { color: var(--muted); font-size: var(--text-sm); margin-top: 0.2rem; }
+
+/* Service history slide-over */
+.history-note { color: var(--muted); font-size: var(--text-sm); margin: 0 0 1rem 0; }
+.history-empty { color: var(--text); }
+.history-list { list-style: none; margin: 0; padding: 0; }
+.history-item {
+    display: flex;
+    gap: 0.75rem;
+    align-items: flex-start;
+    padding: 0.8rem 0;
+    border-top: 1px solid var(--border);
+}
+.history-item:first-child { border-top: 0; }
+/* Inside the slide-over the badge's usual tinted fill is too light for the red and amber text
+   (axe: 3.99 to 4.15 on two themes), so the label sits on the panel itself with a hairline outline. */
+.history-sev { flex: none; margin-top: 0.1rem; background: transparent; border: 1px solid var(--border); }
+.history-main { min-width: 0; }
+.history-title { font-weight: 500; overflow-wrap: anywhere; }
+.history-services { color: var(--muted); font-size: var(--text-sm); }
+.history-when { color: var(--muted); font-size: var(--text-sm); font-variant-numeric: tabular-nums; margin-top: 0.15rem; }
+.history-item.is-ongoing .history-when { color: var(--text); }

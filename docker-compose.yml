@@ -39,6 +39,9 @@ services:
       # troubleshooting to log every call to your services (never any
       # keys or passwords), then back again - DEBUG is chatty.
       # - LOG_LEVEL=DEBUG
+      # Seconds between the background checks behind the service history
+      # and push alerts (30-3600). 0 turns them off.
+      # - MONITOR_INTERVAL=60
       # Only needed if 5000 conflicts with something else - most setups
       # can leave this out entirely and rely on the built-in default.
       # - PORT=5000

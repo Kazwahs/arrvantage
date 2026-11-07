@@ -289,7 +289,7 @@ class TestDiagnostics:
         assert "TV (Sonarr-type): 1 (0 enabled)" in text
         assert "Jellyfin: 1 (1 enabled)" in text
         assert "Users: 1" in text
-        assert "Build fingerprint:" in text
+        assert f"Version: {app_module.APP_VERSION} (build " in text
 
     def test_addresses_are_hidden_by_default(self, app_module, admin_session):
         client, _csrf = admin_session

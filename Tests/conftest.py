@@ -14,6 +14,10 @@ import importlib
 
 import pytest
 
+# The background monitor is a thread that checks every service forever; no
+# test wants one running behind it (tests that need it call monitor_once()).
+os.environ["ARRVANTAGE_NO_MONITOR"] = "1"
+
 # Explicitly add the repo root (this file's parent directory) to
 # sys.path, rather than relying on pytest's own rootdir-insertion
 # heuristics to make "import app" work. Those heuristics depend on

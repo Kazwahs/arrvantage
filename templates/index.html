@@ -180,9 +180,13 @@
 
                 <div class="home-panels" id="home-panels">
                     <section class="home-panel attention" id="attention-panel" data-panel="attention" data-label="Needs attention" aria-labelledby="attention-heading">
-                        <h2 class="modal-section-title attention-heading" id="attention-heading">
-                            Needs attention <span class="attention-count" id="attention-count" hidden></span>
-                        </h2>
+                        <div class="attention-head">
+                            <h2 class="modal-section-title attention-heading" id="attention-heading">
+                                Needs attention <span class="attention-count" id="attention-count" hidden></span>
+                            </h2>
+                            <button type="button" class="attention-more attention-history-btn" id="attention-history-btn"
+                                    title="When each service went down and came back">History</button>
+                        </div>
                         <div class="home-panel-body" id="attention-body" aria-live="polite" aria-busy="true">
                             <div class="attention-loading">Checking your services&hellip;</div>
                         </div>
@@ -3199,6 +3203,85 @@
             radioGroupKeys(e, '.accent-swatch', el => setAccent(el.dataset.accentKey));
         });
 
+        // The release this page was served by (also in Settings > Copy diagnostics).
+        const APP_VERSION = {{ app_version | tojson }};
+
+        // ------------------------------------------------------------------
+        // Service history: when each service went down and came back. It is
+        // recorded by the server's background check, so it fills in whether
+        // or not anyone had the dashboard open.
+        // ------------------------------------------------------------------
+        function formatDuration(seconds) {
+            seconds = Math.max(0, Math.round(seconds));
+            if (seconds < 90) return seconds + ' s';
+            let minutes = Math.floor(seconds / 60);
+            if (minutes < 60) return minutes + ' min';
+            let hours = Math.floor(minutes / 60);
+            minutes = minutes % 60;
+            if (hours < 24) return hours + ' h' + (minutes ? ' ' + minutes + ' min' : '');
+            const days = Math.floor(hours / 24);
+            hours = hours % 24;
+            return days + ' d' + (hours ? ' ' + hours + ' h' : '');
+        }
+
+        function formatWhen(iso) {
+            const date = new Date(iso);
+            if (isNaN(date)) return '';
+            return date.toLocaleString([], { dateStyle: 'medium', timeStyle: 'short' });
+        }
+
+        function historyItemHTML(entry, nowMs) {
+            const critical = entry.severity === 'critical';
+            const start = new Date(entry.start).getTime();
+            const ongoing = entry.end === null;
+            const length = formatDuration(((ongoing ? nowMs : new Date(entry.end).getTime()) - start) / 1000);
+            const services = (entry.services || []).join(', ');
+            return `
+                <li class="history-item ${ongoing ? 'is-ongoing' : ''}">
+                    <span class="inline-badge ${critical ? 'badge-error' : 'badge-warning'} history-sev">${critical ? 'Critical' : 'Warning'}</span>
+                    <div class="history-main">
+                        <div class="history-title">${escapeHtml(entry.title)}</div>
+                        ${services ? `<div class="history-services">${escapeHtml(services)}</div>` : ''}
+                        <div class="history-when">
+                            ${ongoing
+                                ? `<strong>Still going</strong> &middot; since ${escapeHtml(formatWhen(entry.start))} (${escapeHtml(length)})`
+                                : `${escapeHtml(formatWhen(entry.start))} &rarr; ${escapeHtml(formatWhen(entry.end))} &middot; lasted ${escapeHtml(length)}`}
+                        </div>
+                    </div>
+                </li>`;
+        }
+
+        async function showHistory() {
+            const header = document.getElementById('modal-header');
+            const body = document.getElementById('modal-body');
+            header.innerHTML = `
+                <div class="modal-header">
+                    <div class="modal-header-text">
+                        <div class="modal-title">Service history</div>
+                        <div class="modal-meta">Outages and how long they lasted, newest first</div>
+                    </div>
+                </div>`;
+            body.innerHTML = '<p class="history-note">Loading&hellip;</p>';
+            document.getElementById('modal-overlay').classList.add('open');
+            try {
+                const response = await fetch('/api/history');
+                if (!response.ok) throw new Error('HTTP ' + response.status);
+                const data = await response.json();
+                const nowMs = new Date(data.now).getTime() || Date.now();
+                const monitor = data.monitor || {};
+                const note = monitor.enabled
+                    ? `Checked every ${monitor.interval} s${monitor.last_check ? ', last at ' + escapeHtml(formatWhen(monitor.last_check)) : ''}. A problem counts once it has been seen on two checks in a row.`
+                    : 'Background checks are switched off (MONITOR_INTERVAL=0), so nothing new is recorded.';
+                const list = (data.history || []).length
+                    ? `<ol class="history-list">${data.history.map(e => historyItemHTML(e, nowMs)).join('')}</ol>`
+                    : `<p class="history-empty">No outages recorded yet. When a service stops answering, it appears here with when it went down and when it came back.</p>`;
+                body.innerHTML = `<p class="history-note">${note}</p>${list}`;
+            } catch (err) {
+                body.innerHTML = `<p class="history-note">Couldn't load the history (${escapeHtml(err.message)}).</p>`;
+            }
+        }
+        document.getElementById('attention-history-btn').addEventListener('click', showHistory);
+
         function showAbout() {
             const header = document.getElementById('modal-header');
             const body = document.getElementById('modal-body');
@@ -3210,6 +3293,7 @@
                     </div>
                     <div class="modal-header-text">
                         <div class="modal-title">About arrVantage</div>
+                        <div class="modal-meta">Version ${escapeHtml(APP_VERSION)}</div>
                     </div>
                 </div>
             `;

@@ -15,6 +15,7 @@ Actively developed — expect rough edges and breaking changes between releases.
 - Unified dashboard for your \*arr stack (Sonarr, Radarr, Lidarr, Readarr (Tested with Bookshelf and then Chaptarr), Kapowarr)
 - **Needs attention** on Home: stalled or failed downloads, unreachable apps and services, health warnings and low disk space, merged so the same problem is shown once. Warnings you do not care about can be hidden; outages cannot
 - **Coming Up** on Home: the next 7, 14 or 30 days of episodes (Sonarr), movie releases (Radarr) and albums (Lidarr), colour-coded with each instance's own colour
+- **Service history** and **push alerts**: arrVantage checks your stack in the background, records when each service went down and came back, and can tell you by ntfy or a webhook (see [Alerts and service history](#alerts-and-service-history))
 - Indexer visibility (Prowlarr)
 - Request management via Seerr (Overseerr / Jellyseerr / Seerr)
 - Media server status (Plex / Jellyfin / Emby / Komga)
@@ -73,6 +74,7 @@ Then open `http://<your-server>:5000` and connect your services (API URLs + keys
 | `FORCE_HTTPS_COOKIES` | Set to `true` once your reverse proxy + SSL certificate are confirmed working end-to-end, to make the login cookie HTTPS-only. Leave `false` for plain local-network HTTP access. | `false` |
 | `PORT` | The port arrVantage listens on inside the container. If you change it, change the right-hand side of the port mapping to match. | `5000` |
 | `LOG_LEVEL` | How much arrVantage writes to its log: `WARNING` (default), `INFO`, `DEBUG` or `ERROR`. See [Logs](#logs) below. | `WARNING` |
+| `MONITOR_INTERVAL` | Seconds between background checks, which feed the service history and the alerts. `0` switches them off (Needs attention is then only checked while the dashboard is open). Anything from 30 to 3600. | `60` |
 
 ## Logs
 
@@ -84,13 +86,33 @@ If something misbehaves, set `LOG_LEVEL=DEBUG` and restart the container; every 
 
 API keys, tokens, passwords and query strings are never written to the log, so the lines are safe to paste into an issue. They do contain the addresses of your servers (for example `192.168.1.20:8096`), so blank those out if you would rather not share them.
 
+## Alerts and service history
+
+arrVantage runs the same checks as **Needs attention** in the background, every 60 seconds by default, whether or not anyone has the dashboard open. A problem only counts once it has been seen on two checks in a row, and only counts as over after two clear ones, so one slow answer neither raises an alarm nor ends an outage.
+
+- **Service history.** On Home, **Needs attention → History** lists when each service went down and came back, how long it lasted, and any outage that is still going. The last 90 days are kept in `history.json` next to `config.json`. It holds only service names and times, and you can delete it whenever you like.
+- **Push alerts** (**Settings → Alerts**, administrators only). Each administrator sets up their own destinations and chooses what to hear about: *Outages and critical problems only* (the default: a service that stops answering, every indexer failing, a critically low disk) or *Everything, warnings included* (warnings you have hidden on Home stay quiet). You get one message when a problem starts and one when it clears. If a lot breaks at once, such as a switch going down, you get a single summary instead of a flood. **Send a test alert** checks the setup.
+  - **ntfy:** the server (the public `https://ntfy.sh` or your own), a topic, and an access token only if your server needs one. On the public server anyone who knows the topic can read it, so make it hard to guess.
+  - **Webhook:** arrVantage sends a JSON `POST` to the address, for Home Assistant, n8n and the like:
+
+    ```json
+    {"app": "arrVantage", "version": "1.2.0", "event": "opened", "title": "Radarr can't be reached",
+     "message": "Connection refused", "severity": "critical", "kind": "unreachable",
+     "services": ["Radarr"], "since": "2026-11-01T10:00:00Z", "ended": null}
+    ```
+
+    `event` is `opened`, `cleared` (with `ended` filled in) or `test`.
+- The topic, access token and webhook address are treated like API keys: they are left out of exports unless you tick *Include API keys*, are never sent back to your browser once saved, and are never written to the log (a failed alert is logged as, for example, `HTTP 500`, without the address).
+- The alerts are sent by the arrVantage container, so it must be able to reach your ntfy server or webhook address from where it runs.
+- Set `MONITOR_INTERVAL=0` to turn the background checks, the history and the alerts off.
+
 ## Backup, restore and diagnostics
 
 Everything is under **Settings → Backup, restore and diagnostics** (administrators only).
 
 - **Export settings** downloads your configuration as a JSON file. By default the file leaves out API keys and password hashes, so it is safe to share or keep in a repository. Tick *Include API keys and password hashes* for a full backup, and treat that file like a password.
 - **Restore from a file** shows exactly what a file would change before anything happens. Confirming it first saves your current settings next to `config.json` as `config.backup-<date>.json` (the newest ten are kept), then replaces them. A file exported without keys keeps the keys and accounts you already have set up. Your session key is never exported or replaced.
-- **Copy diagnostics** puts a summary of your setup on the clipboard for a bug report: the build, the versions of its main libraries, which kinds of services you run (counts only) and the latest warnings. It never contains API keys, passwords, usernames or the names you gave your services, and server addresses are hidden unless you untick the box.
+- **Copy diagnostics** puts a summary of your setup on the clipboard for a bug report: the version and build, the versions of its main libraries, which kinds of services you run (counts only), whether the monitor and alerts are on, and the latest warnings. It never contains API keys, passwords, usernames or the names you gave your services, and server addresses are hidden unless you untick the box.
 
 ## Why arrVantage?
 
@@ -124,12 +146,13 @@ What exists today, and what is on the list. The unchecked items are ideas, not p
 - [x] A Home you can rearrange
 - [x] Coming Up calendar
 - [x] Settings backup and restore, and copyable diagnostics
-- [ ] Push alerts (ntfy, Discord or a webhook) when something breaks, so you do not have to have the dashboard open
+- [x] Push alerts (ntfy or a webhook) when something breaks, so you do not have to have the dashboard open
+- [x] A short history of when each service went down and came back
+- [x] The version shown in the About panel and in diagnostics
+- [ ] More alert destinations (Discord, Telegram, email) if ntfy and the webhook are not enough
 - [ ] A Downloads panel on Home: qBittorrent and SABnzbd speeds and active queue in one place
-- [ ] A short history of when each service went down and came back
 - [ ] Book releases in Coming Up (Readarr / Chaptarr), once their calendar API has been checked against a real server
 - [ ] Support for more book and comic library apps (BookOrbit is on the list)
-- [ ] Show the version in the About panel and in diagnostics
 
 ## Contributing / Feedback
 
