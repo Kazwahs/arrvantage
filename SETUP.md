@@ -101,6 +101,7 @@ Everything else — media servers, downloaders, indexers, transcoders, request s
 | Prowlarr | Settings → General → Security → API Key |
 | Tautulli | Settings → Web Interface → API Key |
 | Tracearr | Settings → General → generate a Public API key (format `trr_pub_...`) |
+| BookOrbit | Nothing to look up: add it under Media servers with its address (for example `http://192.168.1.20:3000`) and leave the token blank. arrVantage only checks that it is up |
 | Tdarr | No auth by default on most installs — leave the field blank unless you've enabled it yourself |
 | TMDB | themoviedb.org account → Settings → API → API Key |
 | TVDB | thetvdb.com → Dashboard → API Keys (v4 key, plus an optional subscriber PIN if you have one) |

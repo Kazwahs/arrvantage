@@ -14,11 +14,11 @@ Actively developed — expect rough edges and breaking changes between releases.
 
 - Unified dashboard for your \*arr stack (Sonarr, Radarr, Lidarr, Readarr (Tested with Bookshelf and then Chaptarr), Kapowarr)
 - **Needs attention** on Home: stalled or failed downloads, unreachable apps and services, health warnings and low disk space, merged so the same problem is shown once. Warnings you do not care about can be hidden; outages cannot
-- **Coming Up** on Home: the next 7, 14 or 30 days of episodes (Sonarr), movie releases (Radarr) and albums (Lidarr), colour-coded with each instance's own colour
+- **Coming Up** on Home: the next 7, 14 or 30 days of episodes (Sonarr), movie releases (Radarr), albums (Lidarr) and books (Readarr / Chaptarr), colour-coded with each instance's own colour
 - **Service history** and **push alerts**: arrVantage checks your stack in the background, records when each service went down and came back, and can tell you by ntfy or a webhook (see [Alerts and service history](#alerts-and-service-history))
 - Indexer visibility (Prowlarr)
 - Request management via Seerr (Overseerr / Jellyseerr / Seerr)
-- Media server status (Plex / Jellyfin / Emby / Komga)
+- Media server status (Plex / Jellyfin / Emby / Komga), plus BookOrbit (uptime check and a link)
 - Metadata lookups (TMDB / TVDB / Fanart.tv)
 - Transcode status (Tdarr)
 - Your own Home: drag the panels, and the cards inside them, into the order you want, and hide the ones you do not use. It is saved per user
@@ -96,7 +96,7 @@ arrVantage runs the same checks as **Needs attention** in the background, every 
   - **Webhook:** arrVantage sends a JSON `POST` to the address, for Home Assistant, n8n and the like:
 
     ```json
-    {"app": "arrVantage", "version": "1.2.0", "event": "opened", "title": "Radarr can't be reached",
+    {"app": "arrVantage", "version": "1.3.0", "event": "opened", "title": "Radarr can't be reached",
      "message": "Connection refused", "severity": "critical", "kind": "unreachable",
      "services": ["Radarr"], "since": "2026-11-01T10:00:00Z", "ended": null}
     ```
@@ -132,7 +132,7 @@ It's still evolving — I'm actively using it myself and tweaking it as I go. Fe
 | Indexers | Prowlarr — indexer health status, individual and bulk testing |
 | Downloaders | qBittorrent, SABnzbd |
 | Requests | Overseerr, Jellyseerr |
-| Media servers | Plex, Jellyfin, Emby — Now Playing, Recently Added, Watch History, Users, library rescan. Komga for comics and manga libraries |
+| Media servers | Plex, Jellyfin, Emby — Now Playing, Recently Added, Watch History, Users, library rescan. Komga for comics and manga libraries. BookOrbit for ebooks, comics and audiobooks: arrVantage checks that it is up (it needs no token, just its address), warns you on Home and in the alerts when it is not, and links to it. Browsing its library inside arrVantage is not built, because BookOrbit has no documented API for it yet |
 | Activity data | Tautulli and/or Tracearr, for richer Now Playing / Watch History / Users than the media servers' own APIs provide alone |
 | Metadata | TMDB, TVDB, Fanart.tv, TheAudioDB |
 | Transcoding | Tdarr — stats overview, space saved, per-node worker/queue status |
@@ -151,8 +151,9 @@ What exists today, and what is on the list. The unchecked items are ideas, not p
 - [x] The version shown in the About panel and in diagnostics
 - [ ] More alert destinations (Discord, Telegram, email) if ntfy and the webhook are not enough
 - [ ] A Downloads panel on Home: qBittorrent and SABnzbd speeds and active queue in one place
-- [ ] Book releases in Coming Up (Readarr / Chaptarr), once their calendar API has been checked against a real server
-- [ ] Support for more book and comic library apps (BookOrbit is on the list)
+- [x] Book releases in Coming Up (Readarr / Chaptarr). Built from Readarr's published API; please report it if Chaptarr answers differently
+- [x] BookOrbit: uptime check, alerts and a link (its library is not browsable here until BookOrbit documents an API for it)
+- [ ] Support for more book and comic library apps
 
 ## Contributing / Feedback
 

@@ -1,10 +1,11 @@
 """
-Home > Coming Up: upcoming episodes, movie releases and albums from the
-Sonarr / Radarr / Lidarr-type instances, each item carrying its instance's colour.
+Home > Coming Up: upcoming episodes, movie releases, albums and books from the
+Sonarr / Radarr / Lidarr / Readarr-type instances, each item carrying its instance's colour.
 
-Calendar endpoints (verified against each app's CalendarController):
-GET /api/v3/calendar (Sonarr, Radarr) and /api/v1/calendar (Lidarr) with
-start, end, unmonitored=false, plus includeSeries / includeArtist.
+Calendar endpoints (verified against each app's CalendarController, and for
+Readarr its published API client):
+GET /api/v3/calendar (Sonarr, Radarr) and /api/v1/calendar (Lidarr, Readarr) with
+start, end, unmonitored=false, plus includeSeries / includeArtist / includeAuthor.
 """
 from datetime import date, timedelta
 import requests
@@ -89,6 +90,53 @@ class TestLidarrAlbums:
         assert (item["title"], item["detail"], item["color"], item["all_day"]) == ("Static Bloom", "Hollow Pines", "#5fd97a", True)
 
 
+class TestBookReleases:
+    """Readarr / Chaptarr (author kind). Field names follow Readarr's BookResource;
+    Chaptarr has not been checked against a live server."""
+
+    def test_a_book_names_its_author_and_series(self, app_module):
+        cfg = instance(app_module, "Chaptarr", "author", "#c58bff")
+        [item] = app_module.calendar_items("Chaptarr", cfg, [
+            {"title": "The Salt Road", "releaseDate": iso(3), "seriesTitle": "Tidewater",
+             "author": {"authorName": "Mara Quill"}, "statistics": {"bookFileCount": 0}}], TODAY)
+        assert item == {
+            "instance": "Chaptarr", "color": "#c58bff", "kind": "author", "title": "The Salt Road",
+            "detail": "Mara Quill - Tidewater", "when": (TODAY + timedelta(days=3)).isoformat(),
+            "all_day": True, "has_file": False,
+        }
+
+    def test_an_owned_book_is_marked(self, app_module):
+        cfg = instance(app_module, "Chaptarr", "author")
+        [item] = app_module.calendar_items("Chaptarr", cfg, [
+            {"title": "A", "releaseDate": iso(1), "statistics": {"bookFileCount": 1}}], TODAY)
+        assert item["has_file"] is True
+
+    def test_missing_pieces_do_not_break_it(self, app_module):
+        cfg = instance(app_module, "Chaptarr", "author")
+        [item] = app_module.calendar_items("Chaptarr", cfg, [
+            {"releaseDate": iso(1), "author": None, "statistics": "odd", "seriesTitle": None}], TODAY)
+        assert (item["title"], item["detail"], item["has_file"]) == ("Unknown book", "", False)
+
+    def test_undated_and_old_books_give_nothing(self, app_module):
+        cfg = instance(app_module, "Chaptarr", "author")
+        assert app_module.calendar_items("Chaptarr", cfg, [
+            {"title": "Undated"}, {"title": "Old", "releaseDate": iso(-400)}], TODAY) == []
+
+    def test_request_uses_v1_and_asks_for_the_author(self, app_module, requests_mock):
+        cfg = instance(app_module, "Chaptarr", "author")
+        mock = requests_mock.get("http://chaptarr.test:1234/api/v1/calendar", json=[])
+        assert app_module.fetch_calendar("Chaptarr", cfg, TODAY) == {"error": None, "items": []}
+        query = mock.last_request.qs
+        assert query["includeauthor"] == ["true"] and query["unmonitored"] == ["false"]
+        assert mock.last_request.headers["X-Api-Key"] == "k"
+
+    def test_book_managers_are_part_of_coming_up(self, app_module, monkeypatch):
+        instance(app_module, "Chaptarr", "author")
+        monkeypatch.setattr(app_module, "fetch_calendar", lambda n, c, today=None: {"error": None, "items": []})
+        result = app_module.gather_coming_up(7)
+        assert [i["name"] for i in result["instances"]] == ["Chaptarr"]
+
+
 class TestRobustness:
     def test_garbage_records_are_skipped(self, app_module):
         cfg = instance(app_module, "Sonarr", "series")
@@ -158,8 +206,7 @@ class TestEndpoint:
 
     def test_no_calendar_instances_means_nothing_to_show(self, app_module, admin_session):
         client, _ = admin_session
-        instance(app_module, "Kapowarr", "comic")
-        instance(app_module, "Chaptarr", "author")
+        instance(app_module, "Kapowarr", "comic")  # no calendar of its own
         body = client.get("/api/coming-up").get_json()
         assert body["instances"] == [] and body["items"] == [] and body["errors"] == []
 

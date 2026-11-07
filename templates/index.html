@@ -309,6 +309,8 @@
                     <button class="view-tab mediaserver-subtab komga-mstab" data-mstab="library" onclick="selectMediaServerTab('library')" style="display:none;">Library</button>
                     <button class="view-tab mediaserver-subtab komga-mstab" data-mstab="ondeck" onclick="selectMediaServerTab('ondeck')" style="display:none;">On Deck</button>
                     <button class="view-tab mediaserver-subtab komga-mstab" data-mstab="recent" onclick="selectMediaServerTab('recent')" style="display:none;">Recently Added</button>
+                    <!-- BookOrbit: a health check and an Open link, nothing else (see app.py). -->
+                    <button class="view-tab mediaserver-subtab bookorbit-mstab" data-mstab="status" onclick="selectMediaServerTab('status')" style="display:none;">Status</button>
                 </div>
                 <div class="topbar-right">
                     <button class="test-btn" onclick="refreshCurrentMediaServerTab()">Refresh</button>
@@ -334,6 +336,10 @@
                     </div>
                     <div class="mediaserver-subpanel" data-mstab="recent" style="display:none;">
                         <div id="mediaserver-recent-{{ ms.name }}" class="modal-loading">Loading...</div>
+                    </div>
+                    {% elif ms.type == 'bookorbit' %}
+                    <div class="mediaserver-subpanel" data-mstab="status" style="display:block;">
+                        <div id="mediaserver-status-{{ ms.name }}" class="modal-loading">Loading...</div>
                     </div>
                     {% else %}
                     {% for tab in ["now-playing", "recently-added", "watch-history", "users"] %}
@@ -1067,7 +1073,7 @@
                             </div>
                             <div class="stat-actions">
                                 <a href="${ms.open_url}" target="_blank" rel="noopener" class="mini-btn">Open</a>
-                                <button class="mini-btn" onclick="rescanMediaServer('${ms.name}', this)">Rescan Library</button>
+                                ${['plex', 'jellyfin', 'emby'].includes(ms.type) ? `<button class="mini-btn" onclick="rescanMediaServer('${ms.name}', this)">Rescan Library</button>` : ''}
                             </div>
                         </div>
                     `).join('');
@@ -2046,16 +2052,20 @@
             });
 
             const tabBtn = document.querySelector(`.instance-tab[data-mediaserver="${name}"]`);
-            const isKomga = tabBtn && tabBtn.dataset.mediaserverType === 'komga';
-            document.querySelectorAll('.standard-mstab').forEach(el => { el.style.display = isKomga ? 'none' : ''; });
+            const serverType = tabBtn ? tabBtn.dataset.mediaserverType : '';
+            const isKomga = serverType === 'komga';
+            const isBookOrbit = serverType === 'bookorbit';
+            document.querySelectorAll('.standard-mstab').forEach(el => { el.style.display = (isKomga || isBookOrbit) ? 'none' : ''; });
             document.querySelectorAll('.komga-mstab').forEach(el => { el.style.display = isKomga ? '' : 'none'; });
+            document.querySelectorAll('.bookorbit-mstab').forEach(el => { el.style.display = isBookOrbit ? '' : 'none'; });
 
-            // Switching between a Komga server and a Plex/Jellyfin-style one
-            // needs the active tab to make sense for the type being shown -
-            // "now-playing" means nothing for Komga and vice versa.
+            // Each kind of server has its own tab set, so the active tab has
+            // to be one that exists for the type being shown ("now-playing"
+            // means nothing for Komga, and neither of them for BookOrbit).
             const tabIsKomgaTab = KOMGA_MS_TABS.includes(currentMediaServerTab);
-            if (isKomga && !tabIsKomgaTab) currentMediaServerTab = 'library';
-            else if (!isKomga && tabIsKomgaTab) currentMediaServerTab = 'now-playing';
+            if (isBookOrbit) currentMediaServerTab = 'status';
+            else if (isKomga && !tabIsKomgaTab) currentMediaServerTab = 'library';
+            else if (!isKomga && (tabIsKomgaTab || currentMediaServerTab === 'status')) currentMediaServerTab = 'now-playing';
 
             selectMediaServerTab(currentMediaServerTab);
         }
@@ -2429,10 +2439,33 @@
             }
         }
 
+        // --- BookOrbit: whether it is answering, and a way into it ---
+        async function loadBookOrbitStatus(name) {
+            const el = document.getElementById(`mediaserver-status-${name}`);
+            if (!el) return;
+            el.innerHTML = '<div class="modal-loading">Checking...</div>';
+            try {
+                const response = await fetch(`/api/bookorbit/health/${encodeURIComponent(name)}`);
+                const data = await response.json();
+                const open = data.open_url
+                    ? `<a class="test-btn link-button" href="${escapeAttr(data.open_url)}" target="_blank" rel="noopener">Open BookOrbit</a>` : '';
+                const state = data.error
+                    ? `<p class="test-fail">Not answering: ${escapeHtml(data.error)}</p>`
+                    : '<p class="test-ok">Answering normally</p>';
+                el.innerHTML = `<div class="spaced-block">${state}
+                    <p class="modal-empty">arrVantage checks that BookOrbit is up and warns you on Home when it is not. Your books are browsed in BookOrbit itself.</p>
+                    ${open}</div>`;
+            } catch (err) {
+                el.innerHTML = '<div class="modal-empty">Something went wrong checking BookOrbit.</div>';
+            }
+        }
+
         async function loadMediaServerTabData(name, tab, forceReload) {
             if (KOMGA_MS_TABS.includes(tab)) {
                 return loadKomgaTabData(name, tab, forceReload);
             }
+
+            if (tab === 'status') return loadBookOrbitStatus(name);
 
             const key = `${name}:${tab}`;
             if (loadedMediaServerTabs.has(key) && !forceReload) return;

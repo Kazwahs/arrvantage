@@ -38,7 +38,7 @@ import time
 # same commit, so the image, the About panel, Copy diagnostics and the GitHub
 # release tag all say the same thing. (ARRVANTAGE_VERSION in the environment
 # wins, for a build that wants to stamp its own - the image does not today.)
-APP_VERSION = "1.2.0"
+APP_VERSION = "1.3.0"
 
 
 def resolve_app_version(raw=None) -> str:
@@ -338,6 +338,7 @@ MEDIA_SERVER_TYPES = {
     "jellyfin": "Jellyfin",
     "emby": "Emby",
     "komga": "Komga",
+    "bookorbit": "BookOrbit",
 }
 
 # Friendly message + CSS severity per Kapowarr system/status "type" -
@@ -3121,6 +3122,58 @@ def get_media_server(name: str):
 
 
 # ---------------------------------------------------------------------------
+# BookOrbit - a self-hosted ebook / comic / audiobook library
+# (github.com/bookorbit/bookorbit). What is verified, and what is not:
+# - GET /api/v1/health answers {"status": "ok"} and needs no sign-in (from the
+#   project's own documentation). That is all arrVantage uses.
+# - Everything else needs a signed-in account (a JWT from POST /api/v1/auth/login,
+#   which BookOrbit can switch off) or an OPDS account (HTTP Basic, a separate
+#   username and password). There is no documented API key and no documented REST
+#   reference (Swagger is off unless the server sets SWAGGER_ENABLED=true), so
+#   library counts, recently added books and the like are deliberately NOT
+#   built: they would be guesses at endpoints. The integration is therefore a
+#   health check (feeds Needs attention and the History) plus an Open link, and
+#   needs no token.
+# ---------------------------------------------------------------------------
+
+BOOKORBIT_HEALTH_PATH = "/api/v1/health"
+
+
+def fetch_bookorbit_health(server: dict) -> dict:
+    """Is BookOrbit answering? One more try after a refused connection or a
+    timeout before it counts, like the other media server probes. Failures are
+    described in a few plain words (never the address or the response body)."""
+    url = f"{server['url'].rstrip('/')}{BOOKORBIT_HEALTH_PATH}"
+    error = "could not connect"
+    for _ in range(2):
+        try:
+            response = requests.get(url, headers={"Accept": "application/json"}, timeout=10)
+            response.raise_for_status()
+        except requests.exceptions.HTTPError:
+            error = f"HTTP {response.status_code} - is this BookOrbit's address?"
+            continue
+        except requests.exceptions.Timeout:
+            error = "timed out"
+            continue
+        except requests.exceptions.ConnectionError:
+            error = "could not connect"
+            continue
+        except requests.exceptions.RequestException:
+            error = "request failed"
+            continue
+        try:
+            body = response.json()
+        except ValueError:
+            return {"error": "answered, but not like BookOrbit - check the address", "status": None}
+        status = str(body.get("status", "")).strip().lower() if isinstance(body, dict) else ""
+        if status == "ok":
+            return {"error": None, "status": "ok"}
+        return {"error": f"BookOrbit reports a problem (status: {scrub_log_text(status or 'unknown', 40)})",
+                "status": status or None}
+    return {"error": error, "status": None}
+
+
+# ---------------------------------------------------------------------------
 # Komga - a comics/manga/book server. Unlike Plex/Jellyfin, there's no
 # "now playing" concept (no live streaming sessions to poll), so this
 # gets its own tabs entirely (Library, On Deck, Recently Added) rather
@@ -3943,8 +3996,19 @@ def _dispatch_media_server_fetch(name, plex_fn, jellyfin_fn):
     server = get_media_server(name)
     if not server:
         return jsonify({"error": "unknown media server"}), 404
+    if server["type"] not in ("plex", "jellyfin", "emby"):
+        return jsonify({"error": "not available for this kind of server"})
     result = plex_fn(server) if server["type"] == "plex" else jellyfin_fn(server)
     return jsonify(result)
+
+
+@app.route("/api/bookorbit/health/<name>")
+@login_required
+def api_bookorbit_health(name):
+    server = get_media_server(name)
+    if not server or server["type"] != "bookorbit":
+        return jsonify({"error": "unknown BookOrbit server"}), 404
+    return jsonify({**fetch_bookorbit_health(server), "open_url": get_media_server_open_url(server)})
 
 
 @app.route("/api/mediaserver/now-playing/<name>")
@@ -4769,6 +4833,8 @@ def probe_media_server(server: dict) -> dict:
     """
     if server["type"] == "komga":
         return {"error": fetch_komga_libraries(server)["error"]}
+    if server["type"] == "bookorbit":
+        return {"error": fetch_bookorbit_health(server)["error"]}
     path = "/identity" if server["type"] == "plex" else "/System/Info/Public"
     last_error = None
     for _ in range(2):
@@ -4928,7 +4994,7 @@ def api_home_stats():
 # shows. Each item carries its instance's colour, so the panel can colour-code
 # them the way the sidebar does.
 
-CALENDAR_KINDS = ("movie", "series", "artist")
+CALENDAR_KINDS = ("movie", "series", "artist", "author")
 COMING_UP_DAYS = (7, 14, 30)
 COMING_UP_CACHE_SECONDS = 300
 _COMING_UP_CACHE: dict = {}
@@ -4985,6 +5051,22 @@ def calendar_items(config_name: str, config: dict, records: list, today) -> list
             items.append({**base, "title": record.get("title") or "Unknown album",
                           "detail": (artist.get("artistName") if isinstance(artist, dict) else "") or "",
                           "when": day.isoformat(), "all_day": True, "has_file": False})
+        elif kind == "author":
+            # Readarr-style BookResource (field names from Readarr's published
+            # API client: title, releaseDate, seriesTitle, author.authorName,
+            # statistics). Chaptarr is a Readarr-compatible fork; its answers
+            # have not been checked against a live server.
+            day = _record_date(record.get("releaseDate")) if record.get("releaseDate") else None
+            if day is None or not earliest <= day <= latest:
+                continue
+            author = record.get("author")
+            stats = record.get("statistics")
+            name = (author.get("authorName") if isinstance(author, dict) else "") or ""
+            series = record.get("seriesTitle") or ""
+            detail = " - ".join(part for part in (name, series) if isinstance(part, str) and part.strip())
+            has_file = isinstance(stats, dict) and (stats.get("bookFileCount") or 0) > 0
+            items.append({**base, "title": record.get("title") or "Unknown book",
+                          "detail": detail, "when": day.isoformat(), "all_day": True, "has_file": bool(has_file)})
     return items
 
 
@@ -4999,6 +5081,8 @@ def fetch_calendar(name: str, config: dict, today=None) -> dict:
         params["includeSeries"] = "true"
     elif config["library_kind"] == "artist":
         params["includeArtist"] = "true"
+    elif config["library_kind"] == "author":
+        params["includeAuthor"] = "true"
     url = f"{config['url'].rstrip('/')}/api/{api_version(config)}/calendar"
     try:
         response = requests.get(url, headers={"X-Api-Key": config["api_key"]}, params=params, timeout=15)
@@ -5223,6 +5307,8 @@ def api_mediaserver_rescan(name):
     server = get_media_server(name)
     if not server:
         return jsonify({"ok": False, "error": "unknown media server"}), 404
+    if server["type"] not in ("plex", "jellyfin", "emby"):
+        return jsonify({"ok": False, "error": "rescanning is not available for this kind of server"}), 400
     try:
         if server["type"] == "plex":
             trigger_plex_library_scan(server)
@@ -5409,6 +5495,13 @@ def _run_settings_test():
                 f"{url.rstrip('/')}/System/Info",
                 headers=jellyfin_family_headers(kind_or_type, credential), timeout=8,
             )
+        elif category == "media_server" and kind_or_type == "bookorbit":
+            # Its health endpoint needs no sign-in, so there is nothing to
+            # check a token against; a good answer means the address is right.
+            health = fetch_bookorbit_health({"url": url})
+            if health["error"]:
+                return jsonify({"ok": False, "error": health["error"]})
+            return jsonify({"ok": True})
         elif category == "media_server" and kind_or_type == "komga":
             response = requests.get(
                 f"{url.rstrip('/')}/api/v2/users/me",
