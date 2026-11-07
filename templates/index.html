@@ -206,6 +206,10 @@
                             <div id="comingup-days" aria-live="polite" aria-busy="true"></div>
                         </div>
                     </section>
+                    <section class="home-panel" data-panel="downloads" data-label="Downloads" aria-labelledby="home-downloads-heading" hidden>
+                        <h2 class="modal-section-title" id="home-downloads-heading">Downloads</h2>
+                        <div class="home-panel-body dl-grid" id="home-downloads-body" aria-busy="true"></div>
+                    </section>
                     <section class="home-panel" data-panel="libraries" data-label="Libraries" aria-labelledby="home-libraries-heading" hidden>
                         <h2 class="modal-section-title" id="home-libraries-heading">Libraries</h2>
                         <div class="home-panel-body stat-grid" id="home-libraries-body"></div>
@@ -619,12 +623,14 @@
             loadAttention();
             loadHomeStats();
             loadComingUp();
+            loadDownloads();
         }
 
         function refreshHome() {
             loadAttention(true);
             loadHomeStats();
             loadComingUp();
+            loadDownloads(true);
         }
 
         // --- Needs attention (Home) ---------------------------------------
@@ -1079,6 +1085,109 @@
             }
             const item = event.target.closest('.cu-item');
             if (item && !arranging) selectInstance(item.dataset.instance);
+        });
+
+        // --- Downloads (Home) ----------------------------------------------
+        // One card per download client: its state in words, its speed, and the
+        // few downloads that are actually moving. /api/downloads is shared for
+        // a few seconds on the server, so polling every 10 s is cheap; it only
+        // runs while Home is showing in a visible tab.
+        const DOWNLOADS_POLL_MS = 10000;
+        let downloadsRequest = 0;
+        let downloadsBusy = false;
+        const DL_STATE_LABEL = { downloading: 'Downloading', waiting: 'Waiting', paused: 'Paused', idle: 'Idle' };
+
+        function formatSpeed(bytes) {
+            if (!bytes || bytes < 1) return '0 KB/s';
+            const kb = bytes / 1024;
+            if (kb < 1000) return `${kb < 10 ? kb.toFixed(1) : Math.round(kb)} KB/s`;
+            const mb = kb / 1024;
+            if (mb < 1000) return `${mb < 10 ? mb.toFixed(1) : Math.round(mb)} MB/s`;
+            return `${(mb / 1024).toFixed(1)} GB/s`;
+        }
+
+        function downloadItemHTML(item) {
+            const pct = Math.max(0, Math.min(100, Number(item.progress) || 0));
+            const meta = [`${pct.toFixed(pct % 1 ? 1 : 0)}%`];
+            if (item.group === 'downloading' && item.speed >= 1024) meta.push(formatSpeed(item.speed));
+            if (item.eta) meta.push(`${item.eta} left`);
+            if (item.group !== 'downloading') meta.push({ stalled: 'Stalled', queued: 'Queued', preparing: 'Preparing' }[item.group] || '');
+            return `
+                <li class="dl-item">
+                    <span class="dl-name" title="${escapeAttr(item.name)}">${escapeHtml(item.name)}</span>
+                    <span class="dl-bar" role="progressbar" aria-valuemin="0" aria-valuemax="100" aria-valuenow="${pct}" aria-label="${escapeAttr(item.name)}"><span style="width:${pct}%"></span></span>
+                    <span class="dl-meta">${escapeHtml(meta.filter(Boolean).join(' \u00b7 '))}</span>
+                </li>`;
+        }
+
+        function downloadCardHTML(client) {
+            const head = `
+                <div class="dl-head">
+                    <img class="stat-icon" src="${escapeAttr(client.icon_url || '')}" alt="" onerror="this.style.display='none';">
+                    <button type="button" class="dl-open" data-client="${escapeAttr(client.name)}" title="Open ${escapeAttr(client.name)}">${escapeHtml(client.name)}</button>
+                    ${client.error ? '' : `<span class="dl-state dl-state--${escapeAttr(client.state)}">${DL_STATE_LABEL[client.state] || ''}</span>`}
+                </div>`;
+            if (client.error) {
+                return `<div class="dl-card" style="--cu-color:${safeColor(client.color)}">${head}<div class="test-fail stat-error">Not answering: ${escapeHtml(client.error)}</div></div>`;
+            }
+            const speeds = `<div class="dl-speeds"><span><span aria-hidden="true">&darr;</span><span class="sr-only">Download</span> ${formatSpeed(client.down_speed)}</span>${client.up_speed === null ? '' : `<span><span aria-hidden="true">&uarr;</span><span class="sr-only">Upload</span> ${formatSpeed(client.up_speed)}</span>`}</div>`;
+            const c = client.counts || {};
+            const counts = [
+                c.downloading ? `${c.downloading} downloading` : '', c.preparing ? `${c.preparing} preparing` : '',
+                c.stalled ? `${c.stalled} stalled` : '', c.queued ? `${c.queued} queued` : '', c.paused ? `${c.paused} paused` : '',
+            ].filter(Boolean).join(' \u00b7 ');
+            const more = client.total > client.items.length ? `<p class="dl-more">and ${client.total - client.items.length} more</p>` : '';
+            let body;
+            if (client.items.length) body = `<ul class="dl-list">${client.items.map(downloadItemHTML).join('')}</ul>${more}`;
+            else if (client.state === 'paused') body = '<p class="dl-quiet">The queue is paused.</p>';
+            else if (client.total) body = `<p class="dl-quiet">${client.total} in the queue, none moving.</p>`;
+            else body = '<p class="dl-quiet">Nothing downloading.</p>';
+            return `<div class="dl-card" style="--cu-color:${safeColor(client.color)}">${head}${speeds}${body}${counts && client.items.length ? `<p class="dl-counts">${escapeHtml(counts)}</p>` : ''}</div>`;
+        }
+
+        function renderDownloads(data) {
+            const body = document.getElementById('home-downloads-body');
+            const focused = document.activeElement && body.contains(document.activeElement) ? document.activeElement.dataset.client : null;
+            body.innerHTML = data.clients.map(downloadCardHTML).join('');
+            body.setAttribute('aria-busy', 'false');
+            if (focused) {  // the cards were redrawn: give keyboard focus back
+                const again = [...body.querySelectorAll('.dl-open')].find(b => b.dataset.client === focused);
+                if (again) again.focus();
+            }
+        }
+
+        async function loadDownloads(force) {
+            if (downloadsBusy && !force) return;
+            const panel = document.querySelector('.home-panel[data-panel="downloads"]');
+            const token = ++downloadsRequest;
+            downloadsBusy = true;
+            try {
+                const response = await fetch(`/api/downloads${force ? '?refresh=1' : ''}`);
+                if (!response.ok) throw new Error(`HTTP ${response.status}`);
+                const data = await response.json();
+                if (token !== downloadsRequest) return;  // a newer request replaced this one
+                panel.hidden = !data.clients.length;
+                if (data.clients.length) renderDownloads(data);
+            } catch (err) {
+                /* keep what is shown; the next poll tries again */
+            } finally {
+                if (token === downloadsRequest) downloadsBusy = false;
+            }
+            refreshPanelTools();
+        }
+
+        document.getElementById('home-downloads-body').addEventListener('click', event => {
+            const open = event.target.closest('.dl-open');
+            if (open && !arranging) selectDownloader(open.dataset.client);
+        });
+
+        setInterval(() => {
+            if (document.hidden || arranging) return;
+            if (document.getElementById('home-view').style.display === 'none') return;
+            loadDownloads();
+        }, DOWNLOADS_POLL_MS);
+        document.addEventListener('visibilitychange', () => {
+            if (!document.hidden && document.getElementById('home-view').style.display !== 'none') loadDownloads();
         });
 
         // Each Home panel is its own block (see #home-panels), so the order a
@@ -2741,6 +2850,7 @@
 
         function updateRequestTabVisibility() {
             const activeInstanceEl = document.querySelector(`.instance-tab[data-instance="${currentInstance}"]`);
+            if (!activeInstanceEl) return;  // no *arr instance configured (yet): nothing to show or hide
             const hasRequests = activeInstanceEl.dataset.seerrType !== '';
             const requestTab = document.querySelector('.view-tab[data-view="request"]');
             requestTab.classList.toggle('hidden', !hasRequests);
@@ -3894,6 +4004,7 @@
         loadAttention();
         loadHomeStats();
         loadComingUp();
+        loadDownloads();
     </script>
 
 </body>

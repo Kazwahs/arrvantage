@@ -451,6 +451,38 @@ body {
 .home-panel[hidden], .home-panel.is-user-hidden { display: none; }
 .home-panel .stat-grid { margin-bottom: 0; }
 
+/* --- Home > Downloads: a card per download client --- */
+.dl-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(280px, 1fr)); gap: var(--space-3); }
+.dl-card {
+    background: var(--panel);
+    border: 1px solid var(--border);
+    border-left: 3px solid var(--cu-color, var(--accent));
+    border-radius: var(--radius-md);
+    padding: 0.9rem;
+    min-width: 0;
+}
+.dl-head { display: flex; align-items: center; gap: var(--space-2); margin-bottom: 0.5rem; }
+.dl-open {
+    background: none; border: none; padding: 0; font: inherit; font-weight: 600;
+    color: var(--text); cursor: pointer; text-align: left; min-width: 0;
+    overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+.dl-open:hover { text-decoration: underline; }
+.dl-state {
+    margin-left: auto; flex-shrink: 0; font-size: var(--text-sm); color: var(--muted);
+    border: 1px solid var(--border); border-radius: var(--radius-sm); padding: 0.05rem 0.45rem;
+}
+.dl-state--downloading { color: var(--text); border-color: var(--muted); }
+.dl-speeds { display: flex; gap: var(--space-4); font-family: var(--mono); font-size: var(--text-md); margin-bottom: 0.6rem; }
+.dl-list { list-style: none; margin: 0; padding: 0; display: grid; gap: 0.65rem; }
+.dl-item { display: grid; gap: 0.2rem; min-width: 0; }
+.dl-name { font-size: var(--text-sm); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.dl-bar { display: block; height: 6px; border-radius: 3px; background: var(--hairline, var(--border)); overflow: hidden; }
+.dl-bar > span { display: block; height: 100%; background: var(--accent); border-radius: 3px; }
+.dl-meta { font-size: var(--text-sm); color: var(--muted); }
+.dl-more, .dl-counts, .dl-quiet { margin: 0.6rem 0 0; font-size: var(--text-sm); color: var(--muted); }
+.dl-quiet { margin-top: 0; }
+
 .panel-tools { display: none; }
 .is-arranging .home-panel {
     border: 1px dashed var(--border);

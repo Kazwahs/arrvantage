@@ -8,7 +8,7 @@ import re
 
 HEADERS = lambda csrf: {"X-CSRF-Token": csrf}  # noqa: E731
 
-DEFAULT = ["attention", "comingup", "libraries", "mediaservers", "indexers", "transcoders"]
+DEFAULT = ["attention", "comingup", "downloads", "libraries", "mediaservers", "indexers", "transcoders"]
 
 
 def embedded_layout(html: str) -> dict:
@@ -24,18 +24,18 @@ class TestNormalizeHomeLayout:
     def test_keeps_a_valid_order(self, app_module):
         layout = app_module.normalize_home_layout(
             {"order": ["transcoders", "libraries", "attention", "indexers", "mediaservers"], "hidden": ["indexers"]})
-        assert layout["order"] == ["transcoders", "libraries", "attention", "indexers", "mediaservers", "comingup"]
+        assert layout["order"] == ["transcoders", "libraries", "attention", "indexers", "mediaservers", "comingup", "downloads"]
         assert layout["hidden"] == ["indexers"]
 
     def test_drops_unknown_and_repeated_names(self, app_module):
         layout = app_module.normalize_home_layout(
             {"order": ["libraries", "bogus", "libraries", 7, None], "hidden": ["nope", "libraries", "libraries"]})
-        assert layout["order"] == ["libraries", "attention", "comingup", "mediaservers", "indexers", "transcoders"]
+        assert layout["order"] == ["libraries", "attention", "comingup", "downloads", "mediaservers", "indexers", "transcoders"]
         assert layout["hidden"] == ["libraries"]
 
     def test_missing_panels_are_appended_in_default_order(self, app_module):
         layout = app_module.normalize_home_layout({"order": ["indexers"]})
-        assert layout["order"] == ["indexers", "attention", "comingup", "libraries", "mediaservers", "transcoders"]
+        assert layout["order"] == ["indexers", "attention", "comingup", "downloads", "libraries", "mediaservers", "transcoders"]
 
     def test_garbage_input_falls_back_to_default(self, app_module):
         for junk in ("text", 5, [], {"order": "libraries", "hidden": 3}, {"order": None}):
@@ -65,7 +65,7 @@ class TestHomeLayoutEndpoint:
         assert response.status_code == 200
         body = response.get_json()
         assert body["ok"] is True
-        assert body["layout"]["order"] == ["indexers", "attention", "comingup", "libraries", "mediaservers", "transcoders"]
+        assert body["layout"]["order"] == ["indexers", "attention", "comingup", "downloads", "libraries", "mediaservers", "transcoders"]
         assert body["layout"]["hidden"] == ["libraries"]
 
         saved = json.load(open(app_module.CONFIG_PATH))

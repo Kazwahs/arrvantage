@@ -2873,6 +2873,199 @@ def api_downloader_action(name):
 
 
 # ---------------------------------------------------------------------------
+# Home > Downloads: one card per download client with its current speed and
+# the few downloads that are actually moving. Verified against each client's
+# own API reference:
+# - qBittorrent: GET /api/v2/torrents/info takes `filter` (`downloading`,
+#   `stalled_downloading` among the allowed values) and returns `state`,
+#   `progress`, `dlspeed`, `eta` (8640000 means "never"), `hash`, `name`;
+#   GET /api/v2/transfer/info gives the global `dl_info_speed` /
+#   `up_info_speed`. The docs do not define what each filter includes, so the
+#   states are checked here as well. Only the two download filters are asked
+#   for - a seedbox with thousands of finished torrents is never listed.
+# - SABnzbd: mode=queue takes `limit`; `queue` has `status`, `paused`,
+#   `kbpersec`, `noofslots_total`, and each slot `nzo_id`, `filename`,
+#   `status`, `percentage`, `timeleft`.
+# The panel polls every 10 s, so the answer is shared for a few seconds.
+# ---------------------------------------------------------------------------
+
+DOWNLOADS_ITEM_LIMIT = 5
+DOWNLOADS_SAB_FETCH_LIMIT = 30
+DOWNLOADS_CACHE_SECONDS = 5
+QBT_NO_ETA = 8640000
+_QBT_DOWNLOAD_STATES = {
+    "downloading": "downloading", "forcedDL": "downloading", "metaDL": "downloading", "forcedMetaDL": "downloading",
+    "stalledDL": "stalled", "queuedDL": "queued", "checkingDL": "preparing", "allocating": "preparing",
+}
+_DOWNLOAD_GROUP_ORDER = {"downloading": 0, "preparing": 1, "stalled": 2, "queued": 3}
+_DOWNLOADS_CACHE: dict = {"at": 0.0, "data": None}
+_DOWNLOADS_LOCK = threading.Lock()
+
+
+def short_request_error(err) -> str:
+    """A failed call to a download client in a few plain words: no address, no body."""
+    if isinstance(err, requests.exceptions.HTTPError) and err.response is not None:
+        code = err.response.status_code
+        return f"HTTP {code} - check the API key" if code in (401, 403) else f"HTTP {code}"
+    if isinstance(err, requests.exceptions.Timeout):
+        return "timed out"
+    if isinstance(err, requests.exceptions.ConnectionError):
+        return "could not connect"
+    return "request failed"
+
+
+def _download_state(paused: bool, downloading: int, speed: float, total: int) -> str:
+    if paused:
+        return "paused"
+    if downloading or speed > 0:
+        return "downloading"
+    return "waiting" if total else "idle"
+
+
+def _percent(value) -> float:
+    try:
+        return max(0.0, min(100.0, round(float(value), 1)))
+    except (TypeError, ValueError):
+        return 0.0
+
+
+def qbt_downloads_view(torrents, transfer: dict) -> dict:
+    """qBittorrent's answers -> the panel's card. Pure. Paused / stopped / seeding
+    / errored torrents are skipped, and a torrent that both filters returned is
+    counted once."""
+    counts = {"downloading": 0, "stalled": 0, "queued": 0, "preparing": 0}
+    seen, items = set(), []
+    for torrent in torrents if isinstance(torrents, list) else []:
+        if not isinstance(torrent, dict):
+            continue
+        group = _QBT_DOWNLOAD_STATES.get(torrent.get("state"))
+        key = torrent.get("hash") or torrent.get("name")
+        if group is None or key in seen:
+            continue
+        seen.add(key)
+        counts[group] += 1
+        eta = torrent.get("eta")
+        speed = torrent.get("dlspeed")
+        items.append({
+            "name": str(torrent.get("name") or "(unknown)")[:200],
+            "progress": _percent((torrent.get("progress") or 0) * 100),
+            "speed": int(speed) if isinstance(speed, (int, float)) and speed > 0 else 0,
+            "eta": human_duration(eta) if isinstance(eta, (int, float)) and 0 <= eta < QBT_NO_ETA else "",
+            "group": group,
+        })
+    items.sort(key=lambda i: (_DOWNLOAD_GROUP_ORDER[i["group"]], -i["speed"], -i["progress"]))
+    down = max(0, int(transfer.get("dl_speed") or 0))
+    return {
+        "error": None, "paused": False, "down_speed": down, "up_speed": max(0, int(transfer.get("up_speed") or 0)),
+        "connection": transfer.get("connection_status") or "", "counts": counts, "total": len(items),
+        "state": _download_state(False, counts["downloading"], down, len(items)),
+        "items": items[:DOWNLOADS_ITEM_LIMIT],
+    }
+
+
+def sab_downloads_view(data) -> dict:
+    """SABnzbd's mode=queue answer -> the panel's card. Pure. Paused jobs are
+    counted but not listed; a paused queue says so."""
+    queue = data.get("queue") if isinstance(data, dict) and isinstance(data.get("queue"), dict) else {}
+    slots = [s for s in queue.get("slots") or [] if isinstance(s, dict)]
+    counts = {"downloading": 0, "paused": 0, "queued": 0, "preparing": 0}
+    items = []
+    for slot in slots:
+        status = str(slot.get("status") or "").strip().lower()
+        group = {"downloading": "downloading", "paused": "paused", "queued": "queued"}.get(status, "preparing")
+        counts[group] += 1
+        if group == "paused":
+            continue
+        eta = str(slot.get("timeleft") or "")
+        items.append({
+            "name": str(slot.get("filename") or "(unknown)")[:200], "progress": _percent(slot.get("percentage")),
+            "speed": 0, "eta": "" if eta in ("", "0:00:00") else eta, "group": group,
+        })
+    items.sort(key=lambda i: _DOWNLOAD_GROUP_ORDER[i["group"]])  # stable: SABnzbd's own queue order within a group
+    try:
+        speed = max(0, int(float(queue.get("kbpersec") or 0) * 1024))
+    except (TypeError, ValueError):
+        speed = 0
+    try:
+        total = int(queue.get("noofslots_total"))
+    except (TypeError, ValueError):
+        total = len(slots)
+    paused = bool(queue.get("paused"))
+    return {
+        "error": None, "paused": paused, "down_speed": speed, "up_speed": None, "connection": "",
+        "counts": counts, "total": total, "state": _download_state(paused, counts["downloading"], speed, total),
+        "items": items[:DOWNLOADS_ITEM_LIMIT],
+    }
+
+
+def fetch_download_client(downloader: dict) -> dict:
+    """One client's card (or {"error": words}). The calls inside run one after
+    another on purpose: the clients themselves are already fetched in parallel
+    on the shared pool, and a pool task waiting on its own pool can deadlock."""
+    base = downloader["url"].rstrip("/")
+    try:
+        if downloader["type"] == "qbittorrent":
+            torrents = []
+            for torrent_filter in ("downloading", "stalled_downloading"):
+                response = requests.get(f"{base}/api/v2/torrents/info", headers=qbt_headers(downloader),
+                                        params={"filter": torrent_filter}, timeout=8)
+                response.raise_for_status()
+                torrents.extend(response.json())
+            response = requests.get(f"{base}/api/v2/transfer/info", headers=qbt_headers(downloader), timeout=8)
+            response.raise_for_status()
+            info = response.json()
+            return qbt_downloads_view(torrents, {
+                "dl_speed": info.get("dl_info_speed"), "up_speed": info.get("up_info_speed"),
+                "connection_status": info.get("connection_status"),
+            })
+        if downloader["type"] == "sabnzbd":
+            response = requests.get(f"{base}/api", params={
+                "mode": "queue", "output": "json", "limit": DOWNLOADS_SAB_FETCH_LIMIT, "apikey": downloader.get("api_key", ""),
+            }, timeout=8)
+            response.raise_for_status()
+            data = response.json()
+            if isinstance(data, dict) and data.get("error"):
+                return {"error": "SABnzbd refused the request - check the API key"}
+            return sab_downloads_view(data)
+    except requests.exceptions.JSONDecodeError:
+        return {"error": "unexpected answer - is this the right address?"}
+    except requests.exceptions.RequestException as err:
+        return {"error": short_request_error(err)}
+    except (ValueError, AttributeError, TypeError):
+        return {"error": "unexpected answer - is this the right address?"}
+    return {"error": "unknown downloader type"}
+
+
+def gather_downloads(force: bool = False) -> dict:
+    with _DOWNLOADS_LOCK:
+        cached = _DOWNLOADS_CACHE["data"]
+        if not force and cached is not None and time.monotonic() - _DOWNLOADS_CACHE["at"] < DOWNLOADS_CACHE_SECONDS:
+            return cached
+    clients = [d for d in DOWNLOADERS if d.get("enabled", True)]
+    outcomes = run_concurrently({d["name"]: (lambda d=d: fetch_download_client(d)) for d in clients})
+    cards, down, up = [], 0, 0
+    for d in clients:
+        ok, value = outcomes[d["name"]]
+        view = value if ok and isinstance(value, dict) else {"error": "request failed"}
+        card = {"name": d["name"], "type": d["type"], "color": d.get("color") or _DEFAULT_COLOR,
+                "icon_url": DOWNLOADER_ICONS.get(d["type"], ""), **view}
+        if not card.get("error"):
+            down += card["down_speed"]
+            up += card["up_speed"] or 0
+        cards.append(card)
+    result = {"clients": cards, "down_speed": down, "up_speed": up}
+    with _DOWNLOADS_LOCK:
+        _DOWNLOADS_CACHE.update({"at": time.monotonic(), "data": result})
+    return result
+
+
+@app.route("/api/downloads")
+@login_required
+def api_downloads():
+    return jsonify(gather_downloads(force=request.args.get("refresh") == "1"))
+
+
+# ---------------------------------------------------------------------------
 # Indexers (Prowlarr) - separate from the arr instances entirely, same
 # reasoning as Downloaders: Prowlarr is usually one shared service, not
 # tied to any single Radarr/Sonarr/Lidarr instance.
@@ -5142,7 +5335,7 @@ def api_coming_up():
 # The Home page is a stack of these panels. Each user can reorder them and
 # hide the ones they don't use; that choice is stored on their own user
 # record in config.json, so it follows them to every browser and device.
-HOME_PANELS = ("attention", "comingup", "libraries", "mediaservers", "indexers", "transcoders")
+HOME_PANELS = ("attention", "comingup", "downloads", "libraries", "mediaservers", "indexers", "transcoders")
 # The panels made of cards a person can put in their own order.
 CARD_PANELS = ("libraries", "mediaservers", "indexers", "transcoders")
 MAX_CARDS_PER_PANEL = 100

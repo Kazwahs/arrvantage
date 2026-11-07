@@ -16,6 +16,7 @@ Actively developed — expect rough edges and breaking changes between releases.
 - **Needs attention** on Home: stalled or failed downloads, unreachable apps and services, health warnings and low disk space, merged so the same problem is shown once. Warnings you do not care about can be hidden; outages cannot
 - **Coming Up** on Home: the next 7, 14 or 30 days of episodes (Sonarr), movie releases (Radarr), albums (Lidarr) and books (Readarr / Chaptarr), colour-coded with each instance's own colour, and each instance's name above the calendar switches it off and on (remembered in your browser) if one of them is too busy
 - **Service history** and **push alerts**: arrVantage checks your stack in the background, records when each service went down and came back, and can tell you by ntfy or a webhook (see [Alerts and service history](#alerts-and-service-history))
+- **Downloads** on Home: a card per download client (qBittorrent, SABnzbd) with its speed, whether it is downloading, waiting, paused or idle, and the few downloads that are actually moving with progress and time left. It refreshes itself every 10 seconds while Home is open
 - Indexer visibility (Prowlarr)
 - Request management via Seerr (Overseerr / Jellyseerr / Seerr)
 - Media server status (Plex / Jellyfin / Emby / Komga), plus BookOrbit (uptime check and a link)
@@ -150,7 +151,7 @@ What exists today, and what is on the list. The unchecked items are ideas, not p
 - [x] A short history of when each service went down and came back
 - [x] The version shown in the About panel and in diagnostics
 - [ ] More alert destinations (Discord, Telegram, email) if ntfy and the webhook are not enough
-- [ ] A Downloads panel on Home: qBittorrent and SABnzbd speeds and active queue in one place
+- [x] A Downloads panel on Home: qBittorrent and SABnzbd speeds and active queue in one place
 - [x] Book releases in Coming Up (Readarr / Chaptarr). Built from Readarr's published API; please report it if Chaptarr answers differently
 - [x] BookOrbit: uptime check, alerts and a link (its library is not browsable here until BookOrbit documents an API for it)
 - [ ] Support for more book and comic library apps
