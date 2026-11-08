@@ -1024,7 +1024,7 @@
                 try {
                     const data = await post('/api/notifications/test', {});
                     if (data.error) { say(data.error, 'test-fail'); return; }
-                    const parts = (data.results || []).map((r) => ({ ntfy: 'ntfy', discord: 'Discord', telegram: 'Telegram', email: 'Email' }[r.channel] || 'Webhook') + ': ' + (r.ok ? 'sent' : 'failed - ' + r.detail));
+                    const parts = (data.results || []).map((r) => ({ ntfy: 'ntfy', discord: 'Discord', telegram: 'Telegram', email: 'Email' }[r.channel] || 'Webhook') + (r.via ? ' (' + r.via + ')' : '') + ': ' + (r.ok ? 'sent' : 'failed - ' + r.detail));
                     say(parts.join('. ') + '.', data.ok ? 'test-ok' : 'test-fail');
                 } catch (err) {
                     say('Could not reach the server: ' + err.message, 'test-fail');

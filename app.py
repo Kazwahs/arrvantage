@@ -7615,9 +7615,12 @@ def build_email(settings: dict, message: dict) -> email.message.EmailMessage:
     return mail
 
 
-def _smtp_words(err: Exception) -> str:
+def _smtp_words(err: Exception, stage: str = "") -> str:
     """What went wrong with a mail server, in words that carry no address,
-    login or server reply."""
+    login or server reply. `stage` says which step it was on, so "closed the
+    connection" points at something: connecting, saying hello, starting
+    encryption, logging in, or sending the message."""
+    at = f" (while {stage})" if stage else ""
     if isinstance(err, smtplib.SMTPAuthenticationError):
         return "the mail server refused the login (check the user name and password; many providers need an app password)"
     if isinstance(err, smtplib.SMTPRecipientsRefused):
@@ -7627,27 +7630,28 @@ def _smtp_words(err: Exception) -> str:
     if isinstance(err, smtplib.SMTPNotSupportedError):
         return "the mail server does not offer the security or login you chose (try another security option or port)"
     if isinstance(err, smtplib.SMTPServerDisconnected):
-        return "the mail server closed the connection (check the security option and port)"
+        return f"the mail server closed the connection{at} (check the security option and port)"
     if isinstance(err, smtplib.SMTPResponseException):
-        return f"the mail server answered {err.smtp_code}"
+        return f"the mail server answered {err.smtp_code}{at}"
     if isinstance(err, smtplib.SMTPException):
-        return err.__class__.__name__
+        return f"{err.__class__.__name__}{at}"
     if isinstance(err, ssl.SSLCertVerificationError):
         return "the mail server's certificate was not accepted"
     if isinstance(err, ssl.SSLError):
-        return "could not set up a secure connection (check the security option and port)"
+        return f"could not set up a secure connection{at} (check the security option and port)"
     if isinstance(err, (TimeoutError, socket.timeout)):
-        return "timed out"
+        return f"timed out{at}"
     if isinstance(err, socket.gaierror):
         return "could not find the mail server (check its name)"
     if isinstance(err, UnicodeError):
         return "the user name or password has characters the mail login cannot use"
-    return "could not connect"
+    return f"could not connect{at}"
 
 
 def send_email(settings: dict, message: dict):
     mail = build_email(settings, message)
     context = ssl.create_default_context()
+    stage = "connecting"
     try:
         local_name = socket.gethostname() or "localhost"  # not getfqdn(): it can stall on DNS
         if settings["security"] == "ssl":
@@ -7657,15 +7661,19 @@ def send_email(settings: dict, message: dict):
             server = smtplib.SMTP(settings["host"], settings["port"], local_hostname=local_name,
                                   timeout=NOTIFY_TIMEOUT_SECONDS)
         with server:
+            stage = "saying hello"
             server.ehlo()
             if settings["security"] == "starttls":
+                stage = "starting encryption"
                 server.starttls(context=context)
                 server.ehlo()
             if settings.get("smtp_user"):
+                stage = "logging in"
                 server.login(settings["smtp_user"], settings.get("smtp_password", ""))
+            stage = "sending the message"
             server.send_message(mail, from_addr=settings["mail_from"], to_addrs=settings["mail_to"])
     except (OSError, UnicodeError) as err:  # smtplib's errors and sockets' are OSErrors
-        return False, _smtp_words(err)
+        return False, _smtp_words(err, stage)
     return True, "sent"
 
 
@@ -7925,6 +7933,10 @@ def api_notifications_test():
     message = {"event": "test", "title": "arrVantage test alert", "message": "If you can read this, alerts reach you.",
                "severity": "warning", "kind": "test", "services": [], "since": _iso_now(), "ended": None, "key": ""}
     results = [{"channel": channel, "ok": ok, "detail": detail} for channel, ok, detail in send_message(notify, message)]
+    mail = notify.get("email")
+    for result in results:  # which mail server and mode the test really used (none of it is secret)
+        if result["channel"] == "email" and mail:
+            result["via"] = f"{mail['host']}:{mail['port']}, {mail['security']}"
     return jsonify({"ok": all(r["ok"] for r in results), "results": results})
 
 

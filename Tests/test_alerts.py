@@ -1018,7 +1018,7 @@ class TestEmailSending:
         (message,) = app_module.compose_messages([event()])
         ok, detail = app_module.send_email({"host": "127.0.0.1", "port": 1, "security": "none", "mail_from": MAIL_USER,
                                             "mail_to": ["me@example.com"]}, message)
-        assert (ok, detail) == (False, "could not connect")
+        assert (ok, detail) == (False, "could not connect (while connecting)")
 
     def test_a_name_that_does_not_exist(self, app_module):
         (message,) = app_module.compose_messages([event()])
@@ -1218,7 +1218,8 @@ class TestTelegramAndEmailSettingsApi:
             "email": self.mail_body(host="127.0.0.1", port=str(smtp_server.port), security="none")})
         reply = self.post(client, csrf, "/api/notifications/test", {}).get_json()
         assert reply == {"ok": True, "results": [{"channel": "telegram", "ok": True, "detail": "HTTP 200"},
-                                                 {"channel": "email", "ok": True, "detail": "sent"}]}
+                                                 {"channel": "email", "ok": True, "detail": "sent",
+                                                  "via": f"127.0.0.1:{smtp_server.port}, none"}]}
         assert telegram.requests[0]["json"]["text"].endswith("<i>Test</i>")
         assert email_lib.message_from_string(smtp_server.messages[0]["raw"])["Subject"] == "arrVantage test alert"
 
@@ -1302,3 +1303,31 @@ class TestTelegramAndEmailSettingsApi:
                         "alerts-email-host", "alerts-email-security", "alerts-email-port", "alerts-email-user",
                         "alerts-email-password", "alerts-email-from", "alerts-email-to", "alerts-email-remove", "alerts-email-clear-login"):
             assert f'id="{element}"' in page
+
+
+class TestEmailSaysWhichStepFailed:
+    def run(self, app_module, smtp_server, **kw):
+        (message,) = app_module.compose_messages([event()])
+        return app_module.send_email(mail_settings(smtp_server, **kw), message)
+
+    def test_a_server_that_hangs_up_on_the_greeting_is_a_connecting_problem(self, app_module, smtp_server):
+        smtp_server.greeting = "421 go away"
+        ok, detail = self.run(app_module, smtp_server)
+        assert ok is False and "answered 421 (while connecting)" in detail
+
+    def test_each_step_is_named_in_the_words(self, app_module):
+        words = app_module._smtp_words
+        gone = smtplib.SMTPServerDisconnected("x")
+        assert words(gone, "logging in") == "the mail server closed the connection (while logging in) (check the security option and port)"
+        assert words(gone, "") == "the mail server closed the connection (check the security option and port)"
+        assert "(while starting encryption)" in words(ssl.SSLError("x"), "starting encryption")
+        assert words(TimeoutError(), "saying hello") == "timed out (while saying hello)"
+        assert words(smtplib.SMTPDataError(554, b"nope"), "sending the message") == "the mail server answered 554 (while sending the message)"
+        # the specific causes already say what happened, and carry no server text
+        assert "(while" not in words(smtplib.SMTPAuthenticationError(535, b"secret reply"), "logging in")
+        assert "secret reply" not in words(smtplib.SMTPAuthenticationError(535, b"secret reply"), "logging in")
+
+    def test_a_real_login_failure_is_still_a_login_refusal(self, app_module, smtp_server):
+        smtp_server.reject_login = True
+        ok, detail = self.run(app_module, smtp_server, smtp_user=MAIL_USER, smtp_password="wrong")
+        assert ok is False and "refused the login" in detail
