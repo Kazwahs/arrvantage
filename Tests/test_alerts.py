@@ -709,6 +709,7 @@ def smtp_server():
         logins = []
         reject_login = False
         reject_rcpt = False
+        offer_login = False
         greeting = "220 fake ESMTP"
 
     box = Box()
@@ -728,8 +729,10 @@ def smtp_server():
                 upper = line.upper()
                 if upper.startswith("EHLO") or upper.startswith("HELO"):
                     self.say("250-fake")
-                    self.say("250-AUTH PLAIN")
+                    self.say("250-AUTH PLAIN LOGIN" if box.offer_login else "250-AUTH PLAIN")
                     self.say("250 8BITMIME")
+                elif upper.startswith("AUTH LOGIN"):
+                    return  # hangs up, as Gmail does on a second attempt after a refusal
                 elif upper.startswith("AUTH PLAIN"):
                     _, user, password = base64.b64decode(line.split()[2]).decode().split("\0")
                     box.logins.append((user, password))
@@ -1060,8 +1063,22 @@ class TestEmailSending:
             def starttls(self, context=None):
                 calls.append(("starttls", type(context).__name__))
 
-            def login(self, user, password):
-                calls.append(("login", user, password))
+            esmtp_features = {"auth": "LOGIN PLAIN"}
+            user = password = ""
+
+            def ehlo_or_helo_if_needed(self):
+                pass
+
+            def has_extn(self, name):
+                return name.lower() in self.esmtp_features
+
+            def auth_plain(self, challenge=None):
+                return None
+
+            def auth(self, mechanism, authobject, initial_response_ok=True):
+                # one attempt, with PLAIN (smtplib's login() would go on to LOGIN after a refusal)
+                calls.append(("login", self.user, self.password))
+                calls.append(("method", mechanism))
 
             def send_message(self, mail, from_addr=None, to_addrs=None):
                 calls.append(("send", from_addr, tuple(to_addrs)))
@@ -1076,7 +1093,8 @@ class TestEmailSending:
                 "smtp_user": MAIL_USER, "smtp_password": "pw"}
         app_module.send_email({**base, "port": 587, "security": "starttls"}, message)
         assert calls == [("Fake", ("smtp.example.com", 587), app_module.NOTIFY_TIMEOUT_SECONDS, "NoneType"), "ehlo",
-                         ("starttls", "SSLContext"), "ehlo", ("login", MAIL_USER, "pw"), ("send", MAIL_USER, ("me@example.com",)), "quit"]
+                         ("starttls", "SSLContext"), "ehlo", ("login", MAIL_USER, "pw"), ("method", "PLAIN"),
+                         ("send", MAIL_USER, ("me@example.com",)), "quit"]
         calls.clear()
         app_module.send_email({**base, "port": 465, "security": "ssl"}, message)
         assert calls[0] == ("FakeSSL", ("smtp.example.com", 465), app_module.NOTIFY_TIMEOUT_SECONDS, "SSLContext")
@@ -1318,7 +1336,7 @@ class TestEmailSaysWhichStepFailed:
     def test_each_step_is_named_in_the_words(self, app_module):
         words = app_module._smtp_words
         gone = smtplib.SMTPServerDisconnected("x")
-        assert words(gone, "logging in") == "the mail server closed the connection (while logging in) (check the security option and port)"
+        assert words(gone, "sending the message") == "the mail server closed the connection (while sending the message) (check the security option and port)"
         assert words(gone, "") == "the mail server closed the connection (check the security option and port)"
         assert "(while starting encryption)" in words(ssl.SSLError("x"), "starting encryption")
         assert words(TimeoutError(), "saying hello") == "timed out (while saying hello)"
@@ -1331,3 +1349,20 @@ class TestEmailSaysWhichStepFailed:
         smtp_server.reject_login = True
         ok, detail = self.run(app_module, smtp_server, smtp_user=MAIL_USER, smtp_password="wrong")
         assert ok is False and "refused the login" in detail
+
+    def test_a_refused_login_is_not_retried_with_another_method(self, app_module, smtp_server):
+        # smtplib's login() would try AUTH LOGIN after PLAIN was refused, and Gmail then hangs up,
+        # which used to show as "closed the connection" instead of the real refusal.
+        smtp_server.offer_login, smtp_server.reject_login = True, True
+        ok, detail = self.run(app_module, smtp_server, smtp_user=MAIL_USER, smtp_password="wrong")
+        assert ok is False and "refused the login" in detail
+        assert smtp_server.logins == [(MAIL_USER, "wrong")]
+
+    def test_a_server_that_hangs_up_during_login_says_to_check_the_login(self, app_module):
+        words = app_module._smtp_words(smtplib.SMTPServerDisconnected("x"), "logging in")
+        assert "hung up while logging in" in words and "app password" in words
+
+    def test_a_good_login_still_works_when_login_is_offered(self, app_module, smtp_server):
+        smtp_server.offer_login = True
+        ok, detail = self.run(app_module, smtp_server, smtp_user=MAIL_USER, smtp_password=MAIL_PASSWORD)
+        assert (ok, detail) == (True, "sent") and smtp_server.logins == [(MAIL_USER, MAIL_PASSWORD)]

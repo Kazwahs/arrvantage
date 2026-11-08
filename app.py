@@ -7630,6 +7630,8 @@ def _smtp_words(err: Exception, stage: str = "") -> str:
     if isinstance(err, smtplib.SMTPNotSupportedError):
         return "the mail server does not offer the security or login you chose (try another security option or port)"
     if isinstance(err, smtplib.SMTPServerDisconnected):
+        if stage == "logging in":
+            return "the mail server hung up while logging in (usually the login or app password was refused: check both)"
         return f"the mail server closed the connection{at} (check the security option and port)"
     if isinstance(err, smtplib.SMTPResponseException):
         return f"the mail server answered {err.smtp_code}{at}"
@@ -7646,6 +7648,22 @@ def _smtp_words(err: Exception, stage: str = "") -> str:
     if isinstance(err, UnicodeError):
         return "the user name or password has characters the mail login cannot use"
     return f"could not connect{at}"
+
+
+def _smtp_login_once(server, user: str, password: str) -> None:
+    """Logs in with ONE method. smtplib's own login() goes on to the next method
+    after a refusal, and Gmail hangs up on that second attempt - which turned a
+    plain "wrong password" (535) into "the mail server closed the connection"."""
+    server.user, server.password = user, password
+    server.ehlo_or_helo_if_needed()
+    if not server.has_extn("auth"):
+        raise smtplib.SMTPNotSupportedError("SMTP AUTH extension not supported by server.")
+    offered = server.esmtp_features["auth"].split()
+    for method in ("CRAM-MD5", "PLAIN", "LOGIN"):
+        if method in offered:
+            server.auth(method, getattr(server, "auth_" + method.lower().replace("-", "_")), initial_response_ok=True)
+            return
+    raise smtplib.SMTPException("No suitable authentication method found.")
 
 
 def send_email(settings: dict, message: dict):
@@ -7669,7 +7687,7 @@ def send_email(settings: dict, message: dict):
                 server.ehlo()
             if settings.get("smtp_user"):
                 stage = "logging in"
-                server.login(settings["smtp_user"], settings.get("smtp_password", ""))
+                _smtp_login_once(server, settings["smtp_user"], settings.get("smtp_password", ""))
             stage = "sending the message"
             server.send_message(mail, from_addr=settings["mail_from"], to_addrs=settings["mail_to"])
     except (OSError, UnicodeError) as err:  # smtplib's errors and sockets' are OSErrors

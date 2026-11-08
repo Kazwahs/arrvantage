@@ -36,7 +36,7 @@ Actively developed — expect rough edges and breaking changes between releases.
 
 ## Installation
 
-arrVantage is also available as an app in the TrueNAS SCALE community catalog. Everywhere else it is a single Docker container:
+arrVantage is also available as an app in the TrueNAS SCALE community catalog. Everywhere else it is a single Docker container. The image is built for amd64 (Intel and AMD) and arm64 (Raspberry Pi, Apple silicon, ARM servers), and Docker picks the right one by itself. Each release's arm64 build is started and asked for `/health` in GitHub's automated build before it is published, but it has not been run on real ARM hardware, so please report anything odd:
 
 ```bash
 docker run -d \
