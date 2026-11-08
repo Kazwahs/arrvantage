@@ -15,7 +15,7 @@ Actively developed — expect rough edges and breaking changes between releases.
 - Unified dashboard for your \*arr stack (Sonarr, Radarr, Lidarr, Readarr (Tested with Bookshelf and then Chaptarr), Kapowarr)
 - **Needs attention** on Home: stalled or failed downloads, unreachable apps and services, health warnings and low disk space, merged so the same problem is shown once. Warnings you do not care about can be hidden; outages cannot
 - **Coming Up** on Home: the next 7, 14 or 30 days of episodes (Sonarr), movie releases (Radarr), albums (Lidarr) and books (Readarr / Chaptarr), colour-coded with each instance's own colour, and each instance's name above the calendar switches it off and on (remembered in your browser) if one of them is too busy
-- **Service history** and **push alerts**: arrVantage checks your stack in the background, records when each service went down and came back, and can tell you by ntfy, Discord or a webhook (see [Alerts and service history](#alerts-and-service-history))
+- **Service history** and **push alerts**: arrVantage checks your stack in the background, records when each service went down and came back, and can tell you by ntfy, Discord, Telegram, email or a webhook (see [Alerts and service history](#alerts-and-service-history))
 - **Downloads** on Home: a card per download client (qBittorrent, SABnzbd) with its speed, whether it is downloading, waiting, paused or idle, and the few downloads that are actually moving with progress and time left. It refreshes itself every 10 seconds while Home is open
 - Indexer visibility (Prowlarr)
 - Request management via Seerr (Overseerr / Jellyseerr / Seerr)
@@ -95,6 +95,8 @@ arrVantage runs the same checks as **Needs attention** in the background, every 
 - **Push alerts** (**Settings → Alerts**, administrators only). Each administrator sets up their own destinations and chooses what to hear about: *Outages and critical problems only* (the default: a service that stops answering, every indexer failing, a critically low disk) or *Everything, warnings included* (warnings you have hidden on Home stay quiet). You get one message when a problem starts and one when it clears. If a lot breaks at once, such as a switch going down, you get a single summary instead of a flood. **Send a test alert** checks the setup.
   - **ntfy:** the server (the public `https://ntfy.sh` or your own), a topic, and an access token only if your server needs one. On the public server anyone who knows the topic can read it, so make it hard to guess.
   - **Discord:** a channel's webhook address (in Discord: channel settings, Integrations, Webhooks, create one, Copy Webhook URL). Each alert is one message with a coloured side bar and the severity written in its footer (Critical, Warning or Resolved), plus the services involved. Alerts never ping anyone, even if a service is called `@everyone`. Only `discord.com` webhook addresses are accepted. Discord can't read the generic webhook's message, which is why it has its own box.
+  - **Telegram:** a bot of your own. In Telegram, message `@BotFather`, send `/newbot`, answer its questions and copy the token. Open your new bot and send it any message (for a group, add the bot to the group and write something there), then paste the token into arrVantage and press **Find my chat**: it lists the chats the bot has seen and fills in the chat ID when you pick one. Each alert is a short message with the title in bold and the severity and services underneath.
+  - **Email:** your mail server's name, the security option (STARTTLS on port 587 is the usual one; SSL/TLS on 465; *None* only for a mail server on your own network), an optional login and password, a From address and up to five addresses to send to. Gmail, Yahoo and most other providers need an app password instead of your normal one. The subject says what happened (for example `[arrVantage] Critical: Radarr can't be reached`) and the body gives the details. If the mail server's certificate is not one a normal browser would trust (a self-signed one), the alert will fail with "the certificate was not accepted".
   - **Webhook:** arrVantage sends a JSON `POST` to the address, for Home Assistant, n8n and the like:
 
     ```json
@@ -104,8 +106,8 @@ arrVantage runs the same checks as **Needs attention** in the background, every 
     ```
 
     `event` is `opened`, `cleared` (with `ended` filled in) or `test`.
-- The topic, access token and webhook addresses (Discord's included) are treated like API keys: they are left out of exports unless you tick *Include API keys*, are never sent back to your browser once saved, and are never written to the log (a failed alert is logged as, for example, `HTTP 500`, without the address).
-- The alerts are sent by the arrVantage container, so it must be able to reach your ntfy server, Discord or webhook address from where it runs.
+- The topic, access token, webhook addresses (Discord's included), Telegram bot token and chat ID, and the email login, password and addresses are treated like API keys: they are left out of exports unless you tick *Include API keys*, are never sent back to your browser once saved, and are never written to the log (a failed alert is logged as, for example, `HTTP 500`, without the address).
+- The alerts are sent by the arrVantage container, so it must be able to reach your ntfy server, Discord, Telegram (`api.telegram.org`), mail server or webhook address from where it runs.
 - Set `MONITOR_INTERVAL=0` to turn the background checks, the history and the alerts off.
 
 ## Backup, restore and diagnostics
@@ -148,11 +150,12 @@ What exists today, and what is on the list. The unchecked items are ideas, not p
 - [x] A Home you can rearrange
 - [x] Coming Up calendar
 - [x] Settings backup and restore, and copyable diagnostics
-- [x] Push alerts (ntfy, Discord or a webhook) when something breaks, so you do not have to have the dashboard open
+- [x] Push alerts (ntfy, Discord, Telegram, email or a webhook) when something breaks, so you do not have to have the dashboard open
 - [x] A short history of when each service went down and came back
 - [x] The version shown in the About panel and in diagnostics
 - [x] Discord alerts
-- [ ] More alert destinations (Telegram, email) if ntfy, Discord and the webhook are not enough
+- [x] Telegram and email alerts
+- [ ] More alert destinations (Slack, Pushover, Gotify) if ntfy, Discord, Telegram, email and the webhook are not enough
 - [x] A Downloads panel on Home: qBittorrent and SABnzbd speeds and active queue in one place
 - [x] Book releases in Coming Up (Readarr / Chaptarr). Built from Readarr's published API; please report it if Chaptarr answers differently
 - [x] BookOrbit: uptime check, alerts and a link (its library is not browsable here until BookOrbit documents an API for it)

@@ -21,13 +21,19 @@ from werkzeug.middleware.proxy_fix import ProxyFix
 from datetime import datetime, timedelta, timezone
 import collections
 import copy
+import email.message
+import email.utils
 import hashlib
+import html
 import json
 import logging
 import os
 import platform
 import re
 import secrets
+import smtplib
+import socket
+import ssl
 import sys
 import requests
 import concurrent.futures
@@ -6450,7 +6456,8 @@ EXPORT_SECTIONS = ("instances", "media_servers", "requesters", "downloaders", "i
 # never exported or imported: it is not a setting, and replacing it would sign
 # everyone out.
 EXPORT_SECRET_FIELDS = ("api_key", "credential", "password_hash", "pin",
-                        "topic", "token", "webhook_url")  # the last three: an account's alert destinations
+                        "topic", "token", "webhook_url",  # an account's alert destinations from here on
+                        "bot_token", "chat_id", "smtp_user", "smtp_password", "mail_from", "mail_to")
 IMPORT_MAX_BYTES = 1_000_000
 CONFIG_BACKUPS_KEPT = 10
 _DEFAULT_COLOR = "#5b8cff"
@@ -6864,8 +6871,8 @@ def build_diagnostics(hide: bool = True) -> str:
     admins = [normalize_notify(u.get("notify")) for u in CONFIG.get("users", []) if u.get("role") == "admin"]
     admins = [n for n in admins if n]
     lines.append(f"  Administrators with alerts: {len(admins)} "
-                 f"(ntfy: {sum(1 for n in admins if n.get('ntfy'))}, discord: {sum(1 for n in admins if n.get('discord'))}, webhook: {sum(1 for n in admins if n.get('webhook'))}, "
-                 f"everything level: {sum(1 for n in admins if n['level'] == 'all')})")
+                 f"(" + ", ".join(f"{channel}: {sum(1 for n in admins if n.get(channel))}" for channel in NOTIFY_CHANNELS)
+                 + f", everything level: {sum(1 for n in admins if n['level'] == 'all')})")
 
     lines += ["", f"Recent warnings (newest last, up to {RECENT_WARNING_LIMIT}):"]
     recent = list(_recent_warnings)
@@ -6895,7 +6902,7 @@ def api_diagnostics():
 # open. A small background thread now runs the same check every
 # MONITOR_INTERVAL seconds, remembers when a problem started and ended (the
 # service history), and tells the administrators who asked to hear about it
-# (ntfy, or a webhook). It is a thread of the one gunicorn worker, like the
+# (ntfy, Discord, Telegram, email or a webhook). It is a thread of the one gunicorn worker, like the
 # other in-process state; MONITOR_INTERVAL=0 switches it off.
 
 MONITOR_DEFAULT_INTERVAL = 60
@@ -6915,6 +6922,8 @@ NOTIFY_LEVELS = {
     "all": "Everything, warnings included",
 }
 _NTFY_TOPIC_RE = re.compile(r"^[-_A-Za-z0-9]{1,64}$")
+# Where an administrator can be alerted, in the order a message is sent to them.
+NOTIFY_CHANNELS = ("ntfy", "discord", "telegram", "email", "webhook")
 # Discord webhook addresses look like https://discord.com/api/webhooks/<id>/<token>
 # (ptb. and canary. are Discord's own test builds; discordapp.com is the old name).
 # Checking the shape means a typo is caught on save, and this destination can only
@@ -6923,6 +6932,23 @@ _DISCORD_HOSTS = ("discord.com", "ptb.discord.com", "canary.discord.com", "disco
 _DISCORD_PATH_RE = re.compile(r"^/api(?:/v\d{1,2})?/webhooks/\d{5,25}/[A-Za-z0-9._-]{20,120}$")
 _DISCORD_QUERY_RE = re.compile(r"^thread_id=\d{1,25}$")
 DISCORD_COLORS = {"critical": 0xE5484D, "warning": 0xF5A524, "cleared": 0x30A46C, "test": 0x3E63DD}
+# Telegram: a bot token is "<bot id>:<secret>"; the chat is a number (negative for
+# groups and channels) or a public channel's @name. The API address is fixed in the
+# code, so that box can only ever send to Telegram.
+TELEGRAM_API = "https://api.telegram.org"
+_TELEGRAM_TOKEN_RE = re.compile(r"^\d{5,15}:[A-Za-z0-9_-]{30,60}$")
+_TELEGRAM_CHAT_RE = re.compile(r"^(?:-?\d{1,20}|@[A-Za-z][A-Za-z0-9_]{3,31})$")
+TELEGRAM_MAX_CHATS = 10
+# Email: the mail server is typed in by the administrator (like a webhook address).
+# security -> (label, usual port)
+SMTP_SECURITY = {
+    "starttls": ("STARTTLS (usually port 587)", 587),
+    "ssl": ("SSL/TLS (usually port 465)", 465),
+    "none": ("None, unencrypted (port 25; only for a mail server on your own network)", 25),
+}
+MAIL_MAX_RECIPIENTS = 5
+_MAIL_HOST_RE = re.compile(r"^(?=.{1,253}$)[A-Za-z0-9](?:[A-Za-z0-9.-]*[A-Za-z0-9])?$")
+_MAIL_ADDRESS_RE = re.compile(r"^[A-Za-z0-9.!#$%&'*+/=?^_`{|}~-]{1,64}@[A-Za-z0-9](?:[A-Za-z0-9.-]{0,250}[A-Za-z0-9])?$")
 _TIME_FORMAT = "%Y-%m-%dT%H:%M:%SZ"
 
 
@@ -7176,14 +7202,101 @@ def _clean_discord_url(value) -> str:
     return f"https://{parts.hostname.lower()}{path}" + (f"?{parts.query}" if parts.query else "")
 
 
+def _clean_telegram_token(value) -> str:
+    text = value.strip() if isinstance(value, str) else ""
+    return text if _TELEGRAM_TOKEN_RE.match(text) else ""
+
+
+def _clean_telegram_chat(value) -> str:
+    """A chat id as text ("123456789", "-1001234567890") or a channel's "@name"."""
+    if isinstance(value, int) and not isinstance(value, bool):
+        value = str(value)
+    text = value.strip() if isinstance(value, str) else ""
+    return text if _TELEGRAM_CHAT_RE.match(text) else ""
+
+
+def _clean_mail_address(value) -> str:
+    text = value.strip() if isinstance(value, str) else ""
+    return text if len(text) <= 254 and _MAIL_ADDRESS_RE.match(text) else ""
+
+
+def split_mail_recipients(value) -> tuple:
+    """(valid addresses, anything that was not one). Takes a list or text with
+    commas, semicolons or spaces between addresses; repeats are dropped."""
+    if isinstance(value, str):
+        pieces = re.split(r"[,;\s]+", value.strip())
+    elif isinstance(value, list):
+        pieces = [p.strip() for p in value if isinstance(p, str)]
+    else:
+        pieces = []
+    good, bad = [], []
+    for piece in pieces:
+        if not piece:
+            continue
+        address = _clean_mail_address(piece)
+        if not address:
+            bad.append(piece[:60])
+        elif address.lower() not in [g.lower() for g in good]:
+            good.append(address)
+    return good, bad
+
+
+def _clean_mail_host(value) -> str:
+    text = value.strip().lower() if isinstance(value, str) else ""
+    return text if _MAIL_HOST_RE.match(text) else ""
+
+
+def _clean_port(value, default: int) -> int:
+    try:
+        port = int(str(value).strip()) if value not in (None, "") else default
+    except ValueError:
+        return default
+    return port if 1 <= port <= 65535 else default
+
+
+def normalize_telegram(raw):
+    if not isinstance(raw, dict):
+        return None
+    token, chat = _clean_telegram_token(raw.get("bot_token")), _clean_telegram_chat(raw.get("chat_id"))
+    return {"bot_token": token, "chat_id": chat} if token and chat else None
+
+
+def normalize_email(raw):
+    """
+    {"host", "port", "security": starttls|ssl|none, "mail_from", "mail_to": [...],
+     "smtp_user"?, "smtp_password"?}  - or None when it is not usable (no server,
+    no sender or no recipient). The login is optional (a mail server on your own
+    network often wants none).
+    """
+    if not isinstance(raw, dict):
+        return None
+    host = _clean_mail_host(raw.get("host"))
+    security = raw.get("security") if raw.get("security") in SMTP_SECURITY else "starttls"
+    user = raw.get("smtp_user").strip()[:200] if isinstance(raw.get("smtp_user"), str) else ""
+    password = raw.get("smtp_password").strip()[:200] if isinstance(raw.get("smtp_password"), str) else ""
+    sender = _clean_mail_address(raw.get("mail_from")) or _clean_mail_address(user)
+    recipients = split_mail_recipients(raw.get("mail_to"))[0][:MAIL_MAX_RECIPIENTS]
+    if not (host and sender and recipients):
+        return None
+    out = {"host": host, "port": _clean_port(raw.get("port"), SMTP_SECURITY[security][1]), "security": security,
+           "mail_from": sender, "mail_to": recipients}
+    if user:
+        out["smtp_user"] = user
+        if password:
+            out["smtp_password"] = password
+    return out
+
+
 def normalize_notify(raw):
     """
     The clean form of an account's alert settings, or None when no destination
     is set up:
         {"level": "critical" | "all",
-         "ntfy":    {"server", "topic", "token"?},
-         "discord": {"webhook_url"},
-         "webhook": {"webhook_url"}}
+         "ntfy":     {"server", "topic", "token"?},
+         "discord":  {"webhook_url"},
+         "telegram": {"bot_token", "chat_id"},
+         "email":    {"host", "port", "security", "mail_from", "mail_to", "smtp_user"?, "smtp_password"?},
+         "webhook":  {"webhook_url"}}
     Anything unusable is dropped rather than raised, because this also reads
     config.json and uploaded files.
     """
@@ -7204,12 +7317,18 @@ def normalize_notify(raw):
         url = _clean_discord_url(discord.get("webhook_url"))
         if url:
             out["discord"] = {"webhook_url": url}
+    telegram = normalize_telegram(raw.get("telegram"))
+    if telegram:
+        out["telegram"] = telegram
+    mail = normalize_email(raw.get("email"))
+    if mail:
+        out["email"] = mail
     webhook = raw.get("webhook")
     if isinstance(webhook, dict):
         url = _clean_url(webhook.get("webhook_url"))
         if url:
             out["webhook"] = {"webhook_url": url}
-    return out if ("ntfy" in out or "discord" in out or "webhook" in out) else None
+    return out if any(channel in out for channel in NOTIFY_CHANNELS) else None
 
 
 def notify_view(notify) -> dict:
@@ -7217,8 +7336,19 @@ def notify_view(notify) -> dict:
     each secret is set, never the secret."""
     notify = notify or {}
     ntfy, webhook, discord = notify.get("ntfy"), notify.get("webhook"), notify.get("discord")
+    mail = notify.get("email")
     return {
         "level": notify.get("level", "critical"),
+        "telegram": {"set": bool(notify.get("telegram"))},
+        # The server, sender and recipients are not secrets (the browser needs them to
+        # show the form); the login and password are, so only whether they are set.
+        "email": {"set": True, "host": mail["host"], "port": mail["port"], "security": mail["security"],
+                  "mail_from": mail["mail_from"], "mail_to": ", ".join(mail["mail_to"]),
+                  "user_set": bool(mail.get("smtp_user")), "password_set": bool(mail.get("smtp_password"))} if mail else
+                 {"set": False, "host": "", "port": SMTP_SECURITY["starttls"][1], "security": "starttls",
+                  "mail_from": "", "mail_to": "", "user_set": False, "password_set": False},
+        "security_options": [{"key": key, "label": label} for key, (label, _port) in SMTP_SECURITY.items()],  # a list: JSON objects get sorted
+        "default_ports": {key: port for key, (_label, port) in SMTP_SECURITY.items()},
         "ntfy": {"server": ntfy["server"], "topic_set": True, "token_set": bool(ntfy.get("token"))} if ntfy else
                 {"server": DEFAULT_NTFY_SERVER, "topic_set": False, "token_set": False},
         "discord": {"set": True, "host": urlsplit(discord["webhook_url"]).hostname or "discord.com"} if discord else
@@ -7294,31 +7424,38 @@ def events_for_level(events: list, level: str, hidden=()) -> list:
 # --- Sending ---------------------------------------------------------------------
 
 
-def _post_json(url: str, body: dict, headers=None):
-    """POSTs JSON and says what happened in words that are safe to show and to
-    log: never the address (it may hold a secret) and never the reply."""
+def _post_json_reply(url: str, body: dict, headers=None):
+    """POSTs JSON. Returns (ok, words, reply) where `words` is safe to show and
+    to log - never the address (it may hold a secret) and never the reply - and
+    `reply` is the response (None if there was none), for a caller that needs
+    to read it."""
     _log_ctx.redact_path = True
     try:
         response = requests.post(url, json=body, headers=headers or {}, timeout=NOTIFY_TIMEOUT_SECONDS,
                                  allow_redirects=False)
     except requests.exceptions.Timeout:
-        return False, "timed out"
+        return False, "timed out", None
     except requests.exceptions.SSLError:
-        return False, "the certificate was not accepted"
+        return False, "the certificate was not accepted", None
     except requests.exceptions.ConnectionError:
-        return False, "could not connect"
+        return False, "could not connect", None
     except requests.exceptions.RequestException as err:
-        return False, err.__class__.__name__
+        return False, err.__class__.__name__, None
     finally:
         _log_ctx.redact_path = False
     code = response.status_code
     if 300 <= code < 400:
-        return False, f"redirected (HTTP {code}) - use the address it redirects to"
+        return False, f"redirected (HTTP {code}) - use the address it redirects to", response
     if code in (401, 403):
-        return False, f"HTTP {code} - the server refused it (check the access token)"
+        return False, f"HTTP {code} - the server refused it (check the access token)", response
     if code >= 400:
-        return False, f"HTTP {code}"
-    return True, f"HTTP {code}"
+        return False, f"HTTP {code}", response
+    return True, f"HTTP {code}", response
+
+
+def _post_json(url: str, body: dict, headers=None):
+    ok, detail, _reply = _post_json_reply(url, body, headers)
+    return ok, detail
 
 
 def send_ntfy(settings: dict, message: dict):
@@ -7373,6 +7510,165 @@ def send_discord(settings: dict, message: dict):
     return ok, detail
 
 
+def _severity_label(message: dict) -> str:
+    """The same word every destination uses: Test, Resolved, Critical or Warning."""
+    if message["event"] == "test":
+        return "Test"
+    if message["event"] == "cleared":
+        return "Resolved"
+    return "Critical" if message["severity"] == "critical" else "Warning"
+
+
+def _telegram_words(detail: str) -> str:
+    """_post_json's wording suits an access token; Telegram's causes differ."""
+    code = detail.split(" - ")[0]
+    return {
+        "HTTP 400": "HTTP 400 - Telegram could not send it (check the chat ID, and that you have sent your bot a message "
+                    "or added it to the group or channel)",
+        "HTTP 401": "HTTP 401 - Telegram says the bot token is wrong",
+        "HTTP 403": "HTTP 403 - the bot was blocked, or removed from that chat",
+        "HTTP 404": "HTTP 404 - Telegram does not know this bot token (check it for typing mistakes)",
+        "HTTP 409": "HTTP 409 - this bot has a webhook set, which stops it being used this way",
+        "HTTP 429": "HTTP 429 - Telegram is rate limiting this bot",
+    }.get(code, detail)
+
+
+def send_telegram(settings: dict, message: dict):
+    """A Telegram bot message (sendMessage): the title in bold, then the text, then
+    the severity and services in italics. HTML mode with everything escaped, so a
+    service name containing < or & is shown as written. The bot token sits in the
+    address's path, which _post_json keeps out of the logs."""
+    lines = [f"<b>{html.escape(message['title'][:300], quote=False)}</b>", html.escape(message["message"][:2500], quote=False)]
+    tail = _severity_label(message)
+    if message.get("services"):
+        tail += " · " + ", ".join(message["services"])[:600]
+    lines += ["", f"<i>{html.escape(tail, quote=False)}</i>"]
+    body = {"chat_id": settings["chat_id"], "text": "\n".join(lines), "parse_mode": "HTML",
+            "link_preview_options": {"is_disabled": True}}
+    ok, detail = _post_json(f"{TELEGRAM_API}/bot{settings['bot_token']}/sendMessage", body)
+    return ok, (detail if ok else _telegram_words(detail))
+
+
+def find_telegram_chats(token: str):
+    """Asks Telegram which chats have written to this bot lately (getUpdates), so
+    the person can pick one instead of digging a chat id out of a web page.
+    Returns (True, [{"id", "label"}]) or (False, words)."""
+    ok, detail, reply = _post_json_reply(f"{TELEGRAM_API}/bot{token}/getUpdates", {"limit": 100})
+    if not ok:
+        return False, _telegram_words(detail)
+    try:
+        updates = reply.json().get("result") or []
+    except ValueError:
+        return False, "Telegram's answer could not be read"
+    seen, chats = set(), []
+    for update in reversed(updates if isinstance(updates, list) else []):  # newest first
+        if not isinstance(update, dict):
+            continue
+        for key in ("message", "edited_message", "channel_post", "edited_channel_post", "my_chat_member"):
+            chat = (update.get(key) or {}).get("chat") if isinstance(update.get(key), dict) else None
+            if not isinstance(chat, dict) or not isinstance(chat.get("id"), int) or isinstance(chat.get("id"), bool):
+                continue
+            if chat["id"] in seen:
+                continue
+            seen.add(chat["id"])
+            kind = chat.get("type") if chat.get("type") in ("private", "group", "supergroup", "channel") else "chat"
+            if kind == "private":
+                name = " ".join(str(chat.get(p)) for p in ("first_name", "last_name") if chat.get(p)) or str(chat.get("username") or "")
+            else:
+                name = str(chat.get("title") or chat.get("username") or "")
+            label = (name[:60] or "Unnamed") + f" ({'private chat' if kind == 'private' else kind})"
+            chats.append({"id": str(chat["id"]), "label": label})
+            if len(chats) >= TELEGRAM_MAX_CHATS:
+                return True, chats
+    return True, chats
+
+
+def _one_line(text: str, limit: int) -> str:
+    return " ".join(str(text).split())[:limit]
+
+
+def build_email(settings: dict, message: dict) -> email.message.EmailMessage:
+    """The alert as a plain-text email. Pure, so it is easy to check."""
+    label, title = _severity_label(message), _one_line(message["title"], 200)
+    if message["event"] == "test":
+        subject = title
+    elif message["event"] == "cleared":
+        subject = f"[arrVantage] {title}"
+    else:
+        subject = f"[arrVantage] {label}: {title}"
+    body = [message["title"][:300], "", message["message"][:3000], "", f"Severity: {label}"]
+    if message.get("services"):
+        body.append("Services: " + ", ".join(message["services"])[:1000])
+    if message.get("since"):
+        body.append(f"Started: {message['since']} (UTC)")
+    if message.get("ended"):
+        body.append(f"Ended: {message['ended']} (UTC)")
+    body += ["", "--", "Sent by arrVantage, because you set up email alerts in Settings."]
+    mail = email.message.EmailMessage()
+    mail["Subject"] = subject
+    mail["From"] = settings["mail_from"]
+    mail["To"] = ", ".join(settings["mail_to"])
+    mail["Date"] = email.utils.formatdate(localtime=False)
+    mail["Message-ID"] = email.utils.make_msgid(domain=settings["mail_from"].rsplit("@", 1)[-1])
+    mail["Auto-Submitted"] = "auto-generated"
+    mail.set_content("\n".join(body))
+    return mail
+
+
+def _smtp_words(err: Exception) -> str:
+    """What went wrong with a mail server, in words that carry no address,
+    login or server reply."""
+    if isinstance(err, smtplib.SMTPAuthenticationError):
+        return "the mail server refused the login (check the user name and password; many providers need an app password)"
+    if isinstance(err, smtplib.SMTPRecipientsRefused):
+        return "the mail server refused the recipient address"
+    if isinstance(err, smtplib.SMTPSenderRefused):
+        return "the mail server refused the From address (it often must belong to the account you log in with)"
+    if isinstance(err, smtplib.SMTPNotSupportedError):
+        return "the mail server does not offer the security or login you chose (try another security option or port)"
+    if isinstance(err, smtplib.SMTPServerDisconnected):
+        return "the mail server closed the connection (check the security option and port)"
+    if isinstance(err, smtplib.SMTPResponseException):
+        return f"the mail server answered {err.smtp_code}"
+    if isinstance(err, smtplib.SMTPException):
+        return err.__class__.__name__
+    if isinstance(err, ssl.SSLCertVerificationError):
+        return "the mail server's certificate was not accepted"
+    if isinstance(err, ssl.SSLError):
+        return "could not set up a secure connection (check the security option and port)"
+    if isinstance(err, (TimeoutError, socket.timeout)):
+        return "timed out"
+    if isinstance(err, socket.gaierror):
+        return "could not find the mail server (check its name)"
+    if isinstance(err, UnicodeError):
+        return "the user name or password has characters the mail login cannot use"
+    return "could not connect"
+
+
+def send_email(settings: dict, message: dict):
+    mail = build_email(settings, message)
+    context = ssl.create_default_context()
+    try:
+        local_name = socket.gethostname() or "localhost"  # not getfqdn(): it can stall on DNS
+        if settings["security"] == "ssl":
+            server = smtplib.SMTP_SSL(settings["host"], settings["port"], local_hostname=local_name,
+                                      timeout=NOTIFY_TIMEOUT_SECONDS, context=context)
+        else:
+            server = smtplib.SMTP(settings["host"], settings["port"], local_hostname=local_name,
+                                  timeout=NOTIFY_TIMEOUT_SECONDS)
+        with server:
+            server.ehlo()
+            if settings["security"] == "starttls":
+                server.starttls(context=context)
+                server.ehlo()
+            if settings.get("smtp_user"):
+                server.login(settings["smtp_user"], settings.get("smtp_password", ""))
+            server.send_message(mail, from_addr=settings["mail_from"], to_addrs=settings["mail_to"])
+    except (OSError, UnicodeError) as err:  # smtplib's errors and sockets' are OSErrors
+        return False, _smtp_words(err)
+    return True, "sent"
+
+
 def send_webhook(settings: dict, message: dict):
     body = {
         "app": "arrVantage", "version": resolve_app_version(), "event": message["event"],
@@ -7386,7 +7682,10 @@ def send_message(notify: dict, message: dict) -> list:
     """Sends one message to every destination an account has. Returns
     [(channel, ok, detail)]; a failure is logged once in a while, without the address."""
     results = []
-    for channel, sender in (("ntfy", send_ntfy), ("discord", send_discord), ("webhook", send_webhook)):
+    senders = {"ntfy": send_ntfy, "discord": send_discord, "telegram": send_telegram, "email": send_email,
+               "webhook": send_webhook}
+    for channel in NOTIFY_CHANNELS:
+        sender = senders[channel]
         if notify.get(channel):
             ok, detail = sender(notify[channel], message)
             if not ok:
@@ -7485,6 +7784,8 @@ def api_notifications():
 def api_notifications_save():
     """
     {"level": ..., "ntfy": {"server", "topic", "token", "remove"}, "discord": {"webhook_url", "remove"},
+     "telegram": {"bot_token", "chat_id", "remove"},
+     "email": {"host", "port", "security", "smtp_user", "smtp_password", "clear_login", "mail_from", "mail_to", "remove"},
      "webhook": {"webhook_url", "remove"}}
     A secret left blank keeps what is saved (the browser is never sent them);
     "remove": true clears a destination.
@@ -7535,6 +7836,63 @@ def api_notifications_save():
         elif current.get("discord"):
             new["discord"] = current["discord"]
 
+    telegram_in = payload.get("telegram") if isinstance(payload.get("telegram"), dict) else {}
+    if telegram_in.get("remove") is not True:
+        token_in = telegram_in.get("bot_token").strip() if isinstance(telegram_in.get("bot_token"), str) else ""
+        chat_in = telegram_in.get("chat_id").strip() if isinstance(telegram_in.get("chat_id"), str) else ""
+        old_tg = current.get("telegram") or {}
+        if token_in and not _clean_telegram_token(token_in):
+            errors.append("That does not look like a Telegram bot token. It looks like 123456789:AA... "
+                          "(BotFather sends it when you create the bot).")
+        if chat_in and not _clean_telegram_chat(chat_in):
+            errors.append("The Telegram chat ID is a number such as 123456789 (a group's starts with -), "
+                          "or a public channel's @name. Use Find my chat to get it.")
+        token, chat = token_in or old_tg.get("bot_token", ""), chat_in or old_tg.get("chat_id", "")
+        if (token_in or chat_in) and not (token and chat):
+            errors.append("Telegram needs both the bot token and the chat ID.")
+        elif token and chat and not errors:
+            new["telegram"] = {"bot_token": token, "chat_id": chat}
+        elif old_tg and not (token_in or chat_in):
+            new["telegram"] = old_tg
+
+    mail_in = payload.get("email") if isinstance(payload.get("email"), dict) else {}
+    if mail_in.get("remove") is not True:
+        old_mail = current.get("email") or {}
+        text = lambda key: mail_in.get(key).strip() if isinstance(mail_in.get(key), str) else ""  # noqa: E731
+        touched = any(text(k) for k in ("host", "smtp_user", "smtp_password", "mail_from", "mail_to"))
+        if touched or old_mail:
+            host = text("host").lower() or old_mail.get("host", "")
+            security = mail_in.get("security") if mail_in.get("security") in SMTP_SECURITY else old_mail.get("security", "starttls")
+            port_text = str(mail_in.get("port")).strip() if mail_in.get("port") not in (None, "") else ""
+            login = text("smtp_user") or ("" if mail_in.get("clear_login") is True else old_mail.get("smtp_user", ""))
+            password = text("smtp_password") or ("" if mail_in.get("clear_login") is True else old_mail.get("smtp_password", ""))
+            sender = text("mail_from") or old_mail.get("mail_from", "")
+            recipients_text = mail_in.get("mail_to") if "mail_to" in mail_in else old_mail.get("mail_to", [])
+            good, bad = split_mail_recipients(recipients_text)
+            mail_errors = []
+            if not _clean_mail_host(host):
+                mail_errors.append("Enter the mail server's name, such as smtp.gmail.com (no http:// and no port).")
+            if port_text and not (port_text.isdigit() and 1 <= int(port_text) <= 65535):
+                mail_errors.append("The mail server port is a number from 1 to 65535.")
+            if sender and not _clean_mail_address(sender):
+                mail_errors.append("The From address is not a valid email address.")
+            if not sender and not _clean_mail_address(login):
+                mail_errors.append("Enter the From address (the login is not an email address, so it cannot be used).")
+            if bad:
+                mail_errors.append("Not an email address: " + ", ".join(bad[:3]) + ".")
+            if not good and not bad:
+                mail_errors.append("Enter the address to send alerts to.")
+            if len(good) > MAIL_MAX_RECIPIENTS:
+                mail_errors.append(f"Use at most {MAIL_MAX_RECIPIENTS} recipient addresses.")
+            if password and not login:
+                mail_errors.append("Enter the login name as well as the password.")
+            if mail_errors:
+                errors.extend(mail_errors)
+            else:
+                candidate = {"host": host, "port": port_text or SMTP_SECURITY[security][1], "security": security,
+                             "mail_from": sender, "mail_to": good, "smtp_user": login, "smtp_password": password}
+                new["email"] = normalize_email(candidate)
+
     hook_in = payload.get("webhook") if isinstance(payload.get("webhook"), dict) else {}
     if hook_in.get("remove") is not True:
         url_in = hook_in.get("webhook_url").strip() if isinstance(hook_in.get("webhook_url"), str) else ""
@@ -7568,6 +7926,26 @@ def api_notifications_test():
                "severity": "warning", "kind": "test", "services": [], "since": _iso_now(), "ended": None, "key": ""}
     results = [{"channel": channel, "ok": ok, "detail": detail} for channel, ok, detail in send_message(notify, message)]
     return jsonify({"ok": all(r["ok"] for r in results), "results": results})
+
+
+@app.route("/api/notifications/telegram-chats", methods=["POST"])
+@login_required
+@admin_required
+def api_notifications_telegram_chats():
+    """Lists the chats that have written to a Telegram bot, so the person can pick
+    one. {"bot_token"}; blank uses the saved one (the browser is never sent it)."""
+    payload = request.get_json(silent=True)
+    payload = payload if isinstance(payload, dict) else {}
+    typed = payload.get("bot_token").strip() if isinstance(payload.get("bot_token"), str) else ""
+    saved = (normalize_notify(current_user().get("notify")) or {}).get("telegram") or {}
+    token = _clean_telegram_token(typed) if typed else saved.get("bot_token", "")
+    if not token:
+        return jsonify({"ok": False, "error": "Enter the bot token first." if not typed else
+                        "That does not look like a Telegram bot token."}), 400
+    ok, result = find_telegram_chats(token)
+    if not ok:
+        return jsonify({"ok": False, "error": result}), 400
+    return jsonify({"ok": True, "chats": result})
 
 
 @app.route("/settings", methods=["GET", "POST"])

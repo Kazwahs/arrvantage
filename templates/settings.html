@@ -555,6 +555,67 @@
                     </div>
                     <div class="tool-row"><button type="button" class="test-btn" id="alerts-discord-remove" hidden>Remove Discord</button></div>
 
+                    <div class="metadata-service-label">Telegram</div>
+                    <p class="tool-hint">Send alerts to a Telegram chat through a bot of your own. In Telegram, message <strong>@BotFather</strong>, send <code>/newbot</code>, follow the questions, and copy the token it gives you. Then open your new bot and send it any message (to use a group instead, add the bot to the group and write something there). Paste the token below and press <strong>Find my chat</strong>. The token works like a password; arrVantage stores it like an API key and never shows it again.</p>
+                    <div class="field">
+                        <label for="alerts-telegram-token">Bot token</label>
+                        <div class="key-row">
+                            <input type="password" id="alerts-telegram-token" autocomplete="new-password" spellcheck="false">
+                            <button type="button" class="toggle-btn" onclick="toggleField('alerts-telegram-token', this)">Show</button>
+                        </div>
+                    </div>
+                    <div class="field">
+                        <label for="alerts-telegram-chat">Chat ID</label>
+                        <div class="key-row">
+                            <input type="password" id="alerts-telegram-chat" autocomplete="new-password" spellcheck="false" aria-describedby="alerts-telegram-chats-hint">
+                            <button type="button" class="toggle-btn" onclick="toggleField('alerts-telegram-chat', this)">Show</button>
+                        </div>
+                    </div>
+                    <div class="tool-row">
+                        <button type="button" class="test-btn" id="alerts-telegram-find">Find my chat</button>
+                        <button type="button" class="test-btn" id="alerts-telegram-remove" hidden>Remove Telegram</button>
+                    </div>
+                    <p class="tool-hint" id="alerts-telegram-chats-hint" role="status" aria-live="polite" hidden></p>
+                    <div class="tool-row" id="alerts-telegram-chats" role="group" aria-label="Chats found" hidden></div>
+
+                    <div class="metadata-service-label">Email</div>
+                    <p class="tool-hint">Send alerts by email through a mail server you can log in to (your provider's, or one on your own network). Gmail, Yahoo and most others need an app password rather than your normal one, created in the account's security settings. The login and password are stored like an API key and never shown again. Mail to your own phone's address is fine, but a slow or blocked mail server can delay an alert, so keep ntfy, Discord or Telegram as well for the important ones.</p>
+                    <div class="field">
+                        <label for="alerts-email-host">Mail server</label>
+                        <input type="text" id="alerts-email-host" placeholder="smtp.example.com" autocomplete="off" spellcheck="false">
+                    </div>
+                    <div class="field">
+                        <label for="alerts-email-security">Security</label>
+                        <select id="alerts-email-security"></select>
+                    </div>
+                    <div class="field">
+                        <label for="alerts-email-port">Port</label>
+                        <input type="text" inputmode="numeric" id="alerts-email-port" autocomplete="off">
+                    </div>
+                    <div class="field">
+                        <label for="alerts-email-user">Login (leave empty if the server needs none)</label>
+                        <input type="text" id="alerts-email-user" autocomplete="off" spellcheck="false">
+                    </div>
+                    <div class="field">
+                        <label for="alerts-email-password">Password</label>
+                        <div class="key-row">
+                            <input type="password" id="alerts-email-password" autocomplete="new-password" spellcheck="false">
+                            <button type="button" class="toggle-btn" onclick="toggleField('alerts-email-password', this)">Show</button>
+                        </div>
+                    </div>
+                    <div class="field">
+                        <label for="alerts-email-from">From address</label>
+                        <input type="text" id="alerts-email-from" placeholder="alerts@example.com" autocomplete="off" spellcheck="false">
+                    </div>
+                    <div class="field">
+                        <label for="alerts-email-to">Send alerts to (up to 5, separated by commas)</label>
+                        <input type="text" id="alerts-email-to" placeholder="you@example.com" autocomplete="off" spellcheck="false">
+                    </div>
+                    <div class="tool-row">
+                        <button type="button" class="test-btn" id="alerts-email-clear-login" hidden>Remove saved login</button>
+                        <button type="button" class="test-btn" id="alerts-email-remove" hidden>Remove email</button>
+                    </div>
+
                     <div class="metadata-service-label">Webhook</div>
                     <p class="tool-hint">arrVantage sends a JSON message to this address (a POST with app, version, event, title, message, severity, kind, services, since and ended). Use it for Home Assistant, n8n and the like (Discord has its own box above, because it expects a different message). The address is stored like an API key, because many include a secret.</p>
                     <div class="field">
@@ -803,7 +864,7 @@
         })();
 
         // ---------------------------------------------------------------
-        // Alerts (ntfy / Discord / webhook), for the signed-in administrator
+        // Alerts (ntfy / Discord / Telegram / email / webhook), for the signed-in administrator
         // ---------------------------------------------------------------
         (function () {
             const $ = (id) => document.getElementById(id);
@@ -811,6 +872,7 @@
             const status = $('alerts-status');
             let levels = {};
             let monitorState = null;
+            let defaultPorts = { starttls: 587, ssl: 465, none: 25 };
 
             function say(text, cls) {
                 status.textContent = text;
@@ -842,10 +904,36 @@
                 $('alerts-webhook-url').placeholder = notify.webhook.set ? 'Saved (' + notify.webhook.host + '). Type a new address to replace it.' : 'https://...';
                 $('alerts-discord-url').value = '';
                 $('alerts-discord-url').placeholder = notify.discord.set ? 'Saved (' + notify.discord.host + '). Paste a new address to replace it.' : 'https://discord.com/api/webhooks/...';
+                $('alerts-telegram-token').value = '';
+                $('alerts-telegram-token').placeholder = notify.telegram.set ? 'Saved. Paste a new token to replace it.' : '123456789:AA…';
+                $('alerts-telegram-chat').value = '';
+                $('alerts-telegram-chat').placeholder = notify.telegram.set ? 'Saved. Choose another chat to replace it.' : 'press Find my chat';
+                const mail = notify.email;
+                const security = $('alerts-email-security');
+                security.replaceChildren();
+                notify.security_options.forEach((choice) => {
+                    const option = document.createElement('option');
+                    option.value = choice.key;
+                    option.textContent = choice.label;
+                    security.appendChild(option);
+                });
+                defaultPorts = notify.default_ports;
+                security.value = mail.security;
+                $('alerts-email-host').value = mail.host;
+                $('alerts-email-port').value = mail.port;
+                $('alerts-email-from').value = mail.mail_from;
+                $('alerts-email-to').value = mail.mail_to;
+                $('alerts-email-user').value = '';
+                $('alerts-email-user').placeholder = mail.user_set ? 'Saved. Type a new login to replace it.' : 'optional';
+                $('alerts-email-password').value = '';
+                $('alerts-email-password').placeholder = mail.password_set ? 'Saved. Type a new password to replace it.' : 'optional';
                 $('alerts-ntfy-remove').hidden = !notify.ntfy.topic_set;
                 $('alerts-discord-remove').hidden = !notify.discord.set;
+                $('alerts-telegram-remove').hidden = !notify.telegram.set;
+                $('alerts-email-remove').hidden = !mail.set;
+                $('alerts-email-clear-login').hidden = !mail.user_set;
                 $('alerts-webhook-remove').hidden = !notify.webhook.set;
-                $('alerts-test').disabled = !(notify.ntfy.topic_set || notify.discord.set || notify.webhook.set);
+                $('alerts-test').disabled = !(notify.ntfy.topic_set || notify.discord.set || notify.telegram.set || mail.set || notify.webhook.set);
                 $('alerts-monitor-off').hidden = !monitorState || monitorState.enabled;
             }
 
@@ -862,6 +950,12 @@
                     level: level.value,
                     ntfy: { server: $('alerts-ntfy-server').value, topic: $('alerts-ntfy-topic').value, token: $('alerts-ntfy-token').value },
                     discord: { webhook_url: $('alerts-discord-url').value },
+                    telegram: { bot_token: $('alerts-telegram-token').value, chat_id: $('alerts-telegram-chat').value },
+                    email: {
+                        host: $('alerts-email-host').value, port: $('alerts-email-port').value, security: $('alerts-email-security').value,
+                        smtp_user: $('alerts-email-user').value, smtp_password: $('alerts-email-password').value,
+                        mail_from: $('alerts-email-from').value, mail_to: $('alerts-email-to').value,
+                    },
                     webhook: { webhook_url: $('alerts-webhook-url').value },
                 }, extra || {});
                 try {
@@ -880,13 +974,57 @@
             $('alerts-save').addEventListener('click', () => save());
             $('alerts-ntfy-remove').addEventListener('click', () => save({ ntfy: { remove: true } }));
             $('alerts-discord-remove').addEventListener('click', () => save({ discord: { remove: true } }));
+            $('alerts-telegram-remove').addEventListener('click', () => save({ telegram: { remove: true } }));
+            $('alerts-email-remove').addEventListener('click', () => save({ email: { remove: true } }));
+            $('alerts-email-clear-login').addEventListener('click', () => save({
+                email: { host: $('alerts-email-host').value, port: $('alerts-email-port').value, security: $('alerts-email-security').value,
+                         mail_from: $('alerts-email-from').value, mail_to: $('alerts-email-to').value, clear_login: true },
+            }));
+            // Choosing another security option moves the port to its usual one, unless the person typed their own.
+            $('alerts-email-security').addEventListener('change', () => {
+                const port = $('alerts-email-port');
+                const usual = Object.keys(defaultPorts).map((key) => String(defaultPorts[key]));
+                if (!port.value.trim() || usual.indexOf(port.value.trim()) !== -1) port.value = defaultPorts[$('alerts-email-security').value];
+            });
+            $('alerts-telegram-find').addEventListener('click', async () => {
+                const hint = $('alerts-telegram-chats-hint');
+                const list = $('alerts-telegram-chats');
+                list.replaceChildren();
+                list.hidden = true;
+                hint.hidden = false;
+                hint.textContent = 'Looking…';
+                try {
+                    const data = await post('/api/notifications/telegram-chats', { bot_token: $('alerts-telegram-token').value });
+                    if (!data.ok) { hint.textContent = data.error || 'Could not look for chats.'; return; }
+                    if (!data.chats.length) {
+                        hint.textContent = 'No chats yet. Open your bot in Telegram, send it a message (or write in the group it was added to), then press Find my chat again.';
+                        return;
+                    }
+                    hint.textContent = 'Choose the chat to send alerts to:';
+                    data.chats.forEach((chat) => {
+                        const button = document.createElement('button');
+                        button.type = 'button';
+                        button.className = 'test-btn';
+                        button.textContent = chat.label;
+                        button.addEventListener('click', () => {
+                            $('alerts-telegram-chat').value = chat.id;
+                            hint.textContent = 'Chosen: ' + chat.label + '. Press Save alerts.';
+                            $('alerts-telegram-chat').focus();
+                        });
+                        list.appendChild(button);
+                    });
+                    list.hidden = false;
+                } catch (err) {
+                    hint.textContent = 'Could not reach the server: ' + err.message;
+                }
+            });
             $('alerts-webhook-remove').addEventListener('click', () => save({ webhook: { remove: true } }));
             $('alerts-test').addEventListener('click', async () => {
                 say('Sending…');
                 try {
                     const data = await post('/api/notifications/test', {});
                     if (data.error) { say(data.error, 'test-fail'); return; }
-                    const parts = (data.results || []).map((r) => ({ ntfy: 'ntfy', discord: 'Discord' }[r.channel] || 'Webhook') + ': ' + (r.ok ? 'sent' : 'failed - ' + r.detail));
+                    const parts = (data.results || []).map((r) => ({ ntfy: 'ntfy', discord: 'Discord', telegram: 'Telegram', email: 'Email' }[r.channel] || 'Webhook') + ': ' + (r.ok ? 'sent' : 'failed - ' + r.detail));
                     say(parts.join('. ') + '.', data.ok ? 'test-ok' : 'test-fail');
                 } catch (err) {
                     say('Could not reach the server: ' + err.message, 'test-fail');
