@@ -98,3 +98,12 @@ class TestLibraryFilters:
             tag = re.search(r'<select id="%s[^>]*>' % re.escape(sid), source)
             assert tag and "aria-label=" in tag.group(0), sid
         assert re.search(r'class="sort-dir-btn"[^>]*aria-label=', source, re.S)
+
+
+def test_home_script_does_not_assume_an_instance_exists(app_module, admin_session):
+    # With nothing set up there is no .instance-tab; reading .dataset off null stopped the
+    # whole page script, so Home never drew.
+    client, _ = admin_session
+    html = client.get("/").get_data(as_text=True)
+    assert "document.querySelector('.instance-tab').dataset" not in html
+    assert "firstTab ? firstTab.dataset.instance : null" in html

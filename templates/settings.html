@@ -544,8 +544,19 @@
                     </div>
                     <div class="tool-row"><button type="button" class="test-btn" id="alerts-ntfy-remove" hidden>Remove ntfy</button></div>
 
+                    <div class="metadata-service-label">Discord</div>
+                    <p class="tool-hint">Post alerts to a Discord channel. In Discord, open the channel's settings, then Integrations, Webhooks, create one, and choose Copy Webhook URL. The address works like a password, so anyone who has it can post to that channel; arrVantage stores it like an API key and never shows it again. Alerts never ping anyone.</p>
+                    <div class="field">
+                        <label for="alerts-discord-url">Webhook address</label>
+                        <div class="key-row">
+                            <input type="password" id="alerts-discord-url" autocomplete="new-password" spellcheck="false">
+                            <button type="button" class="toggle-btn" onclick="toggleField('alerts-discord-url', this)">Show</button>
+                        </div>
+                    </div>
+                    <div class="tool-row"><button type="button" class="test-btn" id="alerts-discord-remove" hidden>Remove Discord</button></div>
+
                     <div class="metadata-service-label">Webhook</div>
-                    <p class="tool-hint">arrVantage sends a JSON message to this address (a POST with app, version, event, title, message, severity, kind, services, since and ended). Use it for Home Assistant, n8n, Discord-compatible bridges and the like. The address is stored like an API key, because many include a secret.</p>
+                    <p class="tool-hint">arrVantage sends a JSON message to this address (a POST with app, version, event, title, message, severity, kind, services, since and ended). Use it for Home Assistant, n8n and the like (Discord has its own box above, because it expects a different message). The address is stored like an API key, because many include a secret.</p>
                     <div class="field">
                         <label for="alerts-webhook-url">Address</label>
                         <div class="key-row">
@@ -792,7 +803,7 @@
         })();
 
         // ---------------------------------------------------------------
-        // Alerts (ntfy / webhook), for the signed-in administrator
+        // Alerts (ntfy / Discord / webhook), for the signed-in administrator
         // ---------------------------------------------------------------
         (function () {
             const $ = (id) => document.getElementById(id);
@@ -829,9 +840,12 @@
                 $('alerts-ntfy-token').placeholder = notify.ntfy.token_set ? 'Saved. Type a new token to replace it.' : 'optional';
                 $('alerts-webhook-url').value = '';
                 $('alerts-webhook-url').placeholder = notify.webhook.set ? 'Saved (' + notify.webhook.host + '). Type a new address to replace it.' : 'https://...';
+                $('alerts-discord-url').value = '';
+                $('alerts-discord-url').placeholder = notify.discord.set ? 'Saved (' + notify.discord.host + '). Paste a new address to replace it.' : 'https://discord.com/api/webhooks/...';
                 $('alerts-ntfy-remove').hidden = !notify.ntfy.topic_set;
+                $('alerts-discord-remove').hidden = !notify.discord.set;
                 $('alerts-webhook-remove').hidden = !notify.webhook.set;
-                $('alerts-test').disabled = !(notify.ntfy.topic_set || notify.webhook.set);
+                $('alerts-test').disabled = !(notify.ntfy.topic_set || notify.discord.set || notify.webhook.set);
                 $('alerts-monitor-off').hidden = !monitorState || monitorState.enabled;
             }
 
@@ -847,6 +861,7 @@
                 const body = Object.assign({
                     level: level.value,
                     ntfy: { server: $('alerts-ntfy-server').value, topic: $('alerts-ntfy-topic').value, token: $('alerts-ntfy-token').value },
+                    discord: { webhook_url: $('alerts-discord-url').value },
                     webhook: { webhook_url: $('alerts-webhook-url').value },
                 }, extra || {});
                 try {
@@ -864,13 +879,14 @@
             level.addEventListener('change', describeLevel);
             $('alerts-save').addEventListener('click', () => save());
             $('alerts-ntfy-remove').addEventListener('click', () => save({ ntfy: { remove: true } }));
+            $('alerts-discord-remove').addEventListener('click', () => save({ discord: { remove: true } }));
             $('alerts-webhook-remove').addEventListener('click', () => save({ webhook: { remove: true } }));
             $('alerts-test').addEventListener('click', async () => {
                 say('Sending…');
                 try {
                     const data = await post('/api/notifications/test', {});
                     if (data.error) { say(data.error, 'test-fail'); return; }
-                    const parts = (data.results || []).map((r) => (r.channel === 'ntfy' ? 'ntfy' : 'Webhook') + ': ' + (r.ok ? 'sent' : 'failed - ' + r.detail));
+                    const parts = (data.results || []).map((r) => ({ ntfy: 'ntfy', discord: 'Discord' }[r.channel] || 'Webhook') + ': ' + (r.ok ? 'sent' : 'failed - ' + r.detail));
                     say(parts.join('. ') + '.', data.ok ? 'test-ok' : 'test-fail');
                 } catch (err) {
                     say('Could not reach the server: ' + err.message, 'test-fail');

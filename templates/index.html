@@ -485,7 +485,8 @@
             window.open(withScheme(url), '_blank', 'noopener');
         }
 
-        let currentInstance = document.querySelector('.instance-tab').dataset.instance;
+        const firstTab = document.querySelector('.instance-tab');  // none on a fresh install with nothing set up yet
+        let currentInstance = firstTab ? firstTab.dataset.instance : null;
         let currentView = 'library';
         updateOpenInstanceLink();
 

@@ -6864,7 +6864,7 @@ def build_diagnostics(hide: bool = True) -> str:
     admins = [normalize_notify(u.get("notify")) for u in CONFIG.get("users", []) if u.get("role") == "admin"]
     admins = [n for n in admins if n]
     lines.append(f"  Administrators with alerts: {len(admins)} "
-                 f"(ntfy: {sum(1 for n in admins if n.get('ntfy'))}, webhook: {sum(1 for n in admins if n.get('webhook'))}, "
+                 f"(ntfy: {sum(1 for n in admins if n.get('ntfy'))}, discord: {sum(1 for n in admins if n.get('discord'))}, webhook: {sum(1 for n in admins if n.get('webhook'))}, "
                  f"everything level: {sum(1 for n in admins if n['level'] == 'all')})")
 
     lines += ["", f"Recent warnings (newest last, up to {RECENT_WARNING_LIMIT}):"]
@@ -6915,6 +6915,14 @@ NOTIFY_LEVELS = {
     "all": "Everything, warnings included",
 }
 _NTFY_TOPIC_RE = re.compile(r"^[-_A-Za-z0-9]{1,64}$")
+# Discord webhook addresses look like https://discord.com/api/webhooks/<id>/<token>
+# (ptb. and canary. are Discord's own test builds; discordapp.com is the old name).
+# Checking the shape means a typo is caught on save, and this destination can only
+# ever send to Discord.
+_DISCORD_HOSTS = ("discord.com", "ptb.discord.com", "canary.discord.com", "discordapp.com")
+_DISCORD_PATH_RE = re.compile(r"^/api(?:/v\d{1,2})?/webhooks/\d{5,25}/[A-Za-z0-9._-]{20,120}$")
+_DISCORD_QUERY_RE = re.compile(r"^thread_id=\d{1,25}$")
+DISCORD_COLORS = {"critical": 0xE5484D, "warning": 0xF5A524, "cleared": 0x30A46C, "test": 0x3E63DD}
 _TIME_FORMAT = "%Y-%m-%dT%H:%M:%SZ"
 
 
@@ -7148,12 +7156,33 @@ def _clean_url(value, limit: int = 500) -> str:
     return text if parts.scheme in ("http", "https") and parts.netloc else ""
 
 
+def _clean_discord_url(value) -> str:
+    """A Discord webhook address in its plain form, or "" when it is not one.
+    Only https, only Discord's own hosts, only the webhook path (and a forum
+    thread_id if present); a user name, port or any other query is refused."""
+    text = _clean_url(value, 300)
+    if not text:
+        return ""
+    try:
+        parts = urlsplit(text)
+        port = parts.port
+    except ValueError:
+        return ""
+    path = parts.path.rstrip("/")
+    if (parts.scheme != "https" or (parts.hostname or "").lower() not in _DISCORD_HOSTS or port not in (None, 443)
+            or "@" in parts.netloc or not _DISCORD_PATH_RE.match(path)
+            or (parts.query and not _DISCORD_QUERY_RE.match(parts.query)) or parts.fragment):
+        return ""
+    return f"https://{parts.hostname.lower()}{path}" + (f"?{parts.query}" if parts.query else "")
+
+
 def normalize_notify(raw):
     """
     The clean form of an account's alert settings, or None when no destination
     is set up:
         {"level": "critical" | "all",
          "ntfy":    {"server", "topic", "token"?},
+         "discord": {"webhook_url"},
          "webhook": {"webhook_url"}}
     Anything unusable is dropped rather than raised, because this also reads
     config.json and uploaded files.
@@ -7170,23 +7199,30 @@ def normalize_notify(raw):
             if token:
                 entry["token"] = token
             out["ntfy"] = entry
+    discord = raw.get("discord")
+    if isinstance(discord, dict):
+        url = _clean_discord_url(discord.get("webhook_url"))
+        if url:
+            out["discord"] = {"webhook_url": url}
     webhook = raw.get("webhook")
     if isinstance(webhook, dict):
         url = _clean_url(webhook.get("webhook_url"))
         if url:
             out["webhook"] = {"webhook_url": url}
-    return out if ("ntfy" in out or "webhook" in out) else None
+    return out if ("ntfy" in out or "discord" in out or "webhook" in out) else None
 
 
 def notify_view(notify) -> dict:
     """What the browser may be told about an account's alert settings: whether
     each secret is set, never the secret."""
     notify = notify or {}
-    ntfy, webhook = notify.get("ntfy"), notify.get("webhook")
+    ntfy, webhook, discord = notify.get("ntfy"), notify.get("webhook"), notify.get("discord")
     return {
         "level": notify.get("level", "critical"),
         "ntfy": {"server": ntfy["server"], "topic_set": True, "token_set": bool(ntfy.get("token"))} if ntfy else
                 {"server": DEFAULT_NTFY_SERVER, "topic_set": False, "token_set": False},
+        "discord": {"set": True, "host": urlsplit(discord["webhook_url"]).hostname or "discord.com"} if discord else
+                   {"set": False, "host": ""},
         "webhook": {"set": True, "host": urlsplit(webhook["webhook_url"]).netloc.rsplit("@", 1)[-1]} if webhook else
                    {"set": False, "host": ""},
     }
@@ -7302,6 +7338,41 @@ def send_ntfy(settings: dict, message: dict):
     return _post_json(settings["server"].rstrip("/") + "/", body, headers)
 
 
+def send_discord(settings: dict, message: dict):
+    """A Discord webhook message: one embed, coloured by severity, with the
+    severity also written in its footer (colour is never the only signal).
+    `allowed_mentions` is empty so a service called "@everyone" can never ping
+    anyone. Discord answers 204 with no body."""
+    event = message["event"]
+    if event == "test":
+        color, label = DISCORD_COLORS["test"], "Test"
+    elif event == "cleared":
+        color, label = DISCORD_COLORS["cleared"], "Resolved"
+    elif message["severity"] == "critical":
+        color, label = DISCORD_COLORS["critical"], "Critical"
+    else:
+        color, label = DISCORD_COLORS["warning"], "Warning"
+    embed = {"title": message["title"][:256], "description": message["message"][:2000], "color": color,
+             "footer": {"text": f"arrVantage \u00b7 {label}"}}
+    stamp = message["ended"] if event == "cleared" and message.get("ended") else message.get("since")
+    if stamp:
+        embed["timestamp"] = stamp
+    if message.get("services"):
+        embed["fields"] = [{"name": "Services", "value": ", ".join(message["services"])[:1000], "inline": False}]
+    body = {"username": "arrVantage", "allowed_mentions": {"parse": []}, "embeds": [embed]}
+    ok, detail = _post_json(settings["webhook_url"], body)
+    if not ok:  # _post_json's wording suits an access token; Discord's causes differ
+        if detail.startswith("HTTP 404"):
+            detail = "HTTP 404 - Discord says this webhook does not exist (it may have been deleted)"
+        elif detail.startswith(("HTTP 401", "HTTP 403")):
+            detail = detail.split(" - ")[0] + " - Discord refused it (check the webhook address)"
+        elif detail == "HTTP 429":
+            detail = "HTTP 429 - Discord is rate limiting this webhook"
+        elif detail == "HTTP 400":
+            detail = "HTTP 400 - Discord did not accept the message"
+    return ok, detail
+
+
 def send_webhook(settings: dict, message: dict):
     body = {
         "app": "arrVantage", "version": resolve_app_version(), "event": message["event"],
@@ -7315,7 +7386,7 @@ def send_message(notify: dict, message: dict) -> list:
     """Sends one message to every destination an account has. Returns
     [(channel, ok, detail)]; a failure is logged once in a while, without the address."""
     results = []
-    for channel, sender in (("ntfy", send_ntfy), ("webhook", send_webhook)):
+    for channel, sender in (("ntfy", send_ntfy), ("discord", send_discord), ("webhook", send_webhook)):
         if notify.get(channel):
             ok, detail = sender(notify[channel], message)
             if not ok:
@@ -7413,7 +7484,8 @@ def api_notifications():
 @admin_required
 def api_notifications_save():
     """
-    {"level": ..., "ntfy": {"server", "topic", "token", "remove"}, "webhook": {"webhook_url", "remove"}}
+    {"level": ..., "ntfy": {"server", "topic", "token", "remove"}, "discord": {"webhook_url", "remove"},
+     "webhook": {"webhook_url", "remove"}}
     A secret left blank keeps what is saved (the browser is never sent them);
     "remove": true clears a destination.
     """
@@ -7451,6 +7523,17 @@ def api_notifications_save():
             new["ntfy"] = entry
         elif token_in and not topic:
             errors.append("Enter the ntfy topic as well as the access token.")
+
+    discord_in = payload.get("discord") if isinstance(payload.get("discord"), dict) else {}
+    if discord_in.get("remove") is not True:
+        url_in = discord_in.get("webhook_url").strip() if isinstance(discord_in.get("webhook_url"), str) else ""
+        if url_in and not _clean_discord_url(url_in):
+            errors.append("The Discord webhook address must look like https://discord.com/api/webhooks/... "
+                          "(in Discord: channel settings, Integrations, Webhooks, Copy Webhook URL).")
+        elif url_in:
+            new["discord"] = {"webhook_url": _clean_discord_url(url_in)}
+        elif current.get("discord"):
+            new["discord"] = current["discord"]
 
     hook_in = payload.get("webhook") if isinstance(payload.get("webhook"), dict) else {}
     if hook_in.get("remove") is not True:

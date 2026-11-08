@@ -453,7 +453,224 @@ class TestSecretsElsewhere:
     def test_diagnostics_has_counts_and_no_destinations(self, app_module, with_alerts):
         client, _csrf = with_alerts
         text = client.get("/api/diagnostics?hide_addresses=0").get_json()["text"]
-        assert "Administrators with alerts: 1 (ntfy: 1, webhook: 1, everything level: 1)" in text
+        assert "Administrators with alerts: 1 (ntfy: 1, discord: 0, webhook: 1, everything level: 1)" in text
         assert "Background check: every 60 s" in text
         for secret in (SECRET_TOPIC, SECRET_TOKEN, "SUPERSECRETHOOKID", "hooks.lan", "ntfy.example"):
             assert secret not in text
+
+
+# --- Discord -------------------------------------------------------------------
+
+DISCORD_ID = "1234567890123456789"
+DISCORD_TOKEN = "AbCdEf-0123456789_SECRETDISCORDTOKEN-abcdefghijklmnopqrstuvwxyz0123"
+DISCORD_URL = f"https://discord.com/api/webhooks/{DISCORD_ID}/{DISCORD_TOKEN}"
+
+
+class TestDiscordAddress:
+    def test_real_looking_addresses_are_accepted_in_their_plain_form(self, app_module):
+        clean = app_module._clean_discord_url
+        assert clean(DISCORD_URL) == DISCORD_URL
+        assert clean(f"  {DISCORD_URL}/  ") == DISCORD_URL                     # spaces and a trailing slash
+        assert clean(f"https://DISCORD.com/api/v10/webhooks/{DISCORD_ID}/{DISCORD_TOKEN}") == \
+            f"https://discord.com/api/v10/webhooks/{DISCORD_ID}/{DISCORD_TOKEN}"
+        assert clean(f"https://ptb.discord.com/api/webhooks/{DISCORD_ID}/{DISCORD_TOKEN}").startswith("https://ptb.discord.com/")
+        assert clean(f"https://discordapp.com/api/webhooks/{DISCORD_ID}/{DISCORD_TOKEN}")
+        assert clean(DISCORD_URL + "?thread_id=987654321") == DISCORD_URL + "?thread_id=987654321"
+
+    def test_anything_that_is_not_a_discord_webhook_is_refused(self, app_module):
+        clean = app_module._clean_discord_url
+        for bad in (
+            None, "", 5, "discord.com/api/webhooks/1/2",
+            f"http://discord.com/api/webhooks/{DISCORD_ID}/{DISCORD_TOKEN}",                 # not https
+            f"https://discord.com.evil.example/api/webhooks/{DISCORD_ID}/{DISCORD_TOKEN}",    # another host
+            f"https://evil.example/discord.com/api/webhooks/{DISCORD_ID}/{DISCORD_TOKEN}",
+            f"https://discord.com@evil.example/api/webhooks/{DISCORD_ID}/{DISCORD_TOKEN}",   # user name trick
+            f"https://user:pw@discord.com/api/webhooks/{DISCORD_ID}/{DISCORD_TOKEN}",
+            f"https://discord.com:8443/api/webhooks/{DISCORD_ID}/{DISCORD_TOKEN}",           # another port
+            "https://discord.com/api/webhooks/abc/" + DISCORD_TOKEN,                          # id not a number
+            f"https://discord.com/api/webhooks/{DISCORD_ID}/short",                           # token too short
+            f"https://discord.com/api/webhooks/{DISCORD_ID}/{DISCORD_TOKEN}/extra",
+            f"https://discord.com/channels/{DISCORD_ID}/{DISCORD_TOKEN}",
+            DISCORD_URL + "?wait=true&x=1", DISCORD_URL + "#frag", DISCORD_URL + "?thread_id=abc",
+        ):
+            assert clean(bad) == "", bad
+
+    def test_it_is_part_of_an_accounts_alerts(self, app_module):
+        assert app_module.normalize_notify({"discord": {"webhook_url": DISCORD_URL}}) == \
+            {"level": "critical", "discord": {"webhook_url": DISCORD_URL}}
+        assert app_module.normalize_notify({"discord": {"webhook_url": "https://example.com/x"}}) is None
+        notify = app_module.normalize_notify({"ntfy": NTFY, "discord": {"webhook_url": DISCORD_URL}})
+        assert set(notify) == {"level", "ntfy", "discord"}
+
+    def test_the_browser_is_only_told_whether_it_is_set(self, app_module):
+        view = app_module.notify_view(app_module.normalize_notify({"discord": {"webhook_url": DISCORD_URL}}))
+        assert view["discord"] == {"set": True, "host": "discord.com"}
+        assert DISCORD_TOKEN not in json.dumps(view) and DISCORD_ID not in json.dumps(view)
+        assert app_module.notify_view(None)["discord"] == {"set": False, "host": ""}
+
+
+class TestDiscordSending:
+    def send(self, app_module, receiver, ev=None, path="/hook"):
+        (message,) = app_module.compose_messages([ev or event()])
+        return app_module.send_discord({"webhook_url": receiver.url + path}, message)
+
+    def test_a_critical_problem_is_a_red_embed_with_the_severity_in_words(self, app_module, receiver):
+        ok, detail = self.send(app_module, receiver)
+        assert ok and detail == "HTTP 200"
+        (got,) = receiver.requests
+        assert got["path"] == "/hook"
+        body = got["json"]
+        assert body["username"] == "arrVantage" and body["allowed_mentions"] == {"parse": []}
+        (embed,) = body["embeds"]
+        assert embed["title"] == "Radarr can't be reached" and embed["description"] == "Connection refused"
+        assert embed["color"] == app_module.DISCORD_COLORS["critical"] and embed["footer"] == {"text": "arrVantage · Critical"}
+        assert embed["timestamp"] == "2026-11-01T10:00:00Z"
+        assert embed["fields"] == [{"name": "Services", "value": "Radarr", "inline": False}]
+
+    def test_a_warning_a_recovery_and_a_test(self, app_module, receiver):
+        self.send(app_module, receiver, event(severity="warning", outage=False))
+        self.send(app_module, receiver, event("cleared"))
+        app_module.send_discord({"webhook_url": receiver.url + "/t"}, {
+            "event": "test", "title": "arrVantage test alert", "message": "hi", "severity": "warning", "kind": "test",
+            "services": [], "since": "2026-11-01T10:00:00Z", "ended": None, "key": ""})
+        warning, cleared, test = (r["json"]["embeds"][0] for r in receiver.requests)
+        assert (warning["color"], warning["footer"]["text"]) == (app_module.DISCORD_COLORS["warning"], "arrVantage · Warning")
+        assert (cleared["color"], cleared["footer"]["text"]) == (app_module.DISCORD_COLORS["cleared"], "arrVantage · Resolved")
+        assert cleared["timestamp"] == "2026-11-01T10:07:00Z" and cleared["title"].startswith("Resolved: ")
+        assert (test["color"], test["footer"]["text"]) == (app_module.DISCORD_COLORS["test"], "arrVantage · Test")
+        assert "fields" not in test
+
+    def test_a_service_named_everyone_cannot_ping_anyone(self, app_module, receiver):
+        self.send(app_module, receiver, event(title="@everyone Radarr is down", services=("@everyone",)))
+        body = receiver.requests[0]["json"]
+        assert body["allowed_mentions"] == {"parse": []} and "@everyone" in body["embeds"][0]["title"]
+
+    def test_long_text_is_cut_to_what_discord_accepts(self, app_module, receiver):
+        (message,) = app_module.compose_messages([event(title="T" * 500)])
+        message["message"] = "M" * 5000
+        message["services"] = ["S" * 400] * 10
+        app_module.send_discord({"webhook_url": receiver.url + "/x"}, message)
+        embed = receiver.requests[0]["json"]["embeds"][0]
+        assert len(embed["title"]) <= 256 and len(embed["description"]) <= 2000 and len(embed["fields"][0]["value"]) <= 1000
+
+    def test_a_summary_message_lists_the_services(self, app_module, receiver):
+        events = [event(key=f"unreachable:S{i}", title=f"S{i} can't be reached", services=(f"S{i}",)) for i in range(5)]
+        (message,) = app_module.compose_messages(events)
+        app_module.send_discord({"webhook_url": receiver.url + "/x"}, message)
+        embed = receiver.requests[0]["json"]["embeds"][0]
+        assert embed["title"] == "5 new problems" and embed["fields"][0]["value"] == "S0, S1, S2, S3, S4"
+
+    def test_failures_use_discords_own_words(self, app_module, receiver):
+        for status, expected in ((404, "does not exist"), (401, "check the webhook address"), (403, "check the webhook address"),
+                                 (429, "rate limiting"), (400, "did not accept"), (500, None)):
+            receiver.status = status
+            ok, detail = self.send(app_module, receiver)
+            assert ok is False and detail.startswith(f"HTTP {status}")
+            if expected:
+                assert expected in detail
+        assert "access token" not in detail
+
+    def test_discord_replying_204_is_a_success(self, app_module, receiver):
+        receiver.status = 204
+        assert self.send(app_module, receiver) == (True, "HTTP 204")
+
+    def test_the_address_is_never_logged(self, app_module, receiver, caplog):
+        receiver.status = 500
+        (message,) = app_module.compose_messages([event()])
+        with caplog.at_level(logging.DEBUG, logger="arrvantage"):
+            app_module.send_message({"discord": {"webhook_url": f"{receiver.url}/api/webhooks/{DISCORD_ID}/{DISCORD_TOKEN}"}}, message)
+        text = all_logged(caplog)
+        assert DISCORD_TOKEN not in text and DISCORD_ID not in text
+        assert "Could not send an alert by discord: HTTP 500" in text
+
+    def test_each_destination_an_admin_has_gets_the_message(self, app_module, receiver):
+        (message,) = app_module.compose_messages([event()])
+        results = app_module.send_message({"ntfy": {"server": receiver.url, "topic": "t"},
+                                          "discord": {"webhook_url": receiver.url + "/d"},
+                                          "webhook": {"webhook_url": receiver.url + "/w"}}, message)
+        assert [(channel, ok) for channel, ok, _ in results] == [("ntfy", True), ("discord", True), ("webhook", True)]
+        assert sorted(r["path"] for r in receiver.requests) == ["/", "/d", "/w"]
+
+    def test_an_administrator_with_only_discord_gets_alerts_on_their_level(self, app_module, receiver, monkeypatch):
+        add_admin(app_module, "gamer", {"level": "critical", "discord": {"webhook_url": DISCORD_URL}})
+        # the real address is https://discord.com/...; send to the local receiver instead
+        monkeypatch.setattr(app_module, "send_discord",
+                            lambda settings, message: app_module._post_json(receiver.url + "/d", {"title": message["title"]}))
+        app_module.deliver_events([event()])
+        assert [r["json"] for r in receiver.requests] == [{"title": "Radarr can't be reached"}]
+
+
+class TestDiscordSettingsApi:
+    def post(self, client, csrf, path, body):
+        return client.post(path, json=body, headers={"X-CSRF-Token": csrf})
+
+    def test_saving_and_clearing(self, app_module, admin_session):
+        client, csrf = admin_session
+        reply = self.post(client, csrf, "/api/notifications", {"discord": {"webhook_url": DISCORD_URL}}).get_json()
+        assert reply["ok"] and reply["notify"]["discord"] == {"set": True, "host": "discord.com"}
+        assert DISCORD_TOKEN not in json.dumps(reply)
+        assert app_module.get_user("testadmin")["notify"]["discord"]["webhook_url"] == DISCORD_URL
+        # a blank box keeps what is saved
+        self.post(client, csrf, "/api/notifications", {"level": "all", "discord": {"webhook_url": ""}})
+        saved = app_module.get_user("testadmin")["notify"]
+        assert saved["discord"]["webhook_url"] == DISCORD_URL and saved["level"] == "all"
+        # remove clears it, and with nothing else left the whole setting goes
+        reply = self.post(client, csrf, "/api/notifications", {"discord": {"remove": True}}).get_json()
+        assert reply["ok"] and reply["notify"]["discord"]["set"] is False
+        assert "notify" not in app_module.get_user("testadmin")
+
+    def test_a_wrong_address_is_explained_and_nothing_is_saved(self, app_module, admin_session):
+        client, csrf = admin_session
+        for bad in ("https://example.com/hook", "not a url", "http://discord.com/api/webhooks/1/2"):
+            reply = self.post(client, csrf, "/api/notifications", {"discord": {"webhook_url": bad}})
+            assert reply.status_code == 400 and "Discord webhook address" in " ".join(reply.get_json()["errors"])
+        assert "notify" not in app_module.get_user("testadmin")
+
+    def test_the_get_never_returns_the_address(self, app_module, admin_session):
+        client, csrf = admin_session
+        self.post(client, csrf, "/api/notifications", {"discord": {"webhook_url": DISCORD_URL}})
+        text = client.get("/api/notifications").get_data(as_text=True)
+        assert DISCORD_TOKEN not in text and DISCORD_ID not in text and '"discord"' in text
+
+    def test_the_test_button_sends_to_discord(self, app_module, admin_session, receiver, monkeypatch):
+        client, csrf = admin_session
+        self.post(client, csrf, "/api/notifications", {"discord": {"webhook_url": DISCORD_URL}})
+        real = app_module.send_discord
+        monkeypatch.setattr(app_module, "send_discord", lambda settings, message: real({"webhook_url": receiver.url + "/d"}, message))
+        reply = self.post(client, csrf, "/api/notifications/test", {}).get_json()
+        assert reply == {"ok": True, "results": [{"channel": "discord", "ok": True, "detail": "HTTP 200"}]}
+        assert receiver.requests[0]["json"]["embeds"][0]["footer"]["text"] == "arrVantage · Test"
+
+    def test_the_address_is_a_secret_everywhere_else(self, app_module, admin_session):
+        client, csrf = admin_session
+        self.post(client, csrf, "/api/notifications", {"discord": {"webhook_url": DISCORD_URL}})
+        assert DISCORD_TOKEN not in client.get("/settings").get_data(as_text=True)
+        assert DISCORD_TOKEN not in client.get("/api/config/export").get_data(as_text=True)
+        assert DISCORD_TOKEN in client.get("/api/config/export?secrets=1").get_data(as_text=True)
+        assert DISCORD_TOKEN not in client.get("/api/diagnostics?hide_addresses=0").get_data(as_text=True)
+        text = client.get("/api/diagnostics?hide_addresses=0").get_json()["text"]
+        assert "discord: 1" in text
+
+    def test_a_keyless_import_keeps_it_and_a_full_backup_restores_it(self, app_module, admin_session):
+        client, csrf = admin_session
+        self.post(client, csrf, "/api/notifications", {"discord": {"webhook_url": DISCORD_URL}})
+        plain = json.loads(client.get("/api/config/export").get_data(as_text=True))
+        assert client.post("/api/config/import", json={"file": plain, "confirm": True}, headers={"X-CSRF-Token": csrf}).get_json()["ok"]
+        assert app_module.get_user("testadmin")["notify"]["discord"]["webhook_url"] == DISCORD_URL
+        full = json.loads(client.get("/api/config/export?secrets=1").get_data(as_text=True))
+        self.post(client, csrf, "/api/notifications", {"discord": {"remove": True}})
+        assert "notify" not in app_module.get_user("testadmin")
+        client.post("/api/config/import", json={"file": full, "confirm": True}, headers={"X-CSRF-Token": csrf})
+        assert app_module.get_user("testadmin")["notify"]["discord"]["webhook_url"] == DISCORD_URL
+
+    def test_a_file_cannot_point_an_account_at_a_non_discord_address(self, app_module, admin_session):
+        client, csrf = admin_session
+        full = json.loads(client.get("/api/config/export?secrets=1").get_data(as_text=True))
+        full["config"]["users"][0]["notify"] = {"discord": {"webhook_url": "https://example.com/x"}}
+        client.post("/api/config/import", json={"file": full, "confirm": True}, headers={"X-CSRF-Token": csrf})
+        assert "notify" not in app_module.get_user("testadmin")
+
+    def test_the_settings_page_has_the_discord_box(self, app_module, admin_session):
+        client, _ = admin_session
+        html = client.get("/settings").get_data(as_text=True)
+        assert 'id="alerts-discord-url"' in html and 'id="alerts-discord-remove"' in html
