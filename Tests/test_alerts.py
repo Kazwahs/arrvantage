@@ -454,7 +454,7 @@ class TestSecretsElsewhere:
     def test_diagnostics_has_counts_and_no_destinations(self, app_module, with_alerts):
         client, _csrf = with_alerts
         text = client.get("/api/diagnostics?hide_addresses=0").get_json()["text"]
-        assert "Administrators with alerts: 1 (ntfy: 1, discord: 0, telegram: 0, email: 0, webhook: 1, everything level: 1)" in text
+        assert "Administrators with alerts: 1 (ntfy: 1, discord: 0, telegram: 0, email: 0, slack: 0, pushover: 0, gotify: 0, webhook: 1, everything level: 1)" in text
         assert "Background check: every 60 s" in text
         for secret in (SECRET_TOPIC, SECRET_TOKEN, "SUPERSECRETHOOKID", "hooks.lan", "ntfy.example"):
             assert secret not in text
@@ -1366,3 +1366,405 @@ class TestEmailSaysWhichStepFailed:
         smtp_server.offer_login = True
         ok, detail = self.run(app_module, smtp_server, smtp_user=MAIL_USER, smtp_password=MAIL_PASSWORD)
         assert (ok, detail) == (True, "sent") and smtp_server.logins == [(MAIL_USER, MAIL_PASSWORD)]
+
+
+# ---------------------------------------------------------------------------
+# Slack, Pushover and Gotify
+# ---------------------------------------------------------------------------
+
+SLACK_SECRET = "Xk3j9Zq2LmN8vB4tYw1RcD6e"
+SLACK_URL = f"https://hooks.slack.com/services/T01ABCDEF/B02GHIJKL/{SLACK_SECRET}"
+PUSHOVER_USER = "uQiRzpo4DXghDmr9QzzfQu27cmVRsG"
+PUSHOVER_APP = "azGDORePK8gMaC0QOYAMyEEuzJnyUi"
+GOTIFY_TOKEN = "AbCdEf1234567_x"
+
+
+@pytest.fixture
+def pushover(app_module, receiver, monkeypatch):
+    """Pushover's address is fixed in the code; point it at the local receiver."""
+    monkeypatch.setattr(app_module, "PUSHOVER_API", receiver.url + "/1/messages.json")
+    receiver.reply = b'{"status":1,"request":"abc"}'
+    return receiver
+
+
+def sample_test_message(**extra):
+    return {"event": "test", "title": "arrVantage test alert", "message": "hi", "severity": "warning", "kind": "test",
+            "services": [], "since": "2026-11-01T10:00:00Z", "ended": None, "key": "", **extra}
+
+
+class TestSlackAddress:
+    def test_real_looking_addresses_are_accepted_in_their_plain_form(self, app_module):
+        clean = app_module._clean_slack_url
+        assert clean(SLACK_URL) == SLACK_URL
+        assert clean(f"  {SLACK_URL}/  ") == SLACK_URL
+        assert clean(SLACK_URL.replace("hooks.slack.com", "HOOKS.slack.com")) == SLACK_URL
+
+    def test_anything_that_is_not_a_slack_webhook_is_refused(self, app_module):
+        clean = app_module._clean_slack_url
+        for bad in (
+            None, "", 5, "hooks.slack.com/services/T01ABCDEF/B02GHIJKL/" + SLACK_SECRET,
+            SLACK_URL.replace("https", "http"),
+            SLACK_URL.replace("hooks.slack.com", "hooks.slack.com.evil.example"),
+            f"https://evil.example/hooks.slack.com/services/T01ABCDEF/B02GHIJKL/{SLACK_SECRET}",
+            SLACK_URL.replace("hooks.slack.com", "hooks.slack.com@evil.example"),
+            SLACK_URL.replace("hooks.slack.com", "user:pw@hooks.slack.com"),
+            SLACK_URL.replace("hooks.slack.com", "hooks.slack.com:8443"),
+            SLACK_URL.replace("/services/", "/other/"),
+            "https://hooks.slack.com/services/T01ABCDEF/B02GHIJKL/short",
+            SLACK_URL + "/extra", SLACK_URL + "?x=1", SLACK_URL + "#frag",
+            "https://slack.com/services/T01ABCDEF/B02GHIJKL/" + SLACK_SECRET,
+        ):
+            assert clean(bad) == "", bad
+
+    def test_it_is_part_of_an_accounts_alerts_and_the_view_has_no_secret(self, app_module):
+        notify = app_module.normalize_notify({"slack": {"webhook_url": SLACK_URL}})
+        assert notify == {"level": "critical", "slack": {"webhook_url": SLACK_URL}}
+        assert app_module.normalize_notify({"slack": {"webhook_url": "https://example.com/x"}}) is None
+        view = app_module.notify_view(notify)
+        assert view["slack"] == {"set": True} and SLACK_SECRET not in json.dumps(view)
+        assert app_module.notify_view(None)["slack"] == {"set": False}
+
+
+class TestSlackSending:
+    def send(self, app_module, receiver, ev=None, path="/hook"):
+        (message,) = app_module.compose_messages([ev or event()])
+        return app_module.send_slack({"webhook_url": receiver.url + path}, message)
+
+    def test_a_critical_problem_is_one_text_with_the_severity_in_words(self, app_module, receiver):
+        receiver.reply = b"ok"
+        ok, detail = self.send(app_module, receiver)
+        assert ok and detail == "HTTP 200"
+        (got,) = receiver.requests
+        assert got["path"] == "/hook"
+        assert got["json"] == {"text": "*Radarr can't be reached*\nConnection refused\n_Critical · Radarr_"}
+
+    def test_a_warning_a_recovery_and_a_test_say_so(self, app_module, receiver):
+        self.send(app_module, receiver, event(severity="warning", outage=False))
+        self.send(app_module, receiver, event("cleared"))
+        app_module.send_slack({"webhook_url": receiver.url + "/t"}, sample_test_message())
+        warning, cleared, test = (r["json"]["text"] for r in receiver.requests)
+        assert warning.endswith("_Warning · Radarr_")
+        assert cleared.startswith("*Resolved: ") and cleared.endswith("_Resolved · Radarr_")
+        assert test.endswith("_Test_")
+
+    def test_slack_markup_in_a_name_cannot_ping_anyone(self, app_module, receiver):
+        self.send(app_module, receiver, event(title="<!channel> & <@U123> down", services=("<!here>",)))
+        text = receiver.requests[0]["json"]["text"]
+        assert "<" not in text.replace("*", "") and ">" not in text
+        assert "&lt;!channel&gt; &amp; &lt;@U123&gt; down" in text and "&lt;!here&gt;" in text
+
+    def test_long_text_is_cut(self, app_module, receiver):
+        (message,) = app_module.compose_messages([event(title="T" * 500)])
+        message["message"] = "M" * 5000
+        app_module.send_slack({"webhook_url": receiver.url + "/x"}, message)
+        assert len(receiver.requests[0]["json"]["text"]) < 3500
+
+    def test_failures_use_slacks_own_words(self, app_module, receiver):
+        for status, body, expected in ((404, b"no_service", "does not exist"), (404, b"", "does not exist"),
+                                       (400, b"invalid_payload", "did not accept"), (403, b"action_prohibited", "refused"),
+                                       (404, b"channel_not_found", "channel is gone"), (410, b"channel_is_archived", "archived"),
+                                       (429, b"", "rate limiting"), (500, b"rollup_error", None)):
+            receiver.status, receiver.reply = status, body
+            ok, detail = self.send(app_module, receiver)
+            assert ok is False and detail.startswith(f"HTTP {status}")
+            if expected:
+                assert expected in detail
+
+    def test_an_unknown_reply_body_is_never_shown(self, app_module, receiver):
+        receiver.status, receiver.reply = 400, b"<html>" + SLACK_SECRET.encode() + b"</html>"
+        ok, detail = self.send(app_module, receiver)
+        assert not ok and SLACK_SECRET not in detail
+
+    def test_the_address_is_never_logged(self, app_module, receiver, caplog):
+        receiver.status = 500
+        (message,) = app_module.compose_messages([event()])
+        with caplog.at_level(logging.DEBUG, logger="arrvantage"):
+            app_module.send_message({"slack": {"webhook_url": f"{receiver.url}/services/T01ABCDEF/B02GHIJKL/{SLACK_SECRET}"}}, message)
+        text = all_logged(caplog)
+        assert SLACK_SECRET not in text and "Could not send an alert by slack: HTTP 500" in text
+
+
+class TestPushoverKeys:
+    def test_keys_are_30_letters_and_digits(self, app_module):
+        assert app_module._clean_pushover_key(f" {PUSHOVER_USER} ") == PUSHOVER_USER
+        for bad in (None, "", 5, PUSHOVER_USER[:-1], PUSHOVER_USER + "x", PUSHOVER_USER[:-1] + "-", PUSHOVER_USER[:-1] + " "):
+            assert app_module._clean_pushover_key(bad) == "", bad
+
+    def test_both_keys_are_needed_and_the_view_has_no_secret(self, app_module):
+        assert app_module.normalize_notify({"pushover": {"user_key": PUSHOVER_USER}}) is None
+        assert app_module.normalize_notify({"pushover": {"app_token": PUSHOVER_APP}}) is None
+        notify = app_module.normalize_notify({"pushover": {"user_key": PUSHOVER_USER, "app_token": PUSHOVER_APP}})
+        assert notify["pushover"] == {"user_key": PUSHOVER_USER, "app_token": PUSHOVER_APP}
+        view = json.dumps(app_module.notify_view(notify))
+        assert PUSHOVER_USER not in view and PUSHOVER_APP not in view
+        assert app_module.notify_view(notify)["pushover"] == {"set": True}
+
+
+class TestPushoverSending:
+    SETTINGS = {"user_key": PUSHOVER_USER, "app_token": PUSHOVER_APP}
+
+    def send(self, app_module, ev=None):
+        (message,) = app_module.compose_messages([ev or event()])
+        return app_module.send_pushover(self.SETTINGS, message)
+
+    def test_a_critical_problem_is_high_priority_with_the_time_it_began(self, app_module, pushover):
+        ok, detail = self.send(app_module)
+        assert ok and detail == "HTTP 200"
+        (got,) = pushover.requests
+        assert got["path"] == "/1/messages.json" and got["headers"]["Content-Type"] == "application/json"
+        body = got["json"]
+        assert body["token"] == PUSHOVER_APP and body["user"] == PUSHOVER_USER
+        assert body["title"] == "Radarr can't be reached" and body["priority"] == 1
+        assert body["message"] == "Connection refused\nCritical · Radarr"
+        assert body["timestamp"] == 1793527200      # 2026-11-01T10:00:00Z
+
+    def test_warning_recovery_and_test_priorities(self, app_module, pushover):
+        self.send(app_module, event(severity="warning", outage=False))
+        self.send(app_module, event("cleared"))
+        app_module.send_pushover(self.SETTINGS, sample_test_message())
+        warning, cleared, test = (r["json"] for r in pushover.requests)
+        assert (warning["priority"], cleared["priority"], test["priority"]) == (0, -1, 0)
+        assert cleared["timestamp"] == 1793527620 and warning["message"].endswith("Warning · Radarr")
+        assert 2 not in (warning["priority"], cleared["priority"], test["priority"])
+
+    def test_text_is_cut_to_pushovers_limits(self, app_module, pushover):
+        (message,) = app_module.compose_messages([event(title="T" * 500)])
+        message["message"], message["services"] = "M" * 5000, ["S" * 400] * 10
+        app_module.send_pushover(self.SETTINGS, message)
+        body = pushover.requests[0]["json"]
+        assert len(body["title"]) <= 250 and len(body["message"]) <= 1024 and "Critical" in body["message"]
+
+    def test_failures_use_pushovers_own_words(self, app_module, pushover):
+        cases = ((400, b'{"status":0,"errors":["application token is invalid"]}', "application token is wrong"),
+                 (400, b'{"status":0,"errors":["user identifier is invalid"]}', "user key is wrong"),
+                 (400, b'{"status":0,"errors":["message cannot be blank"]}', "did not accept"),
+                 (429, b"{}", "monthly message limit"), (500, b"", None))
+        for status, body, expected in cases:
+            pushover.status, pushover.reply = status, body
+            ok, detail = self.send(app_module)
+            assert ok is False and detail.startswith(f"HTTP {status}")
+            if expected:
+                assert expected in detail
+        assert PUSHOVER_APP not in detail
+
+    def test_a_200_without_status_1_is_not_a_success(self, app_module, pushover):
+        pushover.reply = b'{"status":0}'
+        assert self.send(app_module) == (False, "Pushover did not confirm the message")
+        pushover.reply = b"not json"
+        assert self.send(app_module)[0] is False
+
+    def test_the_keys_are_never_logged(self, app_module, pushover, caplog):
+        pushover.status, pushover.reply = 400, b'{"status":0,"errors":["application token is invalid"]}'
+        (message,) = app_module.compose_messages([event()])
+        with caplog.at_level(logging.DEBUG, logger="arrvantage"):
+            app_module.send_message({"pushover": self.SETTINGS}, message)
+        text = all_logged(caplog)
+        assert PUSHOVER_APP not in text and PUSHOVER_USER not in text
+        assert "Could not send an alert by pushover: HTTP 400" in text
+
+
+class TestGotifyAddress:
+    def test_server_and_token_rules(self, app_module):
+        clean = app_module._clean_gotify_server
+        assert clean(" https://gotify.example.com/ ") == "https://gotify.example.com"
+        assert clean("http://192.168.1.20:8080") == "http://192.168.1.20:8080"
+        assert clean("https://example.com/gotify/") == "https://example.com/gotify"
+        for bad in (None, "", 5, "gotify.example.com", "ftp://x/y", "https://user:pw@gotify.example.com",
+                    "https://gotify.example.com?token=abc", "https://gotify.example.com/#x", "https://gotify.example.com:notaport"):
+            assert clean(bad) == "", bad
+        assert app_module._clean_gotify_token(f" {GOTIFY_TOKEN} ") == GOTIFY_TOKEN
+        for bad in (None, "", 5, "has space", "a/b", "x" * 101):
+            assert app_module._clean_gotify_token(bad) == "", bad
+
+    def test_both_are_needed_and_only_the_server_is_shown(self, app_module):
+        assert app_module.normalize_notify({"gotify": {"server": "https://g.example"}}) is None
+        notify = app_module.normalize_notify({"gotify": {"server": "https://g.example/", "token": GOTIFY_TOKEN}})
+        assert notify["gotify"] == {"server": "https://g.example", "token": GOTIFY_TOKEN}
+        view = app_module.notify_view(notify)
+        assert view["gotify"] == {"set": True, "server": "https://g.example"} and GOTIFY_TOKEN not in json.dumps(view)
+        assert app_module.notify_view(None)["gotify"] == {"set": False, "server": ""}
+
+
+class TestGotifySending:
+    def send(self, app_module, receiver, ev=None, server=None):
+        (message,) = app_module.compose_messages([ev or event()])
+        return app_module.send_gotify({"server": server or receiver.url, "token": GOTIFY_TOKEN}, message)
+
+    def test_a_critical_problem_is_a_plain_text_push_with_the_key_in_the_header(self, app_module, receiver):
+        ok, detail = self.send(app_module, receiver)
+        assert ok and detail == "HTTP 200"
+        (got,) = receiver.requests
+        assert got["path"] == "/message" and got["headers"]["X-Gotify-Key"] == GOTIFY_TOKEN
+        assert GOTIFY_TOKEN not in got["path"]
+        assert got["json"] == {"title": "Radarr can't be reached", "message": "Connection refused\n\nCritical · Radarr",
+                               "priority": 8, "extras": {"client::display": {"contentType": "text/plain"}}}
+
+    def test_a_server_with_a_path_keeps_it(self, app_module, receiver):
+        self.send(app_module, receiver, server=receiver.url + "/gotify")
+        assert receiver.requests[0]["path"] == "/gotify/message"
+
+    def test_priorities(self, app_module, receiver):
+        self.send(app_module, receiver, event(severity="warning", outage=False))
+        self.send(app_module, receiver, event("cleared"))
+        app_module.send_gotify({"server": receiver.url, "token": GOTIFY_TOKEN}, sample_test_message())
+        assert [r["json"]["priority"] for r in receiver.requests] == [5, 3, 5]
+
+    def test_failures_use_gotifys_own_words(self, app_module, receiver):
+        for status, expected in ((401, "token is wrong"), (403, "refused"), (404, "nothing answered"), (400, "did not accept"),
+                                 (500, None)):
+            receiver.status = status
+            ok, detail = self.send(app_module, receiver)
+            assert ok is False and detail.startswith(f"HTTP {status}")
+            if expected:
+                assert expected in detail
+        assert "access token" not in detail
+
+    def test_a_redirect_is_explained(self, app_module, receiver):
+        receiver.status = 302
+        ok, detail = self.send(app_module, receiver)
+        assert not ok and "redirected" in detail
+
+    def test_the_token_is_never_logged(self, app_module, receiver, caplog):
+        receiver.status = 401
+        (message,) = app_module.compose_messages([event()])
+        with caplog.at_level(logging.DEBUG, logger="arrvantage"):
+            app_module.send_message({"gotify": {"server": receiver.url, "token": GOTIFY_TOKEN}}, message)
+        text = all_logged(caplog)
+        assert GOTIFY_TOKEN not in text and "Could not send an alert by gotify: HTTP 401" in text
+
+
+class TestSlackPushoverGotifyDelivery:
+    def test_each_destination_an_admin_has_gets_the_message(self, app_module, receiver, pushover):
+        (message,) = app_module.compose_messages([event()])
+        real = app_module.send_slack
+        notify = {"slack": {"webhook_url": SLACK_URL}, "pushover": {"user_key": PUSHOVER_USER, "app_token": PUSHOVER_APP},
+                  "gotify": {"server": receiver.url, "token": GOTIFY_TOKEN}, "webhook": {"webhook_url": receiver.url + "/w"}}
+        app_module.send_slack = lambda settings, msg: real({"webhook_url": receiver.url + "/s"}, msg)
+        try:
+            results = app_module.send_message(notify, message)
+        finally:
+            app_module.send_slack = real
+        assert [(c, ok) for c, ok, _ in results] == [("slack", True), ("pushover", True), ("gotify", True), ("webhook", True)]
+        assert sorted(r["path"] for r in receiver.requests) == ["/1/messages.json", "/message", "/s", "/w"]
+
+    def test_a_failing_destination_does_not_stop_the_next(self, app_module, receiver, pushover):
+        pushover.status = 400
+        (message,) = app_module.compose_messages([event()])
+        results = app_module.send_message({"pushover": {"user_key": PUSHOVER_USER, "app_token": PUSHOVER_APP},
+                                           "gotify": {"server": receiver.url, "token": GOTIFY_TOKEN}}, message)
+        assert [(c, ok) for c, ok, _ in results][0] == ("pushover", False)
+
+
+class TestSlackPushoverGotifySettingsApi:
+    def post(self, client, csrf, body, path="/api/notifications"):
+        return client.post(path, json=body, headers={"X-CSRF-Token": csrf})
+
+    def test_saving_keeping_and_removing_each(self, app_module, admin_session):
+        client, csrf = admin_session
+        reply = self.post(client, csrf, {"slack": {"webhook_url": SLACK_URL},
+                                         "pushover": {"user_key": PUSHOVER_USER, "app_token": PUSHOVER_APP},
+                                         "gotify": {"server": "https://g.example/", "token": GOTIFY_TOKEN}}).get_json()
+        assert reply["ok"] and reply["notify"]["slack"] == {"set": True} and reply["notify"]["pushover"] == {"set": True}
+        assert reply["notify"]["gotify"] == {"set": True, "server": "https://g.example"}
+        text = json.dumps(reply)
+        for secret in (SLACK_SECRET, PUSHOVER_USER, PUSHOVER_APP, GOTIFY_TOKEN):
+            assert secret not in text
+        saved = app_module.get_user("testadmin")["notify"]
+        assert saved["slack"]["webhook_url"] == SLACK_URL and saved["gotify"]["token"] == GOTIFY_TOKEN
+        # blank boxes keep what is saved
+        self.post(client, csrf, {"level": "all", "slack": {"webhook_url": ""}, "pushover": {"user_key": "", "app_token": ""},
+                                 "gotify": {"server": "", "token": ""}})
+        saved = app_module.get_user("testadmin")["notify"]
+        assert saved["level"] == "all" and saved["slack"]["webhook_url"] == SLACK_URL
+        assert saved["pushover"] == {"user_key": PUSHOVER_USER, "app_token": PUSHOVER_APP}
+        assert saved["gotify"] == {"server": "https://g.example", "token": GOTIFY_TOKEN}
+        # replacing only the Gotify token keeps its server
+        self.post(client, csrf, {"gotify": {"server": "", "token": "NewToken99"}})
+        assert app_module.get_user("testadmin")["notify"]["gotify"] == {"server": "https://g.example", "token": "NewToken99"}
+        for name in ("slack", "pushover", "gotify"):
+            assert self.post(client, csrf, {name: {"remove": True}}).get_json()["notify"][name]["set"] is False
+        assert "notify" not in app_module.get_user("testadmin")
+
+    def test_wrong_values_are_explained_and_nothing_is_saved(self, app_module, admin_session):
+        client, csrf = admin_session
+        cases = (({"slack": {"webhook_url": "https://example.com/x"}}, "Slack webhook address"),
+                 ({"pushover": {"user_key": "short", "app_token": PUSHOVER_APP}}, "user key is 30"),
+                 ({"pushover": {"user_key": PUSHOVER_USER, "app_token": "short"}}, "application token is 30"),
+                 ({"pushover": {"user_key": PUSHOVER_USER}}, "needs both"),
+                 ({"gotify": {"server": "gotify.example.com", "token": GOTIFY_TOKEN}}, "Gotify server address"),
+                 ({"gotify": {"server": "https://g.example", "token": "has space"}}, "Gotify application token"),
+                 ({"gotify": {"token": GOTIFY_TOKEN}}, "needs both"))
+        for body, words in cases:
+            reply = self.post(client, csrf, body)
+            assert reply.status_code == 400 and words in " ".join(reply.get_json()["errors"]), body
+        assert "notify" not in app_module.get_user("testadmin")
+
+    def test_the_test_button_reaches_all_three(self, app_module, admin_session, receiver, pushover, monkeypatch):
+        client, csrf = admin_session
+        self.post(client, csrf, {"slack": {"webhook_url": SLACK_URL},
+                                 "pushover": {"user_key": PUSHOVER_USER, "app_token": PUSHOVER_APP},
+                                 "gotify": {"server": receiver.url, "token": GOTIFY_TOKEN}})
+        real = app_module.send_slack
+        monkeypatch.setattr(app_module, "send_slack", lambda settings, message: real({"webhook_url": receiver.url + "/s"}, message))
+        reply = self.post(client, csrf, {}, "/api/notifications/test").get_json()
+        assert reply["ok"] and [r["channel"] for r in reply["results"]] == ["slack", "pushover", "gotify"]
+        assert {r["path"] for r in receiver.requests} == {"/s", "/1/messages.json", "/message"}
+
+    def test_secrets_stay_out_of_the_page_exports_and_diagnostics(self, app_module, admin_session):
+        client, csrf = admin_session
+        self.post(client, csrf, {"slack": {"webhook_url": SLACK_URL},
+                                 "pushover": {"user_key": PUSHOVER_USER, "app_token": PUSHOVER_APP},
+                                 "gotify": {"server": "https://g.example", "token": GOTIFY_TOKEN}})
+        secrets = (SLACK_SECRET, PUSHOVER_USER, PUSHOVER_APP, GOTIFY_TOKEN)
+        for url in ("/settings", "/api/config/export", "/api/diagnostics?hide_addresses=0", "/api/notifications"):
+            text = client.get(url).get_data(as_text=True)
+            for secret in secrets:
+                assert secret not in text, (url, secret)
+        full = client.get("/api/config/export?secrets=1").get_data(as_text=True)
+        for secret in secrets:
+            assert secret in full
+        diag = client.get("/api/diagnostics?hide_addresses=0").get_json()["text"]
+        assert "slack: 1, pushover: 1, gotify: 1" in diag
+
+    def test_a_keyless_import_keeps_them_and_a_full_backup_restores_them(self, app_module, admin_session):
+        client, csrf = admin_session
+        self.post(client, csrf, {"slack": {"webhook_url": SLACK_URL},
+                                 "pushover": {"user_key": PUSHOVER_USER, "app_token": PUSHOVER_APP},
+                                 "gotify": {"server": "https://g.example", "token": GOTIFY_TOKEN}})
+        plain = json.loads(client.get("/api/config/export").get_data(as_text=True))
+        assert client.post("/api/config/import", json={"file": plain, "confirm": True}, headers={"X-CSRF-Token": csrf}).get_json()["ok"]
+        kept = app_module.get_user("testadmin")["notify"]
+        assert kept["slack"]["webhook_url"] == SLACK_URL and kept["gotify"]["token"] == GOTIFY_TOKEN
+        full = json.loads(client.get("/api/config/export?secrets=1").get_data(as_text=True))
+        for name in ("slack", "pushover", "gotify"):
+            self.post(client, csrf, {name: {"remove": True}})
+        assert "notify" not in app_module.get_user("testadmin")
+        client.post("/api/config/import", json={"file": full, "confirm": True}, headers={"X-CSRF-Token": csrf})
+        restored = app_module.get_user("testadmin")["notify"]
+        assert restored["slack"]["webhook_url"] == SLACK_URL and restored["pushover"]["app_token"] == PUSHOVER_APP
+        assert restored["gotify"] == {"server": "https://g.example", "token": GOTIFY_TOKEN}
+
+    def test_a_file_cannot_point_slack_elsewhere(self, app_module, admin_session):
+        client, csrf = admin_session
+        full = json.loads(client.get("/api/config/export?secrets=1").get_data(as_text=True))
+        full["config"]["users"][0]["notify"] = {"slack": {"webhook_url": "https://example.com/x"}}
+        client.post("/api/config/import", json={"file": full, "confirm": True}, headers={"X-CSRF-Token": csrf})
+        assert "notify" not in app_module.get_user("testadmin")
+
+    def test_a_regular_account_cannot_have_them(self, app_module):
+        add_admin(app_module, "viewer", {"slack": {"webhook_url": SLACK_URL}}, role="user")
+        sent = []
+        real = app_module.send_message
+        app_module.send_message = lambda notify, message: sent.append(notify)
+        try:
+            app_module.deliver_events([event()])
+        finally:
+            app_module.send_message = real
+        assert sent == []
+
+    def test_the_settings_page_has_the_three_boxes(self, app_module, admin_session):
+        client, _ = admin_session
+        html = client.get("/settings").get_data(as_text=True)
+        for ident in ("alerts-slack-url", "alerts-slack-remove", "alerts-pushover-user", "alerts-pushover-token",
+                      "alerts-pushover-remove", "alerts-gotify-server", "alerts-gotify-token", "alerts-gotify-remove"):
+            assert f'id="{ident}"' in html, ident

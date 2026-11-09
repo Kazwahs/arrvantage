@@ -616,6 +616,50 @@
                         <button type="button" class="test-btn" id="alerts-email-remove" hidden>Remove email</button>
                     </div>
 
+                    <div class="metadata-service-label">Slack</div>
+                    <p class="tool-hint">Post alerts to a Slack channel. In Slack, create an app for your workspace (api.slack.com/apps), switch on <strong>Incoming Webhooks</strong>, choose <strong>Add New Webhook to Workspace</strong>, pick the channel, and copy the address it gives you. The address works like a password, so anyone who has it can post to that channel; arrVantage stores it like an API key and never shows it again. Alerts never ping anyone.</p>
+                    <div class="field">
+                        <label for="alerts-slack-url">Webhook address</label>
+                        <div class="key-row">
+                            <input type="password" id="alerts-slack-url" autocomplete="new-password" spellcheck="false">
+                            <button type="button" class="toggle-btn" onclick="toggleField('alerts-slack-url', this)">Show</button>
+                        </div>
+                    </div>
+                    <div class="tool-row"><button type="button" class="test-btn" id="alerts-slack-remove" hidden>Remove Slack</button></div>
+
+                    <div class="metadata-service-label">Pushover</div>
+                    <p class="tool-hint">Send alerts to the Pushover app on your phone. On pushover.net, copy your <strong>user key</strong> from the home page, then create an application there (any name) and copy its <strong>API token</strong>. Both are stored like an API key and never shown again. A critical problem is sent as high priority, which can get through your phone's quiet hours.</p>
+                    <div class="field">
+                        <label for="alerts-pushover-user">User key</label>
+                        <div class="key-row">
+                            <input type="password" id="alerts-pushover-user" autocomplete="new-password" spellcheck="false">
+                            <button type="button" class="toggle-btn" onclick="toggleField('alerts-pushover-user', this)">Show</button>
+                        </div>
+                    </div>
+                    <div class="field">
+                        <label for="alerts-pushover-token">Application token</label>
+                        <div class="key-row">
+                            <input type="password" id="alerts-pushover-token" autocomplete="new-password" spellcheck="false">
+                            <button type="button" class="toggle-btn" onclick="toggleField('alerts-pushover-token', this)">Show</button>
+                        </div>
+                    </div>
+                    <div class="tool-row"><button type="button" class="test-btn" id="alerts-pushover-remove" hidden>Remove Pushover</button></div>
+
+                    <div class="metadata-service-label">Gotify</div>
+                    <p class="tool-hint">Send alerts to your own Gotify server. In Gotify, open the <strong>Apps</strong> tab, create an application, and copy its token. Enter the address you use to open Gotify (arrVantage has to be able to reach it from where it runs). The token is stored like an API key and never shown again.</p>
+                    <div class="field">
+                        <label for="alerts-gotify-server">Server</label>
+                        <input type="text" id="alerts-gotify-server" placeholder="https://gotify.example.com" autocomplete="off" spellcheck="false">
+                    </div>
+                    <div class="field">
+                        <label for="alerts-gotify-token">Application token</label>
+                        <div class="key-row">
+                            <input type="password" id="alerts-gotify-token" autocomplete="new-password" spellcheck="false">
+                            <button type="button" class="toggle-btn" onclick="toggleField('alerts-gotify-token', this)">Show</button>
+                        </div>
+                    </div>
+                    <div class="tool-row"><button type="button" class="test-btn" id="alerts-gotify-remove" hidden>Remove Gotify</button></div>
+
                     <div class="metadata-service-label">Webhook</div>
                     <p class="tool-hint">arrVantage sends a JSON message to this address (a POST with app, version, event, title, message, severity, kind, services, since and ended). Use it for Home Assistant, n8n and the like (Discord has its own box above, because it expects a different message). The address is stored like an API key, because many include a secret.</p>
                     <div class="field">
@@ -864,7 +908,7 @@
         })();
 
         // ---------------------------------------------------------------
-        // Alerts (ntfy / Discord / Telegram / email / webhook), for the signed-in administrator
+        // Alerts (ntfy / Discord / Telegram / email / Slack / Pushover / Gotify / webhook), for the signed-in administrator
         // ---------------------------------------------------------------
         (function () {
             const $ = (id) => document.getElementById(id);
@@ -927,13 +971,25 @@
                 $('alerts-email-user').placeholder = mail.user_set ? 'Saved. Type a new login to replace it.' : 'optional';
                 $('alerts-email-password').value = '';
                 $('alerts-email-password').placeholder = mail.password_set ? 'Saved. Type a new password to replace it.' : 'optional';
+                $('alerts-slack-url').value = '';
+                $('alerts-slack-url').placeholder = notify.slack.set ? 'Saved. Paste a new address to replace it.' : 'https://hooks.slack.com/services/...';
+                $('alerts-pushover-user').value = '';
+                $('alerts-pushover-user').placeholder = notify.pushover.set ? 'Saved. Type a new key to replace it.' : '30 letters and numbers';
+                $('alerts-pushover-token').value = '';
+                $('alerts-pushover-token').placeholder = notify.pushover.set ? 'Saved. Type a new token to replace it.' : '30 letters and numbers';
+                $('alerts-gotify-server').value = notify.gotify.server;
+                $('alerts-gotify-token').value = '';
+                $('alerts-gotify-token').placeholder = notify.gotify.set ? 'Saved. Type a new token to replace it.' : 'the application token';
                 $('alerts-ntfy-remove').hidden = !notify.ntfy.topic_set;
+                $('alerts-slack-remove').hidden = !notify.slack.set;
+                $('alerts-pushover-remove').hidden = !notify.pushover.set;
+                $('alerts-gotify-remove').hidden = !notify.gotify.set;
                 $('alerts-discord-remove').hidden = !notify.discord.set;
                 $('alerts-telegram-remove').hidden = !notify.telegram.set;
                 $('alerts-email-remove').hidden = !mail.set;
                 $('alerts-email-clear-login').hidden = !mail.user_set;
                 $('alerts-webhook-remove').hidden = !notify.webhook.set;
-                $('alerts-test').disabled = !(notify.ntfy.topic_set || notify.discord.set || notify.telegram.set || mail.set || notify.webhook.set);
+                $('alerts-test').disabled = !(notify.ntfy.topic_set || notify.discord.set || notify.telegram.set || mail.set || notify.slack.set || notify.pushover.set || notify.gotify.set || notify.webhook.set);
                 $('alerts-monitor-off').hidden = !monitorState || monitorState.enabled;
             }
 
@@ -956,6 +1012,9 @@
                         smtp_user: $('alerts-email-user').value, smtp_password: $('alerts-email-password').value,
                         mail_from: $('alerts-email-from').value, mail_to: $('alerts-email-to').value,
                     },
+                    slack: { webhook_url: $('alerts-slack-url').value },
+                    pushover: { user_key: $('alerts-pushover-user').value, app_token: $('alerts-pushover-token').value },
+                    gotify: { server: $('alerts-gotify-server').value, token: $('alerts-gotify-token').value },
                     webhook: { webhook_url: $('alerts-webhook-url').value },
                 }, extra || {});
                 try {
@@ -975,6 +1034,9 @@
             $('alerts-ntfy-remove').addEventListener('click', () => save({ ntfy: { remove: true } }));
             $('alerts-discord-remove').addEventListener('click', () => save({ discord: { remove: true } }));
             $('alerts-telegram-remove').addEventListener('click', () => save({ telegram: { remove: true } }));
+            $('alerts-slack-remove').addEventListener('click', () => save({ slack: { remove: true } }));
+            $('alerts-pushover-remove').addEventListener('click', () => save({ pushover: { remove: true } }));
+            $('alerts-gotify-remove').addEventListener('click', () => save({ gotify: { remove: true } }));
             $('alerts-email-remove').addEventListener('click', () => save({ email: { remove: true } }));
             $('alerts-email-clear-login').addEventListener('click', () => save({
                 email: { host: $('alerts-email-host').value, port: $('alerts-email-port').value, security: $('alerts-email-security').value,
@@ -1024,7 +1086,7 @@
                 try {
                     const data = await post('/api/notifications/test', {});
                     if (data.error) { say(data.error, 'test-fail'); return; }
-                    const parts = (data.results || []).map((r) => ({ ntfy: 'ntfy', discord: 'Discord', telegram: 'Telegram', email: 'Email' }[r.channel] || 'Webhook') + (r.via ? ' (' + r.via + ')' : '') + ': ' + (r.ok ? 'sent' : 'failed - ' + r.detail));
+                    const parts = (data.results || []).map((r) => ({ ntfy: 'ntfy', discord: 'Discord', telegram: 'Telegram', email: 'Email', slack: 'Slack', pushover: 'Pushover', gotify: 'Gotify' }[r.channel] || 'Webhook') + (r.via ? ' (' + r.via + ')' : '') + ': ' + (r.ok ? 'sent' : 'failed - ' + r.detail));
                     say(parts.join('. ') + '.', data.ok ? 'test-ok' : 'test-fail');
                 } catch (err) {
                     say('Could not reach the server: ' + err.message, 'test-fail');

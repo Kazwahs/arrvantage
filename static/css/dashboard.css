@@ -691,6 +691,7 @@ body {
 
 .search-row { display: flex; gap: 0.5rem; margin-bottom: 1rem; }
 
+.search-row select,
 .search-row input {
     flex: 1;
     background: var(--panel);
@@ -700,6 +701,8 @@ body {
     color: var(--text);
     font-size: 0.9rem;
 }
+
+.search-row select { flex: 0 0 auto; }
 
 .search-row button, .request-btn {
     background: var(--accent);

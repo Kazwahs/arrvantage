@@ -15,7 +15,7 @@ Actively developed — expect rough edges and breaking changes between releases.
 - Unified dashboard for your \*arr stack (Sonarr, Radarr, Lidarr, Readarr (Tested with Bookshelf and then Chaptarr), Kapowarr)
 - **Needs attention** on Home: stalled or failed downloads, unreachable apps and services, health warnings and low disk space, merged so the same problem is shown once. Warnings you do not care about can be hidden; outages cannot
 - **Coming Up** on Home: the next 7, 14 or 30 days of episodes (Sonarr), movie releases (Radarr), albums (Lidarr) and books (Readarr / Chaptarr), colour-coded with each instance's own colour, and each instance's name above the calendar switches it off and on (remembered in your browser) if one of them is too busy
-- **Service history** and **push alerts**: arrVantage checks your stack in the background, records when each service went down and came back, and can tell you by ntfy, Discord, Telegram, email or a webhook (see [Alerts and service history](#alerts-and-service-history))
+- **Service history** and **push alerts**: arrVantage checks your stack in the background, records when each service went down and came back, and can tell you by ntfy, Discord, Telegram, email, Slack, Pushover, Gotify or a webhook (see [Alerts and service history](#alerts-and-service-history))
 - **Downloads** on Home: a card per download client (qBittorrent, SABnzbd) with its speed, whether it is downloading, waiting, paused or idle, and the few downloads that are actually moving with progress and time left. It refreshes itself every 10 seconds while Home is open
 - Indexer visibility (Prowlarr)
 - Request management via Seerr (Overseerr / Jellyseerr / Seerr)
@@ -97,17 +97,20 @@ arrVantage runs the same checks as **Needs attention** in the background, every 
   - **Discord:** a channel's webhook address (in Discord: channel settings, Integrations, Webhooks, create one, Copy Webhook URL). Each alert is one message with a coloured side bar and the severity written in its footer (Critical, Warning or Resolved), plus the services involved. Alerts never ping anyone, even if a service is called `@everyone`. Only `discord.com` webhook addresses are accepted. Discord can't read the generic webhook's message, which is why it has its own box.
   - **Telegram:** a bot of your own. In Telegram, message `@BotFather`, send `/newbot`, answer its questions and copy the token. Open your new bot and send it any message (for a group, add the bot to the group and write something there), then paste the token into arrVantage and press **Find my chat**: it lists the chats the bot has seen and fills in the chat ID when you pick one. Each alert is a short message with the title in bold and the severity and services underneath.
   - **Email:** your mail server's name, the security option (STARTTLS on port 587 is the usual one; SSL/TLS on 465; *None* only for a mail server on your own network), an optional login and password, a From address and up to five addresses to send to. Gmail, Yahoo and most other providers need an app password instead of your normal one. The subject says what happened (for example `[arrVantage] Critical: Radarr can't be reached`) and the body gives the details. If the mail server's certificate is not one a normal browser would trust (a self-signed one), the alert will fail with "the certificate was not accepted".
+  - **Slack:** an incoming webhook. In Slack, create an app for your workspace (api.slack.com/apps), switch on *Incoming Webhooks*, add a webhook to the channel you want and copy its address (`https://hooks.slack.com/services/...`). Each alert is one message with the title in bold and the severity and services underneath. Slack's own markup is escaped, so a service called `<!channel>` cannot ping anyone. Only `hooks.slack.com` addresses are accepted (on GovSlack, use the generic webhook below).
+  - **Pushover:** your user key (on the Pushover home page) and the API token of an application you create on pushover.net. A critical problem is sent as high priority, which can get through your phone's quiet hours; a warning is normal priority and a recovery is low priority (no sound).
+  - **Gotify:** the address of your own Gotify server and the token of an application created on its *Apps* tab (arrVantage has to be able to reach that address from where it runs). A critical problem is sent at a higher Gotify priority than a warning or a recovery. The text is sent as plain text.
   - **Webhook:** arrVantage sends a JSON `POST` to the address, for Home Assistant, n8n and the like:
 
     ```json
-    {"app": "arrVantage", "version": "1.4.0", "event": "opened", "title": "Radarr can't be reached",
+    {"app": "arrVantage", "version": "1.5.0", "event": "opened", "title": "Radarr can't be reached",
      "message": "Connection refused", "severity": "critical", "kind": "unreachable",
      "services": ["Radarr"], "since": "2026-11-01T10:00:00Z", "ended": null}
     ```
 
     `event` is `opened`, `cleared` (with `ended` filled in) or `test`.
-- The topic, access token, webhook addresses (Discord's included), Telegram bot token and chat ID, and the email login, password and addresses are treated like API keys: they are left out of exports unless you tick *Include API keys*, are never sent back to your browser once saved, and are never written to the log (a failed alert is logged as, for example, `HTTP 500`, without the address).
-- The alerts are sent by the arrVantage container, so it must be able to reach your ntfy server, Discord, Telegram (`api.telegram.org`), mail server or webhook address from where it runs.
+- The topic, access token, webhook addresses (Discord's and Slack's included), Telegram bot token and chat ID, the Pushover keys, the Gotify token, and the email login, password and addresses are treated like API keys: they are left out of exports unless you tick *Include API keys*, are never sent back to your browser once saved, and are never written to the log (a failed alert is logged as, for example, `HTTP 500`, without the address).
+- The alerts are sent by the arrVantage container, so it must be able to reach your ntfy server, Discord, Telegram (`api.telegram.org`), Slack (`hooks.slack.com`), Pushover (`api.pushover.net`), your Gotify server, your mail server or your webhook address from where it runs.
 - Set `MONITOR_INTERVAL=0` to turn the background checks, the history and the alerts off.
 
 ## Backup, restore and diagnostics
@@ -132,7 +135,7 @@ It's still evolving — I'm actively using it myself and tweaking it as I go. Fe
 
 | Category | Supported |
 |---|---|
-| \*Arr apps | Radarr (movies), Sonarr (TV), Lidarr (music), Chaptarr / Readarr-style book managers, Kapowarr (comics), Librarr (manga and books fetcher: a Search tab that finds manga and sends the one you pick, its queue with Retry for failed jobs, history, and the files it has imported grouped by title) |
+| \*Arr apps | Radarr (movies), Sonarr (TV), Lidarr (music), Chaptarr / Readarr-style book managers, Kapowarr (comics), Librarr (manga and books fetcher: a Search tab with a Manga / Ebooks / Audiobooks choice that sends the result you pick, its queue with Retry for failed jobs, history, and the files it has imported grouped by title) |
 | Indexers | Prowlarr — indexer health status, individual and bulk testing |
 | Downloaders | qBittorrent, SABnzbd |
 | Requests | Overseerr, Jellyseerr |
@@ -150,16 +153,16 @@ What exists today, and what is on the list. The unchecked items are ideas, not p
 - [x] A Home you can rearrange
 - [x] Coming Up calendar
 - [x] Settings backup and restore, and copyable diagnostics
-- [x] Push alerts (ntfy, Discord, Telegram, email or a webhook) when something breaks, so you do not have to have the dashboard open
+- [x] Push alerts (ntfy, Discord, Telegram, email, Slack, Pushover, Gotify or a webhook) when something breaks, so you do not have to have the dashboard open
 - [x] A short history of when each service went down and came back
 - [x] The version shown in the About panel and in diagnostics
 - [x] Discord alerts
 - [x] Telegram and email alerts
-- [ ] More alert destinations (Slack, Pushover, Gotify) if ntfy, Discord, Telegram, email and the webhook are not enough
+- [x] Slack, Pushover and Gotify alerts
 - [x] A Downloads panel on Home: qBittorrent and SABnzbd speeds and active queue in one place
 - [x] Book releases in Coming Up (Readarr / Chaptarr). Built from Readarr's published API; please report it if Chaptarr answers differently
 - [x] BookOrbit: uptime check, alerts and a link (its library is not browsable here until BookOrbit documents an API for it)
-- [x] Librarr as an instance: Library (what it has imported, grouped by title), Queue with Retry, History, System, a Search tab that finds manga and sends the one you pick, and a card in Home's libraries panel (built from its README and a real 1.5.0 server; only the failed-job shape was seen live, so please report anything it shows wrongly)
+- [x] Librarr as an instance: Library (what it has imported, grouped by title), Queue with Retry, History, System, a Search tab with a Manga / Ebooks / Audiobooks choice that sends the result you pick, and a card in Home's libraries panel (built from its README and a real 1.5.0 server; only the failed-job shape was seen live, so please report anything it shows wrongly)
 - [x] Book and comic apps: Readarr, Chaptarr, Librarr, Komga, Kapowarr and BookOrbit (uptime only) are covered
 
 ## Contributing / Feedback

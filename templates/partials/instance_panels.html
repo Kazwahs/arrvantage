@@ -245,12 +245,17 @@
 </div>
 
 {% if instance.library_kind == "librarr" %}
-<!-- Search panel (Librarr only): look for manga and send one to Librarr -->
+<!-- Search panel (Librarr only): look for manga, ebooks or audiobooks and send one to Librarr -->
 <div class="panel" data-instance="{{ instance.name }}" data-view="search">
     {% if can_search %}
     <form class="search-row librarr-form">
+        <select name="kind" aria-label="What to search for">
+            <option value="manga">Manga</option>
+            <option value="ebook">Ebooks</option>
+            <option value="audiobook">Audiobooks</option>
+        </select>
         <input type="search" name="q" maxlength="100" required autocomplete="off"
-               placeholder="Search manga to download" aria-label="Search manga to download">
+               placeholder="Search manga to download" aria-label="Search to download">
         <button type="submit">Search</button>
     </form>
     <div class="librarr-results" aria-live="polite"></div>

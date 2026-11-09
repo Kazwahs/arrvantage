@@ -44,7 +44,7 @@ import time
 # same commit, so the image, the About panel, Copy diagnostics and the GitHub
 # release tag all say the same thing. (ARRVANTAGE_VERSION in the environment
 # wins, for a build that wants to stamp its own - the image does not today.)
-APP_VERSION = "1.4.0"
+APP_VERSION = "1.5.0"
 
 
 def resolve_app_version(raw=None) -> str:
@@ -3167,6 +3167,14 @@ def api_downloads():
 #   title, size_human, seeders, score, in_library and download_url /
 #   info_hash...; those links can hold an indexer's own API key, so they
 #   stay on the server and the page only gets a token.
+# - GET /api/search (ebooks) and GET /api/search/audiobooks answer with the same
+#   {"results", "sources", "metadata", "search_time_ms"}. An audiobook result was seen live:
+#   {abb_url, in_library, indexer, score, score_breakdown, size_human, source: "audiobook",
+#   title}. No ebook result could be seen (Anna's Archive answered 403 on the one server
+#   tried, so the answer was empty); the page sends ebooks, audiobooks and manga through the
+#   same POST /api/download. Each entry of "sources" has name, label, enabled and
+#   health {circuit_open, search_fail_streak, ...}: that is how a search that found nothing can
+#   say which sources are failing.
 # - POST /api/download takes the fields Librarr's own page sends (title,
 #   download_url, abb_url, source, source_id, md5, author, info_hash, magnet,
 #   media_type, download_protocol, force) and answers {"success", "job_id"};
@@ -3182,6 +3190,9 @@ LIBRARR_SEARCH_KEEP_SECONDS = 600
 LIBRARR_SEARCH_MAX_KEPT = 20
 LIBRARR_SEARCH_MAX_RUNNING = 3
 LIBRARR_RESULT_LIMIT = 40
+# What Librarr can search for, and where (its own page uses these three addresses). Manga is the
+# default; the answers all share one shape, and every kind is sent with the same POST /api/download.
+LIBRARR_SEARCH_KINDS = {"manga": "/api/search/manga", "ebook": "/api/search", "audiobook": "/api/search/audiobooks"}
 LIBRARR_HISTORY_LIMIT = 25
 LIBRARR_LIBRARY_MAX_PAGES = 30       # 100 files a page: lists up to 3,000 files
 LIBRARR_LIBRARY_BUDGET_SECONDS = 20  # stop asking for pages after this long
@@ -3500,13 +3511,30 @@ def librarr_search_results(data) -> tuple:
         rows.append({
             "token": token, "title": scrub_log_text(str(result.get("title") or "(untitled)"), 200),
             "source": scrub_log_text(str(result.get("indexer") or labels.get(source) or source), 40),
-            "size": scrub_log_text(str(result.get("size_human") or ""), 40),
+            "size": "" if str(result.get("size_human") or "").strip() == "?" else scrub_log_text(str(result.get("size_human") or ""), 40),  # Librarr writes "?" for an unknown size
             "seeders": number(result.get("seeders")), "score": number(result.get("score")),
             "format": scrub_log_text(str(result.get("format") or ""), 20),
             "in_library": bool(result.get("in_library")),
             "library_title": scrub_log_text(str(result.get("library_title") or ""), 200),
         })
     return rows, raw
+
+
+def librarr_failing_sources(data) -> list:
+    """The labels of the sources Librarr says are failing right now (its circuit is open, or the
+    last searches failed in a row) - so an empty answer can say why. Pure; words only, never the
+    error text Librarr keeps (it can quote an address)."""
+    failing = []
+    for source in (data.get("sources") if isinstance(data, dict) else None) or []:
+        if not isinstance(source, dict) or source.get("enabled") is False:
+            continue
+        health = source.get("health") if isinstance(source.get("health"), dict) else {}
+        streak = health.get("search_fail_streak")
+        if health.get("circuit_open") is True or (isinstance(streak, int) and not isinstance(streak, bool) and streak >= 3):
+            label = scrub_log_text(str(source.get("label") or source.get("name") or ""), 40)
+            if label and label not in failing:
+                failing.append(label)
+    return failing[:10]
 
 
 def librarr_grab_body(result: dict, force: bool) -> dict:
@@ -3534,11 +3562,12 @@ def _librarr_prune(now: float) -> None:
         del _LIBRARR_SEARCHES[oldest]
 
 
-def _run_librarr_search(sid: str, config: dict, query: str) -> None:
-    error, rows, raw, took = None, [], {}, 0
+def _run_librarr_search(sid: str, config: dict, query: str, kind: str = "manga") -> None:
+    error, rows, raw, took, failing = None, [], {}, 0, []
     try:
-        data = librarr_get(config, "/api/search/manga", {"q": query}, timeout=LIBRARR_SEARCH_TIMEOUT)
+        data = librarr_get(config, LIBRARR_SEARCH_KINDS[kind], {"q": query}, timeout=LIBRARR_SEARCH_TIMEOUT)
         rows, raw = librarr_search_results(data)
+        failing = librarr_failing_sources(data)
         took = data.get("search_time_ms") if isinstance(data, dict) and isinstance(data.get("search_time_ms"), (int, float)) else 0
     except requests.exceptions.JSONDecodeError:
         error = "unexpected answer - is this the right address?"
@@ -3549,7 +3578,8 @@ def _run_librarr_search(sid: str, config: dict, query: str) -> None:
     with _LIBRARR_LOCK:
         entry = _LIBRARR_SEARCHES.get(sid)
         if entry:
-            entry.update({"state": "error" if error else "done", "error": error, "rows": rows, "raw": raw, "took_ms": int(took)})
+            entry.update({"state": "error" if error else "done", "error": error, "rows": rows, "raw": raw, "took_ms": int(took),
+                          "failing": failing})
 
 
 @app.route("/api/librarr/search/<name>", methods=["POST"])
@@ -3563,19 +3593,23 @@ def api_librarr_search_start(name):
     query = " ".join(str(body.get("q") or "").split())
     if len(query) < 2 or len(query) > 100:
         return jsonify({"error": "type 2 to 100 characters to search for"}), 400
+    kind = body.get("kind", "manga")
+    if kind not in LIBRARR_SEARCH_KINDS:
+        return jsonify({"error": "choose manga, ebooks or audiobooks"}), 400
     owner = session.get("username")
     now = time.monotonic()
     with _LIBRARR_LOCK:
         _librarr_prune(now)
         for sid, entry in _LIBRARR_SEARCHES.items():  # the same search already running: share it
-            if entry["state"] == "running" and entry["client"] == name and entry["owner"] == owner and entry["query"].lower() == query.lower():
+            if entry["state"] == "running" and entry["client"] == name and entry["owner"] == owner and entry["query"].lower() == query.lower() \
+                    and entry["kind"] == kind:
                 return jsonify({"id": sid})
         if sum(1 for e in _LIBRARR_SEARCHES.values() if e["state"] == "running") >= LIBRARR_SEARCH_MAX_RUNNING:
             return jsonify({"error": "several searches are already running - try again in a moment"}), 429
         sid = secrets.token_urlsafe(9)
         _LIBRARR_SEARCHES[sid] = {"client": name, "owner": owner, "query": query, "state": "running", "started": now,
-                                  "error": None, "rows": [], "raw": {}, "took_ms": 0}
-    threading.Thread(target=_run_librarr_search, args=(sid, dict(config), query), name="arrv-librarr-search", daemon=True).start()
+                                  "error": None, "rows": [], "raw": {}, "took_ms": 0, "kind": kind, "failing": []}
+    threading.Thread(target=_run_librarr_search, args=(sid, dict(config), query, kind), name="arrv-librarr-search", daemon=True).start()
     return jsonify({"id": sid})
 
 
@@ -3593,7 +3627,8 @@ def api_librarr_search_result(name, sid):
         if not entry:
             return jsonify({"error": "that search has expired - search again"}), 404
         return jsonify({"state": entry["state"], "error": entry["error"], "query": entry["query"],
-                        "results": entry["rows"], "took_ms": entry["took_ms"]})
+                        "results": entry["rows"], "took_ms": entry["took_ms"], "kind": entry["kind"],
+                        "failing": entry["failing"]})
 
 
 @app.route("/api/librarr/grab/<name>/<sid>/<token>", methods=["POST"])
@@ -6457,7 +6492,8 @@ EXPORT_SECTIONS = ("instances", "media_servers", "requesters", "downloaders", "i
 # everyone out.
 EXPORT_SECRET_FIELDS = ("api_key", "credential", "password_hash", "pin",
                         "topic", "token", "webhook_url",  # an account's alert destinations from here on
-                        "bot_token", "chat_id", "smtp_user", "smtp_password", "mail_from", "mail_to")
+                        "bot_token", "chat_id", "smtp_user", "smtp_password", "mail_from", "mail_to",
+                        "user_key", "app_token")
 IMPORT_MAX_BYTES = 1_000_000
 CONFIG_BACKUPS_KEPT = 10
 _DEFAULT_COLOR = "#5b8cff"
@@ -6902,7 +6938,7 @@ def api_diagnostics():
 # open. A small background thread now runs the same check every
 # MONITOR_INTERVAL seconds, remembers when a problem started and ended (the
 # service history), and tells the administrators who asked to hear about it
-# (ntfy, Discord, Telegram, email or a webhook). It is a thread of the one gunicorn worker, like the
+# (ntfy, Discord, Telegram, email, Slack, Pushover, Gotify or a webhook). It is a thread of the one gunicorn worker, like the
 # other in-process state; MONITOR_INTERVAL=0 switches it off.
 
 MONITOR_DEFAULT_INTERVAL = 60
@@ -6923,7 +6959,7 @@ NOTIFY_LEVELS = {
 }
 _NTFY_TOPIC_RE = re.compile(r"^[-_A-Za-z0-9]{1,64}$")
 # Where an administrator can be alerted, in the order a message is sent to them.
-NOTIFY_CHANNELS = ("ntfy", "discord", "telegram", "email", "webhook")
+NOTIFY_CHANNELS = ("ntfy", "discord", "telegram", "email", "slack", "pushover", "gotify", "webhook")
 # Discord webhook addresses look like https://discord.com/api/webhooks/<id>/<token>
 # (ptb. and canary. are Discord's own test builds; discordapp.com is the old name).
 # Checking the shape means a typo is caught on save, and this destination can only
@@ -6939,6 +6975,19 @@ TELEGRAM_API = "https://api.telegram.org"
 _TELEGRAM_TOKEN_RE = re.compile(r"^\d{5,15}:[A-Za-z0-9_-]{30,60}$")
 _TELEGRAM_CHAT_RE = re.compile(r"^(?:-?\d{1,20}|@[A-Za-z][A-Za-z0-9_]{3,31})$")
 TELEGRAM_MAX_CHATS = 10
+# Slack: an incoming webhook is https://hooks.slack.com/services/<team>/<app>/<secret> (Slack's
+# "Sending messages using incoming webhooks" page). Checking the shape means a typo is caught on
+# save and this destination can only ever send to Slack. (GovSlack uses another domain, whose
+# exact host name could not be confirmed, so it is not accepted - use the generic webhook there.)
+_SLACK_HOSTS = ("hooks.slack.com",)
+_SLACK_PATH_RE = re.compile(r"^/services/[A-Z0-9]{5,30}/[A-Z0-9]{5,30}/[A-Za-z0-9]{10,60}$")
+# Pushover (pushover.net/api): POST https://api.pushover.net/1/messages.json with the app's token
+# and the person's user key, each 30 letters and digits. The address is fixed in the code.
+PUSHOVER_API = "https://api.pushover.net/1/messages.json"
+_PUSHOVER_KEY_RE = re.compile(r"^[A-Za-z0-9]{30}$")
+# Gotify (gotify.net/docs/pushmsg): a server of the person's own; POST <server>/message with the
+# application token in the X-Gotify-Key header.
+_GOTIFY_TOKEN_RE = re.compile(r"^[A-Za-z0-9_.~-]{1,100}$")
 # Email: the mail server is typed in by the administrator (like a webhook address).
 # security -> (label, usual port)
 SMTP_SECURITY = {
@@ -7202,6 +7251,65 @@ def _clean_discord_url(value) -> str:
     return f"https://{parts.hostname.lower()}{path}" + (f"?{parts.query}" if parts.query else "")
 
 
+def _clean_slack_url(value) -> str:
+    """A Slack incoming-webhook address in its plain form, or "" when it is not one:
+    https, Slack's own host, the /services/<team>/<app>/<secret> path, nothing else."""
+    text = _clean_url(value, 300)
+    if not text:
+        return ""
+    try:
+        parts = urlsplit(text)
+        port = parts.port
+    except ValueError:
+        return ""
+    path = parts.path.rstrip("/")
+    if (parts.scheme != "https" or (parts.hostname or "").lower() not in _SLACK_HOSTS or port not in (None, 443)
+            or "@" in parts.netloc or not _SLACK_PATH_RE.match(path) or parts.query or parts.fragment):
+        return ""
+    return f"https://{parts.hostname.lower()}{path}"
+
+
+def _clean_pushover_key(value) -> str:
+    text = value.strip() if isinstance(value, str) else ""
+    return text if _PUSHOVER_KEY_RE.match(text) else ""
+
+
+def normalize_pushover(raw):
+    if not isinstance(raw, dict):
+        return None
+    user, token = _clean_pushover_key(raw.get("user_key")), _clean_pushover_key(raw.get("app_token"))
+    return {"user_key": user, "app_token": token} if user and token else None
+
+
+def _clean_gotify_server(value) -> str:
+    """The address of a Gotify server, without a trailing slash. A path is allowed
+    (Gotify behind a reverse proxy at /gotify); a login in the address, a query or a
+    fragment are not."""
+    text = _clean_url(value, 300)
+    if not text:
+        return ""
+    try:
+        parts = urlsplit(text)
+        parts.port  # noqa: B018 - raises ValueError for a bad port
+    except ValueError:
+        return ""
+    if "@" in parts.netloc or parts.query or parts.fragment:
+        return ""
+    return text.rstrip("/")
+
+
+def _clean_gotify_token(value) -> str:
+    text = value.strip() if isinstance(value, str) else ""
+    return text if _GOTIFY_TOKEN_RE.match(text) else ""
+
+
+def normalize_gotify(raw):
+    if not isinstance(raw, dict):
+        return None
+    server, token = _clean_gotify_server(raw.get("server")), _clean_gotify_token(raw.get("token"))
+    return {"server": server, "token": token} if server and token else None
+
+
 def _clean_telegram_token(value) -> str:
     text = value.strip() if isinstance(value, str) else ""
     return text if _TELEGRAM_TOKEN_RE.match(text) else ""
@@ -7296,6 +7404,9 @@ def normalize_notify(raw):
          "discord":  {"webhook_url"},
          "telegram": {"bot_token", "chat_id"},
          "email":    {"host", "port", "security", "mail_from", "mail_to", "smtp_user"?, "smtp_password"?},
+         "slack":    {"webhook_url"},
+         "pushover": {"user_key", "app_token"},
+         "gotify":   {"server", "token"},
          "webhook":  {"webhook_url"}}
     Anything unusable is dropped rather than raised, because this also reads
     config.json and uploaded files.
@@ -7323,6 +7434,17 @@ def normalize_notify(raw):
     mail = normalize_email(raw.get("email"))
     if mail:
         out["email"] = mail
+    slack = raw.get("slack")
+    if isinstance(slack, dict):
+        url = _clean_slack_url(slack.get("webhook_url"))
+        if url:
+            out["slack"] = {"webhook_url": url}
+    pushover = normalize_pushover(raw.get("pushover"))
+    if pushover:
+        out["pushover"] = pushover
+    gotify = normalize_gotify(raw.get("gotify"))
+    if gotify:
+        out["gotify"] = gotify
     webhook = raw.get("webhook")
     if isinstance(webhook, dict):
         url = _clean_url(webhook.get("webhook_url"))
@@ -7353,6 +7475,11 @@ def notify_view(notify) -> dict:
                 {"server": DEFAULT_NTFY_SERVER, "topic_set": False, "token_set": False},
         "discord": {"set": True, "host": urlsplit(discord["webhook_url"]).hostname or "discord.com"} if discord else
                    {"set": False, "host": ""},
+        "slack": {"set": bool(notify.get("slack"))},
+        "pushover": {"set": bool(notify.get("pushover"))},
+        # A Gotify server is the person's own address and is not a secret (the token is, and is not sent).
+        "gotify": {"set": True, "server": notify["gotify"]["server"]} if notify.get("gotify") else
+                  {"set": False, "server": ""},
         "webhook": {"set": True, "host": urlsplit(webhook["webhook_url"]).netloc.rsplit("@", 1)[-1]} if webhook else
                    {"set": False, "host": ""},
     }
@@ -7695,6 +7822,120 @@ def send_email(settings: dict, message: dict):
     return True, "sent"
 
 
+def _tail_line(message: dict, limit: int = 600) -> str:
+    """'Critical · Radarr, Sonarr' - the severity in words (never colour alone) and the services."""
+    tail = _severity_label(message)
+    if message.get("services"):
+        tail += " · " + ", ".join(message["services"])[:limit]
+    return tail
+
+
+def _slack_escape(text: str) -> str:
+    """Slack reads & < > as markup (<!channel> is how a message pings everyone), so they are
+    written as entities and a service named '@channel' or '<!here>' cannot ping anyone."""
+    return text.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
+
+
+def _slack_words(detail: str, reply) -> str:
+    """Slack answers an error with a short code as plain text. Only a code from a fixed
+    list is used (anything else in a reply is never shown or logged)."""
+    code = detail.split(" - ")[0]
+    body = (reply.text or "").strip()[:60] if reply is not None else ""
+    if body in ("channel_not_found", "channel_is_archived", "posting_to_general_channel_denied"):
+        return f"{code} - Slack says the channel is gone, archived or not allowed ({body})"
+    if body in ("no_service", "no_service_id", "no_team", "no_active_hooks", "team_disabled") or code == "HTTP 404":
+        return f"{code} - Slack says this webhook does not exist or is switched off (check the address)"
+    if body in ("invalid_payload", "no_text") or code == "HTTP 400":
+        return f"{code} - Slack did not accept the message"
+    if body in ("action_prohibited", "invalid_token") or code in ("HTTP 401", "HTTP 403"):
+        return f"{code} - Slack refused it (a workspace admin may have restricted this webhook)"
+    if code == "HTTP 429":
+        return "HTTP 429 - Slack is rate limiting this webhook"
+    return detail
+
+
+def send_slack(settings: dict, message: dict):
+    """A Slack incoming-webhook message: one `text` field in Slack's mrkdwn, the title in
+    bold, then the text, then the severity and services in italics. Everything is escaped
+    first. Slack answers 200 with the text `ok`."""
+    text = "\n".join([f"*{_slack_escape(message['title'][:300])}*", _slack_escape(message["message"][:2500]),
+                      f"_{_slack_escape(_tail_line(message))}_"])
+    ok, detail, reply = _post_json_reply(settings["webhook_url"], {"text": text})
+    return ok, (detail if ok else _slack_words(detail, reply))
+
+
+def _pushover_words(detail: str, reply) -> str:
+    """Pushover's 4xx answers carry an `errors` list; it is only read to tell the two
+    commonest mistakes apart, never shown."""
+    code = detail.split(" - ")[0]
+    errors = ""
+    if reply is not None:
+        try:
+            listed = reply.json().get("errors")
+            errors = " ".join(str(e) for e in listed).lower() if isinstance(listed, list) else ""
+        except (ValueError, AttributeError):
+            pass
+    if code == "HTTP 429":
+        return "HTTP 429 - this Pushover app has reached its monthly message limit"
+    if code.startswith("HTTP 4") and "token" in errors:
+        return f"{code} - Pushover says the application token is wrong"
+    if code.startswith("HTTP 4") and "user" in errors:
+        return f"{code} - Pushover says the user key is wrong, or that user has no active device"
+    if code.startswith("HTTP 4"):
+        return f"{code} - Pushover did not accept it (check the user key and application token)"
+    return detail
+
+
+def send_pushover(settings: dict, message: dict):
+    """A Pushover message: title, text (with the severity and services on the last line) and a
+    priority - Critical is high (1, which can get through quiet hours), a warning normal (0), a
+    recovery low (-1, no sound). Priority 2 is never used (it repeats until acknowledged and
+    needs more fields). The time shown is when the problem began (or ended)."""
+    event = message["event"]
+    priority = 0 if event == "test" else -1 if event == "cleared" else 1 if message["severity"] == "critical" else 0
+    tail = _tail_line(message, 300)
+    text = message["message"][: max(0, 1024 - len(tail) - 1)] + "\n" + tail
+    body = {"token": settings["app_token"], "user": settings["user_key"], "title": message["title"][:250],
+            "message": text[:1024], "priority": priority}
+    stamp = _parse_time(message["ended"] if event == "cleared" and message.get("ended") else message.get("since"))
+    if stamp:
+        body["timestamp"] = int(stamp.timestamp())
+    ok, detail, reply = _post_json_reply(PUSHOVER_API, body)
+    if ok:  # Pushover answers 200 with {"status": 1}; anything else is a failure
+        try:
+            ok = reply.json().get("status") == 1
+        except (ValueError, AttributeError):
+            ok = False
+        if not ok:
+            return False, "Pushover did not confirm the message"
+    return ok, (detail if ok else _pushover_words(detail, reply))
+
+
+def _gotify_words(detail: str) -> str:
+    code = detail.split(" - ")[0]
+    return {
+        "HTTP 400": "HTTP 400 - Gotify did not accept the message",
+        "HTTP 401": "HTTP 401 - Gotify says the application token is wrong",
+        "HTTP 403": "HTTP 403 - Gotify refused it (check the application token)",
+        "HTTP 404": "HTTP 404 - nothing answered at that address (check the server address, and any path it needs)",
+    }.get(code, detail)
+
+
+def send_gotify(settings: dict, message: dict):
+    """A Gotify push (POST <server>/message, JSON, the application token in X-Gotify-Key):
+    title, the text with the severity and services on a last line, a priority (Gotify's own
+    guide could not be read here; its examples use 2, 5 and 10 and a higher number is louder,
+    so Critical is 8, a warning or test 5, a recovery 3) and `text/plain` so a service name
+    is never read as markdown."""
+    event = message["event"]
+    priority = 5 if event == "test" else 3 if event == "cleared" else 8 if message["severity"] == "critical" else 5
+    text = message["message"][:2500] + "\n\n" + _tail_line(message)
+    body = {"title": message["title"][:200], "message": text, "priority": priority,
+            "extras": {"client::display": {"contentType": "text/plain"}}}
+    ok, detail = _post_json(f"{settings['server']}/message", body, {"X-Gotify-Key": settings["token"]})
+    return ok, (detail if ok else _gotify_words(detail))
+
+
 def send_webhook(settings: dict, message: dict):
     body = {
         "app": "arrVantage", "version": resolve_app_version(), "event": message["event"],
@@ -7709,7 +7950,7 @@ def send_message(notify: dict, message: dict) -> list:
     [(channel, ok, detail)]; a failure is logged once in a while, without the address."""
     results = []
     senders = {"ntfy": send_ntfy, "discord": send_discord, "telegram": send_telegram, "email": send_email,
-               "webhook": send_webhook}
+               "slack": send_slack, "pushover": send_pushover, "gotify": send_gotify, "webhook": send_webhook}
     for channel in NOTIFY_CHANNELS:
         sender = senders[channel]
         if notify.get(channel):
@@ -7812,6 +8053,8 @@ def api_notifications_save():
     {"level": ..., "ntfy": {"server", "topic", "token", "remove"}, "discord": {"webhook_url", "remove"},
      "telegram": {"bot_token", "chat_id", "remove"},
      "email": {"host", "port", "security", "smtp_user", "smtp_password", "clear_login", "mail_from", "mail_to", "remove"},
+     "slack": {"webhook_url", "remove"}, "pushover": {"user_key", "app_token", "remove"},
+     "gotify": {"server", "token", "remove"},
      "webhook": {"webhook_url", "remove"}}
     A secret left blank keeps what is saved (the browser is never sent them);
     "remove": true clears a destination.
@@ -7918,6 +8161,53 @@ def api_notifications_save():
                 candidate = {"host": host, "port": port_text or SMTP_SECURITY[security][1], "security": security,
                              "mail_from": sender, "mail_to": good, "smtp_user": login, "smtp_password": password}
                 new["email"] = normalize_email(candidate)
+
+    slack_in = payload.get("slack") if isinstance(payload.get("slack"), dict) else {}
+    if slack_in.get("remove") is not True:
+        url_in = slack_in.get("webhook_url").strip() if isinstance(slack_in.get("webhook_url"), str) else ""
+        if url_in and not _clean_slack_url(url_in):
+            errors.append("The Slack webhook address must look like https://hooks.slack.com/services/... "
+                          "(in Slack: create an app with Incoming Webhooks, add a webhook to a channel, copy its URL).")
+        elif url_in:
+            new["slack"] = {"webhook_url": _clean_slack_url(url_in)}
+        elif current.get("slack"):
+            new["slack"] = current["slack"]
+
+    pushover_in = payload.get("pushover") if isinstance(payload.get("pushover"), dict) else {}
+    if pushover_in.get("remove") is not True:
+        user_in = pushover_in.get("user_key").strip() if isinstance(pushover_in.get("user_key"), str) else ""
+        app_in = pushover_in.get("app_token").strip() if isinstance(pushover_in.get("app_token"), str) else ""
+        old_po = current.get("pushover") or {}
+        if user_in and not _clean_pushover_key(user_in):
+            errors.append("The Pushover user key is 30 letters and numbers (shown on the Pushover home page).")
+        if app_in and not _clean_pushover_key(app_in):
+            errors.append("The Pushover application token is 30 letters and numbers "
+                          "(create an application on pushover.net to get one).")
+        user_key, app_token = user_in or old_po.get("user_key", ""), app_in or old_po.get("app_token", "")
+        if (user_in or app_in) and not (user_key and app_token):
+            errors.append("Pushover needs both the user key and the application token.")
+        elif user_key and app_token and not errors:
+            new["pushover"] = {"user_key": user_key, "app_token": app_token}
+        elif old_po and not (user_in or app_in):
+            new["pushover"] = old_po
+
+    gotify_in = payload.get("gotify") if isinstance(payload.get("gotify"), dict) else {}
+    if gotify_in.get("remove") is not True:
+        server_in = gotify_in.get("server").strip() if isinstance(gotify_in.get("server"), str) else ""
+        token_in = gotify_in.get("token").strip() if isinstance(gotify_in.get("token"), str) else ""
+        old_go = current.get("gotify") or {}
+        if server_in and not _clean_gotify_server(server_in):
+            errors.append("The Gotify server address must start with http:// or https:// and have no login, "
+                          "? or # in it, for example https://gotify.example.com.")
+        if token_in and not _clean_gotify_token(token_in):
+            errors.append("That does not look like a Gotify application token (letters, numbers, - _ . ~).")
+        server, token = _clean_gotify_server(server_in) or old_go.get("server", ""), token_in or old_go.get("token", "")
+        if (server_in or token_in) and not (server and token):
+            errors.append("Gotify needs both the server address and an application token.")
+        elif server and token and not errors:
+            new["gotify"] = {"server": server, "token": token}
+        elif old_go and not (server_in or token_in):
+            new["gotify"] = old_go
 
     hook_in = payload.get("webhook") if isinstance(payload.get("webhook"), dict) else {}
     if hook_in.get("remove") is not True:

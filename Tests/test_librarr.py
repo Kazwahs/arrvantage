@@ -54,6 +54,28 @@ SEARCH = {
 }
 
 
+# What a real Librarr 1.5.0 answered for the audiobook search "project hail mary" (read through the
+# person's signed-in browser, 9 Nov 2026), trimmed. "?" is how it writes an unknown size.
+AUDIO_SEARCH = {
+    "results": [{"source": "audiobook", "title": "Project Hail Mary - Andy Weir", "size_human": "?", "indexer": "AudioBookBay",
+                 "in_library": False, "score": 55, "abb_url": "/abss/proaject-hail-mary-andy-weir/",
+                 "score_breakdown": {"title_match": 35, "author_match": 10, "format_score": 5, "seeder_score": 0,
+                                     "size_score": 5, "total": 55, "confidence": "medium"}}],
+    "sources": [{"name": "annas", "label": "Anna's Archive", "enabled": True,
+                 "health": {"circuit_open": True, "search_fail_streak": 3, "last_error": "HTTP 403 from annas-archive"}}],
+    "search_time_ms": 30000, "metadata": {"title": "Project Hail Mary", "author": "Andy Weir"},
+}
+# The ebook search on the same server: nothing found, one source failing (circuit open), one failing in a row.
+EMPTY_EBOOKS = {
+    "results": [],
+    "sources": [{"name": "annas", "label": "Anna's Archive", "enabled": True,
+                 "health": {"circuit_open": True, "search_fail_streak": 3, "last_error": "all variants failed: HTTP 403 from annas-archive"}},
+                {"name": "se", "label": "Standard Ebooks", "enabled": True, "health": {"circuit_open": False, "search_fail_streak": 4}},
+                {"name": "ok", "label": "Fine Source", "enabled": True, "health": {"circuit_open": False, "search_fail_streak": 0}}],
+    "search_time_ms": 30000, "metadata": {},
+}
+
+
 def add_librarr(app_module, name="Librarr", enabled=True):
     app_module.CONFIG.setdefault("instances", []).append(
         {"name": name, "kind": "librarr", "url": BASE, "api_key": "k", "color": "#a78bfa", "enabled": enabled})
@@ -315,6 +337,7 @@ class TestPanelsAndDetails:
         self._mock_all(requests_mock)
         html = client.get("/fragment/instance/Librarr").get_data(as_text=True)
         assert 'data-view="search"' in html and 'data-librarr-retry="fc92aacb"' in html and "data-librarr-refresh" in html
+        assert '<select name="kind"' in html and 'value="manga"' in html and 'value="ebook"' in html and 'value="audiobook"' in html
         assert "Claymore" in html and "3 files" in html and "Disk space" not in html
         assert 'id="genre-filter-Librarr"' not in html and "/manga/" not in html
         assert 'data-queue-count="1"' in html
@@ -457,6 +480,65 @@ class TestSearchAndGrab:
         assert [r["title"] for r in body["results"]] == ["Naruto v01-v72", "Naruto", "Boruto"]
         assert mock.last_request.qs["q"] == ["naruto"] and mock.last_request.headers["X-Api-Key"] == "k"
         assert "INDEXER-SECRET" not in str(body)
+
+    def test_ebooks_and_audiobooks_ask_librarrs_own_addresses(self, app_module, admin_session, requests_mock, monkeypatch):
+        client, csrf = admin_session
+        add_librarr(app_module)
+        monkeypatch.setattr(app_module.threading, "Thread", InlineThread)
+        manga = requests_mock.get(f"{BASE}/api/search/manga", json=SEARCH)
+        books = requests_mock.get(f"{BASE}/api/search", json=AUDIO_SEARCH)
+        audio = requests_mock.get(f"{BASE}/api/search/audiobooks", json=AUDIO_SEARCH)
+        for kind, mock in (("ebook", books), ("audiobook", audio), ("manga", manga)):
+            reply = client.post("/api/librarr/search/Librarr", json={"q": "Hail Mary", "kind": kind}, headers=HEADERS(csrf))
+            body = client.get(f"/api/librarr/search/Librarr/{reply.get_json()['id']}").get_json()
+            assert body["state"] == "done" and body["kind"] == kind
+            assert mock.call_count == 1 and mock.last_request.qs["q"] == ["hail mary"] and mock.last_request.headers["X-Api-Key"] == "k"
+        assert manga.call_count == 1 and books.call_count == 1 and audio.call_count == 1   # nothing went to the wrong address
+
+    def test_no_kind_means_manga_and_an_unknown_kind_is_refused(self, app_module, admin_session, requests_mock, monkeypatch):
+        client, csrf = admin_session
+        add_librarr(app_module)
+        monkeypatch.setattr(app_module.threading, "Thread", InlineThread)
+        manga = requests_mock.get(f"{BASE}/api/search/manga", json=SEARCH)
+        reply = client.post("/api/librarr/search/Librarr", json={"q": "Naruto"}, headers=HEADERS(csrf))
+        assert client.get(f"/api/librarr/search/Librarr/{reply.get_json()['id']}").get_json()["kind"] == "manga" and manga.call_count == 1
+        for bad in ("comic", "", None, 5, "/api/download", "../x"):
+            reply = client.post("/api/librarr/search/Librarr", json={"q": "Naruto", "kind": bad}, headers=HEADERS(csrf))
+            assert reply.status_code == 400 and "manga, ebooks or audiobooks" in reply.get_json()["error"], bad
+        assert manga.call_count == 1
+
+    def test_an_audiobook_result_is_listed_by_its_indexer_with_no_made_up_size(self, app_module):
+        rows, raw = app_module.librarr_search_results(AUDIO_SEARCH)
+        assert rows == [{"token": "0", "title": "Project Hail Mary - Andy Weir", "source": "AudioBookBay", "size": "",
+                         "seeders": None, "score": 55, "format": "", "in_library": False, "library_title": ""}]
+        assert app_module.librarr_grab_body(raw["0"], False)["abb_url"] == "/abss/proaject-hail-mary-andy-weir/"
+        assert app_module.librarr_grab_body(raw["0"], False)["source"] == "audiobook"
+
+    def test_the_same_words_in_another_kind_is_another_search(self, app_module, admin_session, monkeypatch):
+        client, csrf = admin_session
+        add_librarr(app_module)
+        monkeypatch.setattr(app_module.threading, "Thread", type("Idle", (), {"__init__": lambda self, **k: None, "start": lambda self: None}))
+        first = client.post("/api/librarr/search/Librarr", json={"q": "Dune", "kind": "ebook"}, headers=HEADERS(csrf)).get_json()["id"]
+        again = client.post("/api/librarr/search/Librarr", json={"q": "dune", "kind": "ebook"}, headers=HEADERS(csrf)).get_json()["id"]
+        other = client.post("/api/librarr/search/Librarr", json={"q": "Dune", "kind": "audiobook"}, headers=HEADERS(csrf)).get_json()["id"]
+        assert first == again and other != first
+
+    def test_an_empty_answer_names_the_failing_sources(self, app_module, admin_session, requests_mock, monkeypatch):
+        client, csrf = admin_session
+        add_librarr(app_module)
+        monkeypatch.setattr(app_module.threading, "Thread", InlineThread)
+        requests_mock.get(f"{BASE}/api/search", json=EMPTY_EBOOKS)
+        reply = client.post("/api/librarr/search/Librarr", json={"q": "dune", "kind": "ebook"}, headers=HEADERS(csrf))
+        body = client.get(f"/api/librarr/search/Librarr/{reply.get_json()['id']}").get_json()
+        assert body["results"] == [] and body["failing"] == ["Anna's Archive", "Standard Ebooks"]
+        assert "403" not in str(body) and "annas-archive" not in str(body)      # Librarr's own error text is never passed on
+
+    def test_failing_sources_are_read_defensively(self, app_module):
+        assert app_module.librarr_failing_sources(None) == [] and app_module.librarr_failing_sources({"sources": "x"}) == []
+        data = {"sources": [None, 5, {"label": "A", "health": "bad"}, {"label": "B", "enabled": False, "health": {"circuit_open": True}},
+                            {"name": "c", "health": {"circuit_open": True}}, {"label": "D", "health": {"search_fail_streak": 2}},
+                            {"label": "E", "health": {"search_fail_streak": True}}, {"label": "c-again", "name": "c", "health": {"search_fail_streak": 9}}]}
+        assert app_module.librarr_failing_sources(data) == ["c", "c-again"]
 
     def test_a_failing_search_is_a_few_words(self, app_module, admin_session, requests_mock, monkeypatch):
         client, csrf = admin_session

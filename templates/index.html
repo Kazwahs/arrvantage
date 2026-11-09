@@ -2854,6 +2854,7 @@
         // per instance and is not part of those panels, so reloading the queue
         // never wipes what was typed or found.
         const librarrRuns = {};
+        const LIBRARR_PLACEHOLDERS = { manga: 'Search manga to download', ebook: 'Search ebooks to download', audiobook: 'Search audiobooks to download' };
 
         function librarrPanel(name) {
             return document.querySelector(`.panel[data-instance="${CSS.escape(name)}"][data-view="search"]`);
@@ -2915,7 +2916,7 @@
             out.innerHTML = '<div class="empty">Searching every source. This can take up to a minute.</div>';
             const base = `/api/librarr/search/${encodeURIComponent(name)}`;
             try {
-                const start = await fetch(base, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ q: query }) });
+                const start = await fetch(base, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ q: query, kind: form.kind.value }) });
                 const started = await start.json();
                 if (!start.ok) throw new Error(started.error || `HTTP ${start.status}`);
                 const deadline = Date.now() + 120000;
@@ -2942,7 +2943,9 @@
 
         function renderLibrarrResults(sid, out, data) {
             if (!data.results.length) {
-                out.innerHTML = `<div class="empty">No results for “${escapeHtml(data.query)}”.</div>`;
+                const failing = (data.failing || []).length
+                    ? ` Sources Librarr says are failing right now: ${data.failing.join(', ')}.` : '';
+                out.innerHTML = `<div class="empty">No results for “${escapeHtml(data.query)}”.${escapeHtml(failing)}</div>`;
                 return;
             }
             const took = data.took_ms ? ` in ${Math.max(1, Math.round(data.took_ms / 1000))} s` : '';
@@ -2997,6 +3000,10 @@
 
         // One set of listeners for every Librarr instance: the instance name
         // rides on the element, so panels loaded later need no wiring.
+        document.addEventListener('change', event => {
+            const form = event.target.closest('.librarr-form');
+            if (form && event.target.name === 'kind') form.q.placeholder = LIBRARR_PLACEHOLDERS[event.target.value] || LIBRARR_PLACEHOLDERS.manga;
+        });
         document.addEventListener('submit', event => {
             const form = event.target.closest('.librarr-form');
             if (!form) return;
