@@ -3156,8 +3156,9 @@ def api_downloads():
 # - GET /api/activity -> {"events": [{id, event_type, title, detail, job_id,
 #   timestamp}], total}; event_type includes download_start, torrent_import
 #   and nzb_import, and also sign-in and settings events that are left out.
-# - GET /api/library/manga?page=N -> {"items": [...], "page", "pages",
-#   "total"}, 100 per page. One item is one FILE (a series with ten volumes is
+# - GET /api/library/manga?page=N (also /api/library for ebooks, 50 a page, and
+#   /api/library/audiobooks - see LIBRARR_LIBRARY_KINDS) -> {"items": [...], "page", "pages",
+#   "total"}, 100 per page for manga. One item is one FILE (a series with ten volumes is
 #   ten items sharing a title): {id, title, author, file_format, file_path,
 #   file_size, added_at, source, media_type}. The cards group files by title.
 # - GET /api/search/manga?q= -> {"results": [...], "sources": [...],
@@ -3194,8 +3195,17 @@ LIBRARR_RESULT_LIMIT = 40
 # default; the answers all share one shape, and every kind is sent with the same POST /api/download.
 LIBRARR_SEARCH_KINDS = {"manga": "/api/search/manga", "ebook": "/api/search", "audiobook": "/api/search/audiobooks"}
 LIBRARR_HISTORY_LIMIT = 25
-LIBRARR_LIBRARY_MAX_PAGES = 30       # 100 files a page: lists up to 3,000 files
-LIBRARR_LIBRARY_BUDGET_SECONDS = 20  # stop asking for pages after this long
+# What Librarr's own page lists (read from its JS and the real server, 10 Nov 2026): three lists, one
+# address each, all answering {"items", "page", "pages", "total", ...} with the same file record.
+# The file ids come from one table (an ebook was 310, an audiobook 309, a manga 278), so a card's
+# item_id is unique across kinds. The page sizes differ (manga and audiobooks 100, ebooks 50).
+LIBRARR_LIBRARY_KINDS = {
+    "manga": {"path": "/api/library/manga", "label": "Manga", "one": "Manga"},
+    "ebook": {"path": "/api/library", "label": "Ebooks", "one": "Ebook"},
+    "audiobook": {"path": "/api/library/audiobooks", "label": "Audiobooks", "one": "Audiobook"},
+}
+LIBRARR_LIBRARY_MAX_PAGES = 30       # pages per list (100 files a page for manga: up to 3,000 files)
+LIBRARR_LIBRARY_BUDGET_SECONDS = 20  # stop asking for pages after this long, all lists together
 LIBRARR_HISTORY_HIDDEN = {"login", "logout", "settings_changed"}
 LIBRARR_HISTORY_LABELS = {"download_start": "Started", "torrent_import": "Imported", "nzb_import": "Imported"}
 LIBRARR_JOB_ID = re.compile(r"^[A-Za-z0-9_-]{1,80}$")
@@ -3392,10 +3402,14 @@ def _librarr_file_name(path) -> str:
     return re.split(r"[\\/]", str(path or ""))[-1][:200]
 
 
-def librarr_group_files(files: list) -> list:
+def librarr_group_files(files: list, kind: str = "manga") -> list:
     """Librarr's one-item-per-file library -> one card per title. Pure. A card
     keeps the file names (never full paths) for the details window, and its
-    item_id is its lowest file id, which stays put while the title is there."""
+    item_id is its lowest file id, which stays put while the title is there.
+    `kind` is the list the files came from (manga, ebook or audiobook): it
+    becomes the card's type, and the same title in two kinds is two cards."""
+    meta = LIBRARR_LIBRARY_KINDS.get(kind, LIBRARR_LIBRARY_KINDS["manga"])
+    label, one = meta["label"], meta["one"]
     groups = {}
     for record in files:
         if not isinstance(record, dict) or not isinstance(record.get("id"), int) or isinstance(record.get("id"), bool):
@@ -3410,8 +3424,9 @@ def librarr_group_files(files: list) -> list:
         formats = sorted({str(r.get("file_format") or "").lower() for _, r in rows if r.get("file_format")})
         count = len(rows)
         cards.append({
-            "title": rows[0][0], "detail": f"{count} file{'' if count == 1 else 's'}" + (f" · {', '.join(formats)}" if formats else ""),
-            "status": "Downloaded", "genre": "Unknown", "cover_url": "", "item_id": min(r["id"] for _, r in rows),
+            "title": rows[0][0], "kind": kind, "kind_label": label,
+            "detail": f"{one} · {count} file{'' if count == 1 else 's'}" + (f" · {', '.join(formats)}" if formats else ""),
+            "status": "Downloaded", "genre": label, "cover_url": "", "item_id": min(r["id"] for _, r in rows),
             "tmdb_id": None, "tvdb_id": None, "foreign_artist_id": None, "release_date": "", "date_added": added,
             "episode_have": None, "episode_total": None, "size_bytes": size, "file_count": count,
             "librarr_files": [{
@@ -3426,25 +3441,50 @@ def librarr_group_files(files: list) -> list:
 
 
 def fetch_librarr_library(name: str, config: dict) -> dict:
+    """All three of Librarr's lists (manga, ebooks, audiobooks), one after another (this already
+    runs on the shared pool, and a pool task waiting on its own pool can deadlock). A list that
+    cannot be read is named in `unavailable` and the others still show; only when none can be
+    read is it an error."""
     empty = {"library_items": [], "status_options": [], "genre_options": []}
-    files, complete, started = [], False, time.monotonic()
-    for page in range(1, LIBRARR_LIBRARY_MAX_PAGES + 1):
-        data, error = librarr_call(config, "/api/library/manga", {"page": page}, timeout=15)
-        rows = data.get("items") if isinstance(data, dict) else None
-        if error or not isinstance(rows, list):
-            if page == 1:
-                return {"error": error or "unexpected answer - is this the right address?", **empty}
-            break  # a later page failed: show what came back, marked as not complete
-        files.extend(r for r in rows if isinstance(r, dict))
-        pages = data.get("pages")
-        if not rows or (isinstance(pages, int) and page >= pages):
-            complete = True
-            break
+    cards, file_count, complete, started = [], 0, True, time.monotonic()
+    unavailable, first_error, any_read = [], None, False
+    for kind, meta in LIBRARR_LIBRARY_KINDS.items():
         if time.monotonic() - started > LIBRARR_LIBRARY_BUDGET_SECONDS:
-            break
-    cards = librarr_group_files(files)
-    return {"error": None, "library_items": cards, "status_options": ["Downloaded"] if cards else [], "genre_options": [],
-            "file_count": len(files), "complete": complete}
+            unavailable.append(meta["label"])  # out of time: not asked at all
+            complete = False
+            continue
+        files, kind_complete, read_first = [], False, False
+        for page in range(1, LIBRARR_LIBRARY_MAX_PAGES + 1):
+            data, error = librarr_call(config, meta["path"], {"page": page}, timeout=15)
+            rows = data.get("items") if isinstance(data, dict) else None
+            if error or not isinstance(rows, list):
+                if page == 1:
+                    first_error = first_error or error or "unexpected answer - is this the right address?"
+                break  # a later page failed: show what came back, marked as not complete
+            read_first = True
+            files.extend(r for r in rows if isinstance(r, dict))
+            pages = data.get("pages")
+            if not rows or (isinstance(pages, int) and page >= pages):
+                kind_complete = True
+                break
+            if time.monotonic() - started > LIBRARR_LIBRARY_BUDGET_SECONDS:
+                break
+        if not read_first:
+            unavailable.append(meta["label"])
+            complete = False
+            continue
+        any_read = True
+        complete = complete and kind_complete
+        file_count += len(files)
+        cards.extend(librarr_group_files(files, kind))
+    if not any_read:
+        return {"error": first_error or "unexpected answer - is this the right address?", **empty}
+    order = list(LIBRARR_LIBRARY_KINDS)
+    cards.sort(key=lambda c: (c["title"].lower(), order.index(c["kind"])))
+    present = {c["kind"] for c in cards}
+    return {"error": None, "library_items": cards, "status_options": ["Downloaded"] if cards else [],
+            "genre_options": [m["label"] for k, m in LIBRARR_LIBRARY_KINDS.items() if k in present],
+            "file_count": file_count, "complete": complete, "unavailable": unavailable}
 
 
 def librarr_item_details(name: str, config: dict, item_id: int):
@@ -3455,8 +3495,8 @@ def librarr_item_details(name: str, config: dict, item_id: int):
     card = next((c for c in library["library_items"] if c.get("item_id") == item_id), None)
     if card is None:
         return None
-    return {"title": card["title"], "files": card["librarr_files"], "file_count": card["file_count"],
-            "total_size": _librarr_size(card["size_bytes"])}
+    return {"title": card["title"], "kind": LIBRARR_LIBRARY_KINDS[card["kind"]]["one"], "files": card["librarr_files"],
+            "file_count": card["file_count"], "total_size": _librarr_size(card["size_bytes"])}
 
 
 def librarr_retry(config: dict, job_id: str) -> None:
@@ -5085,7 +5125,8 @@ def fetch_home_stats() -> dict:
                 "downloaded": len(items),
                 "missing": 0,
                 "unit": "titles",
-                "detail_text": f"{files:,} file{'' if files == 1 else 's'}" + ("" if complete else " (list cut short)"),
+                "detail_text": f"{files:,} file{'' if files == 1 else 's'}" + (
+                    "" if complete else f" ({', '.join(library['unavailable']).lower()} not read)" if library.get("unavailable") else " (list cut short)"),
                 "size_display": format_size_gb(size_bytes) if complete else "",
                 "error": None,
             })
@@ -5312,6 +5353,7 @@ def build_instance_view(name: str, config: dict, perms: dict) -> dict:
         "library_error": library["error"],
         "library_file_count": library.get("file_count"),
         "library_complete": library.get("complete", True),
+        "library_unavailable": library.get("unavailable") or [],
         "status_options": library["status_options"],
         "genre_options": library["genre_options"],
         "request_items": seerr["request_items"],

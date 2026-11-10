@@ -162,7 +162,7 @@ What exists today, and what is on the list. The unchecked items are ideas, not p
 - [x] A Downloads panel on Home: qBittorrent and SABnzbd speeds and active queue in one place
 - [x] Book releases in Coming Up (Readarr / Chaptarr). Built from Readarr's published API; please report it if Chaptarr answers differently
 - [x] BookOrbit: uptime check, alerts and a link (its library is not browsable here until BookOrbit documents an API for it)
-- [x] Librarr as an instance: Library (what it has imported, grouped by title), Queue with Retry, History, System, a Search tab with a Manga / Ebooks / Audiobooks choice that sends the result you pick, and a card in Home's libraries panel (built from its README and a real 1.5.0 server; only the failed-job shape was seen live, so please report anything it shows wrongly)
+- [x] Librarr as an instance: Library (the manga, ebooks and audiobooks it has imported, grouped by title, with a Type filter), Queue with Retry, History, System, a Search tab with a Manga / Ebooks / Audiobooks choice that sends the result you pick, and a card in Home's libraries panel (built from its README and a real 1.5.0 server; only the failed-job shape was seen live, so please report anything it shows wrongly)
 - [x] Book and comic apps: Readarr, Chaptarr, Librarr, Komga, Kapowarr and BookOrbit (uptime only) are covered
 
 ## Contributing / Feedback

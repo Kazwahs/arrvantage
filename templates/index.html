@@ -3145,9 +3145,10 @@
         function filterLibrary(instance) {
             const statusEl = document.getElementById(`status-filter-${instance}`);
             const genreEl = document.getElementById(`genre-filter-${instance}`);
-            if (!statusEl || !genreEl) return;  // empty or failed library: no filter row rendered
-            const status = statusEl.value;
-            const genre = genreEl.value;
+            // An empty or failed library has no filter row, and a Librarr library has only a type
+            // filter (and none at all with a single type): the title search still applies.
+            const status = statusEl ? statusEl.value : 'all';
+            const genre = genreEl ? genreEl.value : 'all';
             const query = document.getElementById('global-search').value.trim().toLowerCase();
             const cards = document.querySelectorAll(`#library-rows-${instance} .library-card`);
 
@@ -3963,7 +3964,7 @@
                     <span class="col-muted">${escapeHtml([f.format.toUpperCase(), f.size_human, f.added].filter(Boolean).join(' · '))}</span>
                 </div>
             `).join('');
-            const summary = `${data.file_count} file${data.file_count === 1 ? '' : 's'}${data.total_size ? ' · ' + data.total_size : ''}`;
+            const summary = `${data.kind ? data.kind + ' · ' : ''}${data.file_count} file${data.file_count === 1 ? '' : 's'}${data.total_size ? ' · ' + data.total_size : ''}`;
             content.innerHTML = `
                 <div class="modal-overview">${escapeHtml(summary)}</div>
                 <div class="modal-section-title">Files</div>

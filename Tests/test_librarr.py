@@ -83,8 +83,24 @@ def add_librarr(app_module, name="Librarr", enabled=True):
     return app_module.APPS[name]
 
 
-def mock_library(requests_mock, *pages):
-    requests_mock.get(f"{BASE}/api/library/manga", [{"json": body} for body in pages])
+# What a real Librarr 1.5.0 answered for its ebook and audiobook lists (10 Nov 2026), trimmed: the same
+# file record as manga, with an empty file_format for a folder Librarr found by scanning.
+EBOOK_LIBRARY = {"items": [{"id": 310, "title": "The Chronicles of Amber", "author": "Roger Zelazny", "file_format": "epub",
+                            "file_path": "/ebook/Roger Zelazny/The Chronicles of Amber/Amber.epub", "file_size": 1546096,
+                            "added_at": "2026-11-09T17:55:01-08:00", "source": "nzb", "media_type": "ebook"}],
+                 "limit": 50, "offset": 0, "page": 1, "pages": 1, "total": 1}
+AUDIOBOOK_LIBRARY = {"items": [{"id": 309, "title": "Unmasking Autism", "author": "", "file_format": "",
+                                "file_path": "/audiobook/Unmasking Autism", "file_size": 563101745,
+                                "added_at": "2026-11-07T15:59:01-08:00", "source": "scan", "media_type": "audiobook"}],
+                     "limit": 100, "offset": 0, "page": 1, "pages": 1, "total": 1}
+EMPTY_LIBRARY = {"items": [], "page": 1, "pages": 1, "total": 0}
+
+
+def mock_library(requests_mock, *pages, ebooks=EMPTY_LIBRARY, audiobooks=EMPTY_LIBRARY):
+    if pages:
+        requests_mock.get(f"{BASE}/api/library/manga", [{"json": body} for body in pages])
+    requests_mock.get(f"{BASE}/api/library", json=ebooks)
+    requests_mock.get(f"{BASE}/api/library/audiobooks", json=audiobooks)
 
 
 class InlineThread:
@@ -251,7 +267,7 @@ class TestLibrary:
         cards = app_module.librarr_group_files(LIBRARY_PAGE_1["items"] + LIBRARY_PAGE_2["items"])
         assert [c["title"] for c in cards] == ["Akira", "Claymore"]
         akira, claymore = cards
-        assert claymore["file_count"] == 3 and claymore["item_id"] == 161 and claymore["detail"] == "3 files · cbz"
+        assert claymore["file_count"] == 3 and claymore["item_id"] == 161 and claymore["detail"] == "Manga · 3 files · cbz" and claymore["genre"] == "Manga" and claymore["kind"] == "manga"
         assert claymore["size_bytes"] == 234935119 + 1500 + 10 and claymore["date_added"] == "2026-11-07T12:36:29-08:00"
         assert claymore["status"] == "Downloaded" and claymore["cover_url"] == ""
         assert [f["name"] for f in claymore["librarr_files"]] == ["Claymore v01.cbz", "Claymore v02.cbz", "Claymore v03.cbz"]
@@ -268,12 +284,13 @@ class TestLibrary:
         library = app_module.fetch_library("Librarr", config)
         assert library["error"] is None and library["complete"] is True and library["file_count"] == 4
         assert [c["title"] for c in library["library_items"]] == ["Akira", "Claymore"]
-        assert library["status_options"] == ["Downloaded"] and library["genre_options"] == []
-        assert [r.qs["page"] for r in requests_mock.request_history] == [["1"], ["2"]]
+        assert library["status_options"] == ["Downloaded"] and library["genre_options"] == ["Manga"]
+        assert [r.qs["page"] for r in requests_mock.request_history if r.path == "/api/library/manga"] == [["1"], ["2"]]
         assert requests_mock.request_history[0].headers["X-Api-Key"] == "k"
 
     def test_a_later_page_failing_shows_what_arrived_and_says_it_is_not_complete(self, app_module, requests_mock):
         config = add_librarr(app_module)
+        mock_library(requests_mock, LIBRARY_PAGE_1)
         requests_mock.get(f"{BASE}/api/library/manga", [{"json": LIBRARY_PAGE_1}, {"status_code": 500}])
         library = app_module.fetch_library("Librarr", config)
         assert library["error"] is None and library["complete"] is False and library["file_count"] == 3
@@ -282,23 +299,131 @@ class TestLibrary:
         config = add_librarr(app_module)
         monkeypatch.setattr(app_module, "LIBRARR_LIBRARY_MAX_PAGES", 2)
         endless = {"items": [{"id": 1, "title": "x"}], "page": 1, "pages": 99, "total": 99}
+        mock_library(requests_mock)
         mock = requests_mock.get(f"{BASE}/api/library/manga", json=endless)
         library = app_module.fetch_library("Librarr", config)
         assert mock.call_count == 2 and library["complete"] is False
 
     def test_the_first_page_failing_is_an_error(self, app_module, requests_mock):
         config = add_librarr(app_module)
-        requests_mock.get(f"{BASE}/api/library/manga", status_code=401)
+        paths = ("/api/library/manga", "/api/library", "/api/library/audiobooks")
+        for path in paths:
+            requests_mock.get(f"{BASE}{path}", status_code=401)
         library = app_module.fetch_library("Librarr", config)
         assert "check the API key" in library["error"] and library["library_items"] == []
-        requests_mock.get(f"{BASE}/api/library/manga", text="<html>login</html>")
+        for path in paths:
+            requests_mock.get(f"{BASE}{path}", text="<html>login</html>")
         assert "unexpected answer" in app_module.fetch_library("Librarr", config)["error"]
 
     def test_an_empty_library(self, app_module, requests_mock):
         config = add_librarr(app_module)
-        requests_mock.get(f"{BASE}/api/library/manga", json={"items": [], "page": 1, "pages": 1, "total": 0})
+        mock_library(requests_mock, EMPTY_LIBRARY)
         library = app_module.fetch_library("Librarr", config)
         assert library["library_items"] == [] and library["status_options"] == [] and library["complete"] is True
+
+
+class TestAllThreeLists:
+    """The Library tab used to read only /api/library/manga; Librarr also keeps ebooks (/api/library)
+    and audiobooks (/api/library/audiobooks), which its own page lists."""
+
+    def test_all_three_lists_become_cards_with_their_type(self, app_module, requests_mock):
+        config = add_librarr(app_module)
+        mock_library(requests_mock, LIBRARY_PAGE_1, LIBRARY_PAGE_2, ebooks=EBOOK_LIBRARY, audiobooks=AUDIOBOOK_LIBRARY)
+        library = app_module.fetch_library("Librarr", config)
+        assert library["error"] is None and library["complete"] is True and library["unavailable"] == []
+        assert library["file_count"] == 6
+        assert [(c["title"], c["kind"]) for c in library["library_items"]] == [
+            ("Akira", "manga"), ("Claymore", "manga"), ("The Chronicles of Amber", "ebook"), ("Unmasking Autism", "audiobook")]
+        assert library["genre_options"] == ["Manga", "Ebooks", "Audiobooks"]
+        amber = library["library_items"][2]
+        assert amber["detail"] == "Ebook · 1 file · epub" and amber["genre"] == "Ebooks" and amber["item_id"] == 310
+        audio = library["library_items"][3]
+        assert audio["detail"] == "Audiobook · 1 file" and audio["librarr_files"][0]["name"] == "Unmasking Autism"
+        assert audio["librarr_files"][0]["format"] == "" and audio["librarr_files"][0]["size_human"] == "537 MB"
+        assert "/ebook/" not in str(library) and "/audiobook/" not in str(library)
+
+    def test_the_same_title_in_two_kinds_is_two_cards(self, app_module):
+        record = {"id": 1, "title": "Dune", "file_format": "epub", "file_size": 10}
+        other = dict(record, id=2, file_format="")
+        cards = app_module.librarr_group_files([record], "ebook") + app_module.librarr_group_files([other], "audiobook")
+        assert [c["kind"] for c in cards] == ["ebook", "audiobook"] and [c["item_id"] for c in cards] == [1, 2]
+
+    def test_each_list_is_asked_for_its_own_pages_with_the_key(self, app_module, requests_mock):
+        config = add_librarr(app_module)
+        mock_library(requests_mock, LIBRARY_PAGE_1, LIBRARY_PAGE_2, ebooks=EBOOK_LIBRARY, audiobooks=AUDIOBOOK_LIBRARY)
+        app_module.fetch_library("Librarr", config)
+        asked = [(r.path, r.qs["page"]) for r in requests_mock.request_history]
+        assert asked == [("/api/library/manga", ["1"]), ("/api/library/manga", ["2"]),
+                         ("/api/library", ["1"]), ("/api/library/audiobooks", ["1"])]
+        assert all(r.headers["X-Api-Key"] == "k" for r in requests_mock.request_history)
+
+    def test_a_list_that_cannot_be_read_is_named_and_the_others_still_show(self, app_module, requests_mock):
+        config = add_librarr(app_module)
+        mock_library(requests_mock, LIBRARY_PAGE_1, LIBRARY_PAGE_2, audiobooks=AUDIOBOOK_LIBRARY)
+        requests_mock.get(f"{BASE}/api/library", status_code=404)
+        library = app_module.fetch_library("Librarr", config)
+        assert library["error"] is None and library["complete"] is False and library["unavailable"] == ["Ebooks"]
+        assert {c["kind"] for c in library["library_items"]} == {"manga", "audiobook"}
+
+    def test_when_no_list_can_be_read_it_is_an_error(self, app_module, requests_mock):
+        config = add_librarr(app_module)
+        for path in ("/api/library/manga", "/api/library", "/api/library/audiobooks"):
+            requests_mock.get(f"{BASE}{path}", status_code=401)
+        library = app_module.fetch_library("Librarr", config)
+        assert "check the API key" in library["error"] and library["library_items"] == []
+
+    def test_a_slow_list_stops_the_others_being_asked(self, app_module, requests_mock, monkeypatch):
+        config = add_librarr(app_module)
+        monkeypatch.setattr(app_module, "LIBRARR_LIBRARY_BUDGET_SECONDS", -1)
+        mock_library(requests_mock, LIBRARY_PAGE_1, ebooks=EBOOK_LIBRARY, audiobooks=AUDIOBOOK_LIBRARY)
+        library = app_module.fetch_library("Librarr", config)
+        assert library["error"] is not None  # out of time before the first list: nothing was read
+
+    def test_the_panel_has_a_type_filter_only_when_there_is_more_than_one_type(self, app_module, admin_session, requests_mock):
+        client, _ = admin_session
+        add_librarr(app_module)
+        requests_mock.get(f"{BASE}/api/downloads", json=DOWNLOADS)
+        requests_mock.get(f"{BASE}/api/activity", json=ACTIVITY)
+        requests_mock.get(f"{BASE}/health", json=HEALTH)
+        mock_library(requests_mock, LIBRARY_PAGE_1, LIBRARY_PAGE_2, ebooks=EBOOK_LIBRARY, audiobooks=AUDIOBOOK_LIBRARY)
+        html = client.get("/fragment/instance/Librarr").get_data(as_text=True)
+        assert 'id="genre-filter-Librarr"' in html and 'aria-label="Filter by type"' in html and 'value="Audiobooks"' in html
+        assert "Unmasking Autism" in html and "The Chronicles of Amber" in html and 'id="status-filter-Librarr"' not in html
+        assert "Could not read" not in html
+
+    def test_the_panel_names_a_list_it_could_not_read(self, app_module, admin_session, requests_mock):
+        client, _ = admin_session
+        add_librarr(app_module)
+        requests_mock.get(f"{BASE}/api/downloads", json=DOWNLOADS)
+        requests_mock.get(f"{BASE}/api/activity", json=ACTIVITY)
+        requests_mock.get(f"{BASE}/health", json=HEALTH)
+        mock_library(requests_mock, LIBRARY_PAGE_1, LIBRARY_PAGE_2, audiobooks=AUDIOBOOK_LIBRARY)
+        requests_mock.get(f"{BASE}/api/library", status_code=500)
+        html = client.get("/fragment/instance/Librarr").get_data(as_text=True)
+        assert "Could not read: ebooks." in html
+
+    def test_details_name_the_type_and_find_an_audiobook(self, app_module, admin_session, requests_mock):
+        client, _ = admin_session
+        add_librarr(app_module)
+        mock_library(requests_mock, LIBRARY_PAGE_1, LIBRARY_PAGE_2, ebooks=EBOOK_LIBRARY, audiobooks=AUDIOBOOK_LIBRARY)
+        body = client.get("/api/details/Librarr/309").get_json()
+        assert body["kind"] == "Audiobook" and body["title"] == "Unmasking Autism" and body["file_count"] == 1
+        assert client.get("/api/details/Librarr/161").get_json()["kind"] == "Manga"
+
+    def test_the_home_card_counts_every_kind(self, app_module, admin_session, requests_mock):
+        client, _ = admin_session
+        add_librarr(app_module)
+        mock_library(requests_mock, LIBRARY_PAGE_1, LIBRARY_PAGE_2, ebooks=EBOOK_LIBRARY, audiobooks=AUDIOBOOK_LIBRARY)
+        [card] = [i for i in client.get("/api/home/stats").get_json()["instances"] if i["name"] == "Librarr"]
+        assert card["total"] == 4 and card["detail_text"] == "6 files" and card["size_display"]
+
+    def test_the_home_card_names_a_list_it_could_not_read(self, app_module, admin_session, requests_mock):
+        client, _ = admin_session
+        add_librarr(app_module)
+        mock_library(requests_mock, LIBRARY_PAGE_1, LIBRARY_PAGE_2, ebooks=EBOOK_LIBRARY)
+        requests_mock.get(f"{BASE}/api/library/audiobooks", status_code=500)
+        [card] = [i for i in client.get("/api/home/stats").get_json()["instances"] if i["name"] == "Librarr"]
+        assert card["detail_text"] == "5 files (audiobooks not read)" and card["size_display"] == ""
 
 
 class TestHomeCard:
@@ -314,6 +439,7 @@ class TestHomeCard:
     def test_a_cut_short_list_has_no_size_and_says_so(self, app_module, admin_session, requests_mock):
         client, _ = admin_session
         add_librarr(app_module)
+        mock_library(requests_mock, LIBRARY_PAGE_1)
         requests_mock.get(f"{BASE}/api/library/manga", [{"json": LIBRARY_PAGE_1}, {"status_code": 500}])
         [card] = [i for i in client.get("/api/home/stats").get_json()["instances"] if i["name"] == "Librarr"]
         assert card["detail_text"] == "3 files (list cut short)" and card["size_display"] == ""
@@ -377,7 +503,10 @@ class TestPanelsAndDetails:
     def test_a_librarr_failure_in_details_is_an_error_message(self, app_module, admin_session, requests_mock):
         client, _ = admin_session
         add_librarr(app_module)
+        mock_library(requests_mock)
         requests_mock.get(f"{BASE}/api/library/manga", status_code=500)
+        requests_mock.get(f"{BASE}/api/library", status_code=500)
+        requests_mock.get(f"{BASE}/api/library/audiobooks", status_code=500)
         assert client.get("/api/details/Librarr/161").get_json()["error"] == "HTTP 500"
 
     def test_the_needs_attention_summary_flags_a_failed_job(self, app_module, admin_session, requests_mock):
