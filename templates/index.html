@@ -314,8 +314,11 @@
                     <button class="view-tab mediaserver-subtab komga-mstab" data-mstab="library" onclick="selectMediaServerTab('library')" style="display:none;">Library</button>
                     <button class="view-tab mediaserver-subtab komga-mstab" data-mstab="ondeck" onclick="selectMediaServerTab('ondeck')" style="display:none;">On Deck</button>
                     <button class="view-tab mediaserver-subtab komga-mstab" data-mstab="recent" onclick="selectMediaServerTab('recent')" style="display:none;">Recently Added</button>
-                    <!-- BookOrbit: a health check and an Open link, nothing else (see app.py). -->
+                    <!-- BookOrbit: a health check and an Open link; with an API key (BookOrbit 3.8+) also its
+                         libraries and what was added lately (see app.py). -->
                     <button class="view-tab mediaserver-subtab bookorbit-mstab" data-mstab="status" onclick="selectMediaServerTab('status')" style="display:none;">Status</button>
+                    <button class="view-tab mediaserver-subtab bookorbit-mstab" data-mstab="bo-libraries" onclick="selectMediaServerTab('bo-libraries')" style="display:none;">Libraries</button>
+                    <button class="view-tab mediaserver-subtab bookorbit-mstab" data-mstab="bo-recent" onclick="selectMediaServerTab('bo-recent')" style="display:none;">Recently Added</button>
                 </div>
                 <div class="topbar-right">
                     <button class="test-btn" onclick="refreshCurrentMediaServerTab()">Refresh</button>
@@ -345,6 +348,12 @@
                     {% elif ms.type == 'bookorbit' %}
                     <div class="mediaserver-subpanel" data-mstab="status" style="display:block;">
                         <div id="mediaserver-status-{{ ms.name }}" class="modal-loading">Loading...</div>
+                    </div>
+                    <div class="mediaserver-subpanel" data-mstab="bo-libraries" style="display:none;">
+                        <div id="mediaserver-bo-libraries-{{ ms.name }}" class="modal-loading">Loading...</div>
+                    </div>
+                    <div class="mediaserver-subpanel" data-mstab="bo-recent" style="display:none;">
+                        <div id="mediaserver-bo-recent-{{ ms.name }}" class="modal-loading">Loading...</div>
                     </div>
                     {% else %}
                     {% for tab in ["now-playing", "recently-added", "watch-history", "users"] %}
@@ -2194,6 +2203,7 @@
         const loadedMediaServerTabs = new Set(); // "serverName:tab" - avoid re-fetching on every sub-tab click
 
         const KOMGA_MS_TABS = ['library', 'ondeck', 'recent'];
+        const BOOKORBIT_MS_TABS = ['status', 'bo-libraries', 'bo-recent'];
 
         function selectMediaServer(name) {
             currentMediaServer = name;
@@ -2225,9 +2235,10 @@
             // to be one that exists for the type being shown ("now-playing"
             // means nothing for Komga, and neither of them for BookOrbit).
             const tabIsKomgaTab = KOMGA_MS_TABS.includes(currentMediaServerTab);
-            if (isBookOrbit) currentMediaServerTab = 'status';
+            const tabIsBookOrbitTab = BOOKORBIT_MS_TABS.includes(currentMediaServerTab);
+            if (isBookOrbit) { if (!tabIsBookOrbitTab) currentMediaServerTab = 'status'; }
             else if (isKomga && !tabIsKomgaTab) currentMediaServerTab = 'library';
-            else if (!isKomga && (tabIsKomgaTab || currentMediaServerTab === 'status')) currentMediaServerTab = 'now-playing';
+            else if (!isKomga && (tabIsKomgaTab || tabIsBookOrbitTab)) currentMediaServerTab = 'now-playing';
 
             selectMediaServerTab(currentMediaServerTab);
         }
@@ -2601,7 +2612,8 @@
             }
         }
 
-        // --- BookOrbit: whether it is answering, and a way into it ---
+        // --- BookOrbit: whether it is answering, and a way into it; with an API key
+        // (BookOrbit 3.8+) also its libraries and what was added lately ---
         async function loadBookOrbitStatus(name) {
             const el = document.getElementById(`mediaserver-status-${name}`);
             if (!el) return;
@@ -2614,11 +2626,65 @@
                 const state = data.error
                     ? `<p class="test-fail">Not answering: ${escapeHtml(data.error)}</p>`
                     : '<p class="test-ok">Answering normally</p>';
+                const keyNote = data.has_key
+                    ? 'The Libraries and Recently Added tabs use the API key saved in Settings.'
+                    : 'Create an API key in BookOrbit (3.8 or newer; Read access is enough) and add it under Settings > Media Servers to see your libraries and recently added books here.';
                 el.innerHTML = `<div class="spaced-block">${state}
-                    <p class="modal-empty">arrVantage checks that BookOrbit is up and warns you on Home when it is not. Your books are browsed in BookOrbit itself.</p>
+                    <p class="modal-empty">arrVantage checks that BookOrbit is up and warns you on Home when it is not. ${escapeHtml(keyNote)}</p>
                     ${open}</div>`;
             } catch (err) {
                 el.innerHTML = '<div class="modal-empty">Something went wrong checking BookOrbit.</div>';
+            }
+        }
+
+        const BOOKORBIT_NEEDS_KEY = '<div class="modal-empty">Add a BookOrbit API key under Settings > Media Servers to see this (BookOrbit 3.8 or newer; a key with Read access is enough).</div>';
+
+        async function loadBookOrbitLibraries(name) {
+            const el = document.getElementById(`mediaserver-bo-libraries-${name}`);
+            if (!el) return;
+            el.innerHTML = '<div class="modal-loading">Loading...</div>';
+            try {
+                const response = await fetch(`/api/bookorbit/libraries/${encodeURIComponent(name)}`);
+                const data = await response.json();
+                if (data.error) { el.innerHTML = `<div class="modal-empty">${escapeHtml(data.error)}</div>`; return; }
+                if (data.needs_key) { el.innerHTML = BOOKORBIT_NEEDS_KEY; return; }
+                if (!data.libraries.length) { el.innerHTML = '<div class="empty">No libraries yet</div>'; return; }
+                const plural = (n, word) => `${n.toLocaleString()} ${word}${n === 1 ? '' : 's'}`;
+                const total = `${plural(data.total_books, 'book')} in ${plural(data.libraries.length, 'library').replace('librarys', 'libraries')}${data.total_size_display ? ' · ' + data.total_size_display : ''}${data.cut_short ? ' (first libraries only)' : ''}`;
+                el.innerHTML = `<p class="muted-text--md spaced-block">${escapeHtml(total)}</p>
+                    <div class="bo-lib-grid">${data.libraries.map(lib => `
+                        <div class="stat-card">
+                            <div class="stat-card-head"><span class="stat-card-name">${escapeHtml(lib.name)}</span></div>
+                            <div class="bo-lib-count">${lib.books === null ? '?' : lib.books.toLocaleString()} <span class="muted-text--md">${lib.books === 1 ? 'book' : 'books'}${lib.size_display ? ' · ' + escapeHtml(lib.size_display) : ''}</span></div>
+                            <div class="bo-formats">${lib.formats.map(f => `<span class="bo-format">${escapeHtml(f.format)} ${f.count.toLocaleString()}</span>`).join('')}${lib.details ? '' : '<span class="muted-text--md">file details not available</span>'}</div>
+                        </div>`).join('')}</div>`;
+            } catch (err) {
+                el.innerHTML = '<div class="modal-empty">Something went wrong loading BookOrbit.</div>';
+            }
+        }
+
+        async function loadBookOrbitRecent(name) {
+            const el = document.getElementById(`mediaserver-bo-recent-${name}`);
+            if (!el) return;
+            el.innerHTML = '<div class="modal-loading">Loading...</div>';
+            try {
+                const response = await fetch(`/api/bookorbit/recent/${encodeURIComponent(name)}`);
+                const data = await response.json();
+                if (data.error) { el.innerHTML = `<div class="modal-empty">${escapeHtml(data.error)}</div>`; return; }
+                if (data.needs_key) { el.innerHTML = BOOKORBIT_NEEDS_KEY; return; }
+                if (!data.items.length) { el.innerHTML = '<div class="empty">Nothing added lately</div>'; return; }
+                el.innerHTML = `<div class="library-grid">${data.items.map(item => `
+                    <div class="library-card" data-title="${escapeAttr(item.title)}">
+                        <div class="cover-wrap">
+                            ${item.cover_url ? `<img src="${escapeAttr(item.cover_url)}" alt="${escapeAttr(item.title)}" loading="lazy" onerror="this.style.display='none'; this.nextElementSibling.style.display='flex';">` : ''}
+                            <div class="cover-fallback" ${item.cover_url ? 'style="display:none;"' : ''}>${escapeHtml(item.title)}</div>
+                        </div>
+                        <div class="card-title">${escapeHtml(item.title)}</div>
+                        <div class="card-genre">${escapeHtml(item.authors || item.series)}</div>
+                        <div class="card-genre">${escapeHtml([item.formats.join(', ').toUpperCase(), item.library, item.added].filter(Boolean).join(' · '))}</div>
+                    </div>`).join('')}</div>`;
+            } catch (err) {
+                el.innerHTML = '<div class="modal-empty">Something went wrong loading BookOrbit.</div>';
             }
         }
 
@@ -2628,6 +2694,8 @@
             }
 
             if (tab === 'status') return loadBookOrbitStatus(name);
+            if (tab === 'bo-libraries') return loadBookOrbitLibraries(name);
+            if (tab === 'bo-recent') return loadBookOrbitRecent(name);
 
             const key = `${name}:${tab}`;
             if (loadedMediaServerTabs.has(key) && !forceReload) return;

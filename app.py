@@ -3959,15 +3959,31 @@ def get_media_server(name: str):
 # BookOrbit - a self-hosted ebook / comic / audiobook library
 # (github.com/bookorbit/bookorbit). What is verified, and what is not:
 # - GET /api/v1/health answers {"status": "ok"} and needs no sign-in (from the
-#   project's own documentation). That is all arrVantage uses.
-# - Everything else needs a signed-in account (a JWT from POST /api/v1/auth/login,
-#   which BookOrbit can switch off) or an OPDS account (HTTP Basic, a separate
-#   username and password). There is no documented API key and no documented REST
-#   reference (Swagger is off unless the server sets SWAGGER_ENABLED=true), so
-#   library counts, recently added books and the like are deliberately NOT
-#   built: they would be guesses at endpoints. The integration is therefore a
-#   health check (feeds Needs attention and the History) plus an Open link, and
-#   needs no token.
+#   project's own documentation). The up/down check (Needs attention, History)
+#   uses only that, so a missing or wrong API key can never make a running
+#   BookOrbit look down.
+# - API keys arrived in BookOrbit 3.8.0 (docs/API_KEYS.md in its repository): a key
+#   starts with `bok_`, is 53 characters, is sent as `Authorization: Bearer <key>`
+#   or `X-Api-Key: <key>` on any /api/v1 request (never in the query string), acts as
+#   its owner narrowed (Read is the default; a Read key may use GET routes), and
+#   is refused with 403 on key management, passwords and sessions. 401 = a wrong,
+#   expired or revoked key; more than 30 wrong keys a minute from one address
+#   = 429. GET /api/v1/auth/me reports `authenticationMethod: "api_key"`.
+# - Read from the person's real BookOrbit (a signed-in browser session, read-only
+#   GETs, 12 Nov 2026) and from its type definitions:
+#   GET /api/v1/libraries -> a list of {id, name, bookCount, folders (server paths:
+#   never passed on), ...many settings};
+#   GET /api/v1/libraries/<id>/stats -> {totalBooks, totalSizeBytes,
+#   formatCounts: {"epub": 478, "m4b": 25, ...}};
+#   GET /api/v1/dashboard/scrollers/recently-added?limit=N -> {"books": [{id,
+#   libraryId, title, authors: [..], seriesName, seriesIndex, files: [{id, format,
+#   role, sizeBytes}], addedAt, ...}], "total"} (a GET, so a Read key may use it; the
+#   POST routes are mostly refused for a Read key); GET /api/v1/books/<id>/thumbnail
+#   is the cover and needs the key, so arrVantage proxies it.
+#   Not verified: that those GETs accept a *key* (they were read with a login
+#   session; the Test button is how that gets confirmed), the other scroller
+#   types, and any route to open one book in BookOrbit's own page (so there is
+#   no per-book link, only Open BookOrbit).
 # ---------------------------------------------------------------------------
 
 BOOKORBIT_HEALTH_PATH = "/api/v1/health"
@@ -4005,6 +4021,142 @@ def fetch_bookorbit_health(server: dict) -> dict:
         return {"error": f"BookOrbit reports a problem (status: {scrub_log_text(status or 'unknown', 40)})",
                 "status": status or None}
     return {"error": error, "status": None}
+
+
+BOOKORBIT_KEY_PREFIX = "bok_"
+BOOKORBIT_MAX_LIBRARIES = 30
+BOOKORBIT_RECENT_LIMIT = 24
+BOOKORBIT_MAX_FORMATS = 12
+BOOKORBIT_COVER_MAX_BYTES = 2 * 1024 * 1024
+
+
+def bookorbit_headers(server: dict) -> dict:
+    # The key goes in a header, never the address (BookOrbit ignores a key in the query string).
+    return {"X-Api-Key": server.get("credential", ""), "Accept": "application/json"}
+
+
+def _bookorbit_words(err) -> str:
+    """A failed call to BookOrbit in a few plain words: no address, no body."""
+    code = err.response.status_code if isinstance(err, requests.exceptions.HTTPError) and err.response is not None else None
+    if code == 401:
+        return "BookOrbit refused the API key - check it was copied whole and has not expired or been revoked"
+    if code == 403:
+        return "BookOrbit does not let this key read that - make the key with Read access"
+    if code == 404:
+        return "not found - check the address, and that BookOrbit is version 3.8 or newer"
+    if code == 429:
+        return "BookOrbit is rate limiting this address (too many wrong keys) - wait a minute"
+    return short_request_error(err)
+
+
+def bookorbit_call(server: dict, path: str, params=None, timeout: float = 10):
+    """GET <server>/api/v1/... with the key. Returns (data, None) or (None, "a few plain words")."""
+    try:
+        response = requests.get(f"{server['url'].rstrip('/')}{path}", headers=bookorbit_headers(server),
+                                params=params, timeout=timeout)
+        response.raise_for_status()
+        return response.json(), None
+    except requests.exceptions.JSONDecodeError:
+        return None, "answered, but not like BookOrbit - check the address"
+    except requests.exceptions.RequestException as err:
+        return None, _bookorbit_words(err)
+
+
+def _bookorbit_int(value):
+    return value if isinstance(value, int) and not isinstance(value, bool) and value >= 0 else None
+
+
+def bookorbit_libraries_view(libraries, stats_by_id: dict) -> list:
+    """BookOrbit's library list plus each library's stats -> one row per library. Pure.
+    Only name, counts, size and formats are kept: a library's `folders` are server paths."""
+    rows = []
+    for lib in libraries if isinstance(libraries, list) else []:
+        if not isinstance(lib, dict) or _bookorbit_int(lib.get("id")) is None:
+            continue
+        stats = stats_by_id.get(lib["id"])
+        stats = stats if isinstance(stats, dict) else {}
+        books = _bookorbit_int(stats.get("totalBooks"))
+        if books is None:
+            books = _bookorbit_int(lib.get("bookCount"))
+        size = _bookorbit_int(stats.get("totalSizeBytes"))
+        counts = stats.get("formatCounts") if isinstance(stats.get("formatCounts"), dict) else {}
+        formats = sorted(((scrub_log_text(str(k), 12).lower(), v) for k, v in counts.items()
+                          if _bookorbit_int(v) and str(k).strip()), key=lambda f: (-f[1], f[0]))
+        rows.append({
+            "id": lib["id"], "name": scrub_log_text(str(lib.get("name") or "(unnamed)"), 100),
+            "books": books, "size_bytes": size, "size_display": format_size_gb(size) if size is not None else "",
+            "formats": [{"format": f, "count": c} for f, c in formats[:BOOKORBIT_MAX_FORMATS]],
+            "details": bool(stats),
+        })
+    return rows
+
+
+def fetch_bookorbit_libraries(server: dict) -> dict:
+    if not server.get("credential"):
+        return {"error": None, "needs_key": True, "libraries": []}
+    data, error = bookorbit_call(server, "/api/v1/libraries")
+    if error:
+        return {"error": error, "libraries": []}
+    if not isinstance(data, list):
+        return {"error": "answered, but not like BookOrbit's library list - check the address", "libraries": []}
+    stats = {}
+    for lib in data[:BOOKORBIT_MAX_LIBRARIES]:
+        lib_id = lib.get("id") if isinstance(lib, dict) else None
+        if _bookorbit_int(lib_id) is None:
+            continue
+        found, err = bookorbit_call(server, f"/api/v1/libraries/{lib_id}/stats")
+        if not err and isinstance(found, dict):
+            stats[lib_id] = found
+    rows = bookorbit_libraries_view(data[:BOOKORBIT_MAX_LIBRARIES], stats)
+    sized = [r["size_bytes"] for r in rows if r["size_bytes"] is not None]
+    return {"error": None, "needs_key": False, "libraries": rows,
+            "total_books": sum(r["books"] or 0 for r in rows),
+            "total_size_display": format_size_gb(sum(sized)) if sized else "",
+            "cut_short": len(data) > BOOKORBIT_MAX_LIBRARIES}
+
+
+def bookorbit_recent_view(data, server_name: str, library_names: dict) -> list:
+    """The recently-added scroller's answer -> cards. Pure. No file path and no link: a cover is
+    arrVantage's own proxy address (the real one needs the key)."""
+    books = data.get("books") if isinstance(data, dict) else None
+    cards = []
+    for book in books if isinstance(books, list) else []:
+        if not isinstance(book, dict) or _bookorbit_int(book.get("id")) is None:
+            continue
+        authors = [scrub_log_text(str(a), 80) for a in book.get("authors") or [] if isinstance(a, str) and a.strip()]
+        series = scrub_log_text(str(book.get("seriesName") or ""), 100)
+        index = book.get("seriesIndex")
+        if series and isinstance(index, (int, float)) and not isinstance(index, bool):
+            series += f" #{int(index) if float(index).is_integer() else index}"
+        formats = []
+        for f in book.get("files") or []:
+            fmt = scrub_log_text(str(f.get("format") or ""), 12).lower() if isinstance(f, dict) else ""
+            if fmt and fmt not in formats:
+                formats.append(fmt)
+        cards.append({
+            "id": book["id"], "title": scrub_log_text(str(book.get("title") or "(untitled)"), 200),
+            "authors": ", ".join(authors[:3]), "series": series, "formats": formats[:4],
+            "library": library_names.get(book.get("libraryId"), ""),
+            "added": str(book.get("addedAt") or "")[:10],
+            "cover_url": f"/api/bookorbit/cover/{server_name}/{book['id']}" if book.get("hasCover", True) else "",
+        })
+    return cards
+
+
+def fetch_bookorbit_recent(server: dict, server_name: str) -> dict:
+    if not server.get("credential"):
+        return {"error": None, "needs_key": True, "items": []}
+    data, error = bookorbit_call(server, "/api/v1/dashboard/scrollers/recently-added", {"limit": BOOKORBIT_RECENT_LIMIT})
+    if error:
+        return {"error": error, "items": []}
+    if not isinstance(data, dict) or not isinstance(data.get("books"), list):
+        return {"error": "answered, but not like BookOrbit's recently added list - check the address", "items": []}
+    names = {}
+    libs, _ = bookorbit_call(server, "/api/v1/libraries")  # only for the names; a failure just leaves them out
+    for lib in libs if isinstance(libs, list) else []:
+        if isinstance(lib, dict) and _bookorbit_int(lib.get("id")) is not None:
+            names[lib["id"]] = scrub_log_text(str(lib.get("name") or ""), 100)
+    return {"error": None, "needs_key": False, "items": bookorbit_recent_view(data, server_name, names)}
 
 
 # ---------------------------------------------------------------------------
@@ -4842,7 +4994,51 @@ def api_bookorbit_health(name):
     server = get_media_server(name)
     if not server or server["type"] != "bookorbit":
         return jsonify({"error": "unknown BookOrbit server"}), 404
-    return jsonify({**fetch_bookorbit_health(server), "open_url": get_media_server_open_url(server)})
+    return jsonify({**fetch_bookorbit_health(server), "open_url": get_media_server_open_url(server),
+                    "has_key": bool(server.get("credential"))})
+
+
+def _bookorbit_server(name: str):
+    server = get_media_server(name)
+    return server if server and server["type"] == "bookorbit" else None
+
+
+@app.route("/api/bookorbit/libraries/<name>")
+@login_required
+def api_bookorbit_libraries(name):
+    server = _bookorbit_server(name)
+    if not server:
+        return jsonify({"error": "unknown BookOrbit server"}), 404
+    return jsonify(fetch_bookorbit_libraries(server))
+
+
+@app.route("/api/bookorbit/recent/<name>")
+@login_required
+def api_bookorbit_recent(name):
+    server = _bookorbit_server(name)
+    if not server:
+        return jsonify({"error": "unknown BookOrbit server"}), 404
+    return jsonify(fetch_bookorbit_recent(server, name))
+
+
+@app.route("/api/bookorbit/cover/<name>/<int:book_id>")
+@login_required
+def api_bookorbit_cover(name, book_id):
+    server = _bookorbit_server(name)
+    if not server or not server.get("credential"):
+        return "", 404
+    try:
+        response = requests.get(f"{server['url'].rstrip('/')}/api/v1/books/{book_id}/thumbnail",
+                                headers=bookorbit_headers(server), timeout=10)
+        response.raise_for_status()
+    except requests.exceptions.RequestException:
+        return "", 502
+    kind = response.headers.get("Content-Type", "").split(";")[0].strip().lower()
+    if not kind.startswith("image/") or kind == "image/svg+xml" or len(response.content) > BOOKORBIT_COVER_MAX_BYTES:
+        return "", 502
+    reply = Response(response.content, mimetype=kind)
+    reply.headers["Cache-Control"] = "private, max-age=3600"
+    return reply
 
 
 @app.route("/api/mediaserver/now-playing/<name>")
@@ -6368,11 +6564,19 @@ def _run_settings_test():
                 headers=jellyfin_family_headers(kind_or_type, credential), timeout=8,
             )
         elif category == "media_server" and kind_or_type == "bookorbit":
-            # Its health endpoint needs no sign-in, so there is nothing to
-            # check a token against; a good answer means the address is right.
+            # Its health endpoint needs no sign-in, so a good answer there means the
+            # address is right. With a key (BookOrbit 3.8 and newer) the key itself is
+            # checked too, through /auth/me, which any key may call.
             health = fetch_bookorbit_health({"url": url})
             if health["error"]:
                 return jsonify({"ok": False, "error": health["error"]})
+            if credential:
+                body, error = bookorbit_call({"url": url, "credential": credential}, "/api/v1/auth/me", timeout=8)
+                if error:
+                    hint = "" if credential.startswith(BOOKORBIT_KEY_PREFIX) else " (BookOrbit keys start with bok_)"
+                    return jsonify({"ok": False, "error": error + hint})
+                if not isinstance(body, dict):
+                    return jsonify({"ok": False, "error": "answered, but not like BookOrbit - check the address"})
             return jsonify({"ok": True})
         elif category == "media_server" and kind_or_type == "komga":
             response = requests.get(

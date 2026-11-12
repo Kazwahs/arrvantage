@@ -1524,3 +1524,15 @@ body {
 .history-services { color: var(--muted); font-size: var(--text-sm); }
 .history-when { color: var(--muted); font-size: var(--text-sm); font-variant-numeric: tabular-nums; margin-top: 0.15rem; }
 .history-item.is-ongoing .history-when { color: var(--text); }
+
+/* BookOrbit: library stats (Libraries tab) */
+.bo-lib-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(15rem, 1fr)); gap: var(--space-4); }
+.bo-lib-count { font-size: var(--text-stat); font-weight: 600; margin-bottom: var(--space-2); }
+.bo-formats { display: flex; flex-wrap: wrap; gap: var(--space-1); }
+.bo-format {
+    border: 1px solid var(--border);
+    border-radius: var(--radius-sm);
+    color: var(--muted);
+    font-size: var(--text-sm);
+    padding: 0.1rem var(--space-2);
+}

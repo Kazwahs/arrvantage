@@ -139,7 +139,7 @@ It's still evolving — I'm actively using it myself and tweaking it as I go. Fe
 | Indexers | Prowlarr — indexer health status, individual and bulk testing |
 | Downloaders | qBittorrent, SABnzbd |
 | Requests | Overseerr, Jellyseerr |
-| Media servers | Plex, Jellyfin, Emby — Now Playing, Recently Added, Watch History, Users, library rescan. Komga for comics and manga libraries. BookOrbit for ebooks, comics and audiobooks: arrVantage checks that it is up (it needs no token, just its address), warns you on Home and in the alerts when it is not, and links to it. Browsing its library inside arrVantage is not built, because BookOrbit has no documented API for it yet |
+| Media servers | Plex, Jellyfin, Emby — Now Playing, Recently Added, Watch History, Users, library rescan. Komga for comics and manga libraries. BookOrbit for ebooks, comics and audiobooks: arrVantage checks that it is up (it needs no token, just its address), warns you on Home and in the alerts when it is not, and links to it. With an API key (BookOrbit 3.8 or newer, Read access is enough) it also shows each library's book count, size and file formats and what was added lately, with covers |
 | Activity data | Tautulli and/or Tracearr, for richer Now Playing / Watch History / Users than the media servers' own APIs provide alone |
 | Metadata | TMDB, TVDB, Fanart.tv, TheAudioDB |
 | Transcoding | Tdarr — stats overview, space saved, per-node worker/queue status |
