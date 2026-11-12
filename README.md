@@ -19,7 +19,7 @@ Actively developed — expect rough edges and breaking changes between releases.
 - **Downloads** on Home: a card per download client (qBittorrent, SABnzbd) with its speed, whether it is downloading, waiting, paused or idle, and the few downloads that are actually moving with progress and time left. It refreshes itself every 10 seconds while Home is open
 - Indexer visibility (Prowlarr)
 - Request management via Seerr (Overseerr / Jellyseerr / Seerr)
-- Media server status (Plex / Jellyfin / Emby / Komga), plus BookOrbit (uptime check and a link)
+- Media server status (Plex / Jellyfin / Emby / Komga), plus BookOrbit (uptime check, and with an API key a browsable library view)
 - Metadata lookups (TMDB / TVDB / Fanart.tv)
 - Transcode status (Tdarr)
 - Your own Home: drag the panels, and the cards inside them, into the order you want, and hide the ones you do not use. It is saved per user
@@ -139,7 +139,7 @@ It's still evolving — I'm actively using it myself and tweaking it as I go. Fe
 | Indexers | Prowlarr — indexer health status, individual and bulk testing |
 | Downloaders | qBittorrent, SABnzbd |
 | Requests | Overseerr, Jellyseerr |
-| Media servers | Plex, Jellyfin, Emby — Now Playing, Recently Added, Watch History, Users, library rescan. Komga for comics and manga libraries. BookOrbit for ebooks, comics and audiobooks: arrVantage checks that it is up (it needs no token, just its address), warns you on Home and in the alerts when it is not, and links to it. With an API key (BookOrbit 3.8 or newer, Read access is enough) it also shows each library's book count, size and file formats and what was added lately, with covers |
+| Media servers | Plex, Jellyfin, Emby — Now Playing, Recently Added, Watch History, Users, library rescan. Komga for comics and manga libraries. BookOrbit for ebooks, comics and audiobooks: arrVantage checks that it is up (it needs no token, just its address), warns you on Home and in the alerts when it is not, and links to it. With an API key (BookOrbit 3.8 or newer, Read access is enough) you can pick a library, search it and page through its books with covers, open any book to see its authors, series, description, publisher, ISBN, genres and files, and see what was added lately |
 | Activity data | Tautulli and/or Tracearr, for richer Now Playing / Watch History / Users than the media servers' own APIs provide alone |
 | Metadata | TMDB, TVDB, Fanart.tv, TheAudioDB |
 | Transcoding | Tdarr — stats overview, space saved, per-node worker/queue status |
@@ -161,9 +161,9 @@ What exists today, and what is on the list. The unchecked items are ideas, not p
 - [x] Slack, Pushover and Gotify alerts
 - [x] A Downloads panel on Home: qBittorrent and SABnzbd speeds and active queue in one place
 - [x] Book releases in Coming Up (Readarr / Chaptarr). Built from Readarr's published API; please report it if Chaptarr answers differently
-- [x] BookOrbit: uptime check, alerts and a link (its library is not browsable here until BookOrbit documents an API for it)
+- [x] BookOrbit: uptime check, alerts and a link; with an API key (BookOrbit 3.8+) a Library tab (pick a library, sort, search, open any book for its details) and Recently Added
 - [x] Librarr as an instance: Library (the manga, ebooks and audiobooks it has imported, grouped by title, with a Type filter), Queue with Retry, History, System, a Search tab with a Manga / Ebooks / Audiobooks choice that sends the result you pick, and a card in Home's libraries panel (built from its README and a real 1.5.0 server; only the failed-job shape was seen live, so please report anything it shows wrongly)
-- [x] Book and comic apps: Readarr, Chaptarr, Librarr, Komga, Kapowarr and BookOrbit (uptime only) are covered
+- [x] Book and comic apps: Readarr, Chaptarr, Librarr, Komga, Kapowarr and BookOrbit are covered
 
 ## Contributing / Feedback
 

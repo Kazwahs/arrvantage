@@ -3980,10 +3980,22 @@ def get_media_server(name: str):
 #   role, sizeBytes}], addedAt, ...}], "total"} (a GET, so a Read key may use it; the
 #   POST routes are mostly refused for a Read key); GET /api/v1/books/<id>/thumbnail
 #   is the cover and needs the key, so arrVantage proxies it.
-#   Not verified: that those GETs accept a *key* (they were read with a login
-#   session; the Test button is how that gets confirmed), the other scroller
-#   types, and any route to open one book in BookOrbit's own page (so there is
-#   no per-book link, only Open BookOrbit).
+#   Browsing a library (read from the person's real server, 12 Nov 2026, by watching
+#   what BookOrbit's own page sends): POST /api/v1/libraries/<id>/books with
+#   {"sort": [{"field": "title", "dir": "asc"}], "collapseSeries": false,
+#   "collapseLinked": false, "pagination": {"page": 0, "size": 60}, "q": "<words>"}
+#   answers 201 {items: [book..], total, page, size, bookTotal} (the same book
+#   record as the scroller; with collapseSeries true a series is one entry, so
+#   `total` is smaller than the book count; `q` filters, other guessed search
+#   field names are ignored; sort fields seen: title and addedAt). The route is
+#   marked safe for a Read key in the source (`KeyReadSafe`). GET /api/v1/books/<id>
+#   is one book in full: libraryName, description (HTML), isbn10/isbn13, publisher,
+#   publishedDate, language, pageCount, authors [{id, name}], genres, tags, series,
+#   files [{format, role, sizeBytes, filename, durationSeconds, absolutePath}] and
+#   folderPath - the last two are server paths and are never passed on.
+#   Not verified: that these accept a *key* (they were read with a login session; the
+#   Test button is how that gets confirmed), the other scroller types, and any route
+#   to open one book in BookOrbit's own page (so there is no per-book link).
 # ---------------------------------------------------------------------------
 
 BOOKORBIT_HEALTH_PATH = "/api/v1/health"
@@ -4028,6 +4040,10 @@ BOOKORBIT_MAX_LIBRARIES = 30
 BOOKORBIT_RECENT_LIMIT = 24
 BOOKORBIT_MAX_FORMATS = 12
 BOOKORBIT_COVER_MAX_BYTES = 2 * 1024 * 1024
+BOOKORBIT_PAGE_SIZE = 60
+BOOKORBIT_MAX_PAGE = 2000  # a page number past any real library
+BOOKORBIT_SORTS = {"title": {"field": "title", "dir": "asc"}, "added": {"field": "addedAt", "dir": "desc"}}
+BOOKORBIT_DESCRIPTION_MAX = 4000
 
 
 def bookorbit_headers(server: dict) -> dict:
@@ -4049,11 +4065,16 @@ def _bookorbit_words(err) -> str:
     return short_request_error(err)
 
 
-def bookorbit_call(server: dict, path: str, params=None, timeout: float = 10):
-    """GET <server>/api/v1/... with the key. Returns (data, None) or (None, "a few plain words")."""
+def bookorbit_call(server: dict, path: str, params=None, timeout: float = 10, body=None):
+    """GET <server>/api/v1/... with the key (a POST with a JSON `body` for the book list, which
+    BookOrbit marks as safe for a Read key). Returns (data, None) or (None, "a few plain words")."""
     try:
-        response = requests.get(f"{server['url'].rstrip('/')}{path}", headers=bookorbit_headers(server),
-                                params=params, timeout=timeout)
+        if body is None:
+            response = requests.get(f"{server['url'].rstrip('/')}{path}", headers=bookorbit_headers(server),
+                                    params=params, timeout=timeout)
+        else:
+            response = requests.post(f"{server['url'].rstrip('/')}{path}", headers=bookorbit_headers(server),
+                                     json=body, timeout=timeout)
         response.raise_for_status()
         return response.json(), None
     except requests.exceptions.JSONDecodeError:
@@ -4123,13 +4144,10 @@ def bookorbit_recent_view(data, server_name: str, library_names: dict) -> list:
     for book in books if isinstance(books, list) else []:
         if not isinstance(book, dict) or _bookorbit_int(book.get("id")) is None:
             continue
-        authors = [scrub_log_text(str(a), 80) for a in book.get("authors") or [] if isinstance(a, str) and a.strip()]
-        series = scrub_log_text(str(book.get("seriesName") or ""), 100)
-        index = book.get("seriesIndex")
-        if series and isinstance(index, (int, float)) and not isinstance(index, bool):
-            series += f" #{int(index) if float(index).is_integer() else index}"
+        authors = _bookorbit_names(book.get("authors"))
+        series = _bookorbit_series(book)
         formats = []
-        for f in book.get("files") or []:
+        for f in book.get("files") if isinstance(book.get("files"), list) else []:
             fmt = scrub_log_text(str(f.get("format") or ""), 12).lower() if isinstance(f, dict) else ""
             if fmt and fmt not in formats:
                 formats.append(fmt)
@@ -4138,7 +4156,7 @@ def bookorbit_recent_view(data, server_name: str, library_names: dict) -> list:
             "authors": ", ".join(authors[:3]), "series": series, "formats": formats[:4],
             "library": library_names.get(book.get("libraryId"), ""),
             "added": str(book.get("addedAt") or "")[:10],
-            "cover_url": f"/api/bookorbit/cover/{server_name}/{book['id']}" if book.get("hasCover", True) else "",
+            "cover_url": f"/api/bookorbit/cover/{quote(server_name, safe='')}/{book['id']}" if book.get("hasCover", True) else "",
         })
     return cards
 
@@ -4157,6 +4175,148 @@ def fetch_bookorbit_recent(server: dict, server_name: str) -> dict:
         if isinstance(lib, dict) and _bookorbit_int(lib.get("id")) is not None:
             names[lib["id"]] = scrub_log_text(str(lib.get("name") or ""), 100)
     return {"error": None, "needs_key": False, "items": bookorbit_recent_view(data, server_name, names)}
+
+
+def _bookorbit_size(size) -> str:
+    size = _bookorbit_int(size)
+    if size is None:
+        return ""
+    if size < 1024 ** 2:
+        return f"{max(1, round(size / 1024))} KB"
+    return f"{size / (1024 ** 2):.0f} MB" if size < 1024 ** 3 else format_size_gb(size)
+
+
+def _bookorbit_duration(seconds) -> str:
+    seconds = _bookorbit_int(seconds)
+    if not seconds:
+        return ""
+    hours, minutes = divmod(seconds // 60, 60)
+    return f"{hours}h {minutes:02d}m" if hours else f"{minutes}m"
+
+
+def _bookorbit_names(value, limit: int = 80) -> list:
+    """Authors arrive as plain names in a list and as {id, name} objects in one book's details."""
+    names = []
+    for entry in value if isinstance(value, list) else []:
+        name = entry.get("name") if isinstance(entry, dict) else entry
+        if isinstance(name, str) and name.strip():
+            names.append(scrub_log_text(name, limit))
+    return names
+
+
+def _bookorbit_series(book: dict) -> str:
+    series = scrub_log_text(str(book.get("seriesName") or ""), 100)
+    index = book.get("seriesIndex")
+    if series and isinstance(index, (int, float)) and not isinstance(index, bool):
+        series += f" #{int(index) if float(index).is_integer() else index}"
+    return series
+
+
+def bookorbit_book_cards(data, server_name: str) -> list:
+    """The book list's `items` -> grid cards. Pure. No path and no link; the cover is arrVantage's proxy."""
+    cards = []
+    for book in data.get("items") if isinstance(data, dict) and isinstance(data.get("items"), list) else []:
+        if not isinstance(book, dict) or _bookorbit_int(book.get("id")) is None:
+            continue
+        files = [f for f in (book.get("files") if isinstance(book.get("files"), list) else []) if isinstance(f, dict)]
+        formats = []
+        for f in files:
+            fmt = scrub_log_text(str(f.get("format") or ""), 12).lower()
+            if fmt and fmt not in formats:
+                formats.append(fmt)
+        year = _bookorbit_int(book.get("publishedYear"))
+        cards.append({
+            "id": book["id"], "title": scrub_log_text(str(book.get("title") or "(untitled)"), 200),
+            "authors": ", ".join(_bookorbit_names(book.get("authors"))[:3]), "series": _bookorbit_series(book),
+            "formats": formats[:4], "year": year or "", "size_display": _bookorbit_size(sum(
+                _bookorbit_int(f.get("sizeBytes")) or 0 for f in files)),
+            "added": str(book.get("addedAt") or "")[:10],
+            "cover_url": f"/api/bookorbit/cover/{quote(server_name, safe='')}/{book['id']}" if book.get("hasCover", True) else "",
+        })
+    return cards
+
+
+def fetch_bookorbit_books(server: dict, server_name: str, library_id: int, page: int = 0, search: str = "",
+                          sort: str = "title") -> dict:
+    """One page of one library, every book on its own (series are not collapsed: each book has its details)."""
+    if not server.get("credential"):
+        return {"error": None, "needs_key": True, "items": []}
+    page = min(max(page, 0), BOOKORBIT_MAX_PAGE)
+    body = {"sort": [BOOKORBIT_SORTS.get(sort, BOOKORBIT_SORTS["title"])], "collapseSeries": False,
+            "collapseLinked": False, "pagination": {"page": page, "size": BOOKORBIT_PAGE_SIZE}}
+    search = " ".join(str(search or "").split())[:100]
+    if search:
+        body["q"] = search
+    data, error = bookorbit_call(server, f"/api/v1/libraries/{library_id}/books", body=body, timeout=15)
+    if error:
+        return {"error": error, "items": []}
+    total = _bookorbit_int(data.get("total")) if isinstance(data, dict) else None
+    if total is None or not isinstance(data.get("items"), list):
+        return {"error": "answered, but not like BookOrbit's book list - check the address", "items": []}
+    return {"error": None, "needs_key": False, "items": bookorbit_book_cards(data, server_name), "total": total,
+            "page": page, "pages": max(1, -(-total // BOOKORBIT_PAGE_SIZE)), "search": search}
+
+
+_TAG_BREAKS = re.compile(r"(?i)<\s*/?\s*(?:br|p|div|li|h[1-6]|tr)\b[^>]*>")
+_TAGS = re.compile(r"<[^>]*>")
+
+
+def bookorbit_description_text(value) -> str:
+    """BookOrbit descriptions are HTML from a metadata provider: keep the paragraphs as plain text, drop the
+    rest. The page sets it with textContent-safe escaping, so nothing in it can run."""
+    if not isinstance(value, str):
+        return ""
+    text = _TAGS.sub("", _TAG_BREAKS.sub("\n", value))
+    text = html.unescape(text)
+    text = re.sub(r"[ \t\r\f\v]+", " ", text)
+    text = re.sub(r" ?\n ?", "\n", text)
+    text = re.sub(r"\n{3,}", "\n\n", text).strip()
+    return text[:BOOKORBIT_DESCRIPTION_MAX] + ("..." if len(text) > BOOKORBIT_DESCRIPTION_MAX else "")
+
+
+def bookorbit_book_details(book, server_name: str) -> dict:
+    """GET /books/<id> -> what the details window shows. Pure. `folderPath` and each file's `absolutePath`
+    are server paths and are dropped; a file is shown by its name."""
+    if not isinstance(book, dict) or _bookorbit_int(book.get("id")) is None:
+        return {}
+    files = []
+    for f in book.get("files") if isinstance(book.get("files"), list) else []:
+        if not isinstance(f, dict):
+            continue
+        name = re.split(r"[\\/]", str(f.get("filename") or ""))[-1]
+        files.append({"name": scrub_log_text(name, 200), "format": scrub_log_text(str(f.get("format") or ""), 12).lower(),
+                      "role": scrub_log_text(str(f.get("role") or ""), 20),
+                      "size_display": _bookorbit_size(f.get("sizeBytes")), "duration": _bookorbit_duration(f.get("durationSeconds"))})
+    published = str(book.get("publishedDate") or "") or (str(_bookorbit_int(book.get("publishedYear")) or ""))
+    rating = book.get("rating")
+    texts = lambda key, n=40: [scrub_log_text(x, 60) for x in (book.get(key) if isinstance(book.get(key), list) else [])  # noqa: E731
+                               if isinstance(x, str) and x.strip()][:n]
+    return {
+        "id": book["id"], "title": scrub_log_text(str(book.get("title") or "(untitled)"), 200),
+        "subtitle": scrub_log_text(str(book.get("subtitle") or ""), 200),
+        "authors": _bookorbit_names(book.get("authors"))[:10], "series": _bookorbit_series(book),
+        "description": bookorbit_description_text(book.get("description")),
+        "publisher": scrub_log_text(str(book.get("publisher") or ""), 100), "published": scrub_log_text(published, 20),
+        "language": scrub_log_text(str(book.get("language") or ""), 20), "pages": _bookorbit_int(book.get("pageCount")) or "",
+        "isbn": scrub_log_text(str(book.get("isbn13") or book.get("isbn10") or ""), 20),
+        "genres": texts("genres"), "tags": texts("tags"),
+        "rating": rating if isinstance(rating, (int, float)) and not isinstance(rating, bool) else None,
+        "library": scrub_log_text(str(book.get("libraryName") or ""), 100), "added": str(book.get("addedAt") or "")[:10],
+        "files": files[:30],
+        "cover_url": f"/api/bookorbit/cover/{quote(server_name, safe='')}/{book['id']}" if book.get("hasCover", True) else "",
+    }
+
+
+def fetch_bookorbit_book(server: dict, server_name: str, book_id: int) -> dict:
+    if not server.get("credential"):
+        return {"error": None, "needs_key": True}
+    data, error = bookorbit_call(server, f"/api/v1/books/{book_id}")
+    if error:
+        return {"error": error}
+    details = bookorbit_book_details(data, server_name)
+    if not details:
+        return {"error": "answered, but not like BookOrbit's book - check the address"}
+    return {"error": None, "needs_key": False, "book": details}
 
 
 # ---------------------------------------------------------------------------
@@ -4988,19 +5148,29 @@ def _dispatch_media_server_fetch(name, plex_fn, jellyfin_fn):
     return jsonify(result)
 
 
-@app.route("/api/bookorbit/health/<name>")
-@login_required
-def api_bookorbit_health(name):
-    server = get_media_server(name)
-    if not server or server["type"] != "bookorbit":
-        return jsonify({"error": "unknown BookOrbit server"}), 404
-    return jsonify({**fetch_bookorbit_health(server), "open_url": get_media_server_open_url(server),
-                    "has_key": bool(server.get("credential"))})
-
-
 def _bookorbit_server(name: str):
     server = get_media_server(name)
     return server if server and server["type"] == "bookorbit" else None
+
+
+@app.route("/api/bookorbit/books/<name>/<int:library_id>")
+@login_required
+def api_bookorbit_books(name, library_id):
+    server = _bookorbit_server(name)
+    if not server:
+        return jsonify({"error": "unknown BookOrbit server"}), 404
+    return jsonify(fetch_bookorbit_books(
+        server, name, library_id, page=request.args.get("page", 0, type=int),
+        search=request.args.get("q", ""), sort=request.args.get("sort", "title")))
+
+
+@app.route("/api/bookorbit/book/<name>/<int:book_id>")
+@login_required
+def api_bookorbit_book(name, book_id):
+    server = _bookorbit_server(name)
+    if not server:
+        return jsonify({"error": "unknown BookOrbit server"}), 404
+    return jsonify(fetch_bookorbit_book(server, name, book_id))
 
 
 @app.route("/api/bookorbit/libraries/<name>")
