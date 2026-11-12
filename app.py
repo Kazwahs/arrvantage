@@ -44,7 +44,7 @@ import time
 # same commit, so the image, the About panel, Copy diagnostics and the GitHub
 # release tag all say the same thing. (ARRVANTAGE_VERSION in the environment
 # wins, for a build that wants to stamp its own - the image does not today.)
-APP_VERSION = "1.5.0"
+APP_VERSION = "1.6.0"
 
 
 def resolve_app_version(raw=None) -> str:

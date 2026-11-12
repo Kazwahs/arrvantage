@@ -103,7 +103,7 @@ arrVantage runs the same checks as **Needs attention** in the background, every 
   - **Webhook:** arrVantage sends a JSON `POST` to the address, for Home Assistant, n8n and the like:
 
     ```json
-    {"app": "arrVantage", "version": "1.5.0", "event": "opened", "title": "Radarr can't be reached",
+    {"app": "arrVantage", "version": "1.6.0", "event": "opened", "title": "Radarr can't be reached",
      "message": "Connection refused", "severity": "critical", "kind": "unreachable",
      "services": ["Radarr"], "since": "2026-11-01T10:00:00Z", "ended": null}
     ```
