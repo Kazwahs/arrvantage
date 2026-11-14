@@ -485,3 +485,173 @@ class TestOneBook:
         assert not requests_mock.called
         client.cookie_jar.clear() if hasattr(client, "cookie_jar") else client.delete_cookie("session")
         assert client.get("/api/bookorbit/books/Books/3").status_code in (401, 302)
+
+
+# ---- 1.6.1: Recently Added "Show more", Home's BookOrbit card, "already in BookOrbit" on the Librarr search ----
+import datetime as _dt  # noqa: E402
+import pytest  # noqa: E402
+
+RECENT_URL = f"{BASE}/api/v1/dashboard/scrollers/recently-added"
+LIB5_URL = f"{BASE}/api/v1/libraries/5/books"
+
+
+@pytest.fixture(autouse=True)
+def _fresh_summary_cache(app_module):
+    app_module._BOOKORBIT_SUMMARY.clear()
+    yield
+    app_module._BOOKORBIT_SUMMARY.clear()
+
+
+class TestRecentShowMore:
+    def test_the_limit_is_asked_for_clamped_and_says_whether_there_is_more(self, app_module, admin_session, requests_mock):
+        client, _ = admin_session
+        add_server(app_module, credential=KEY)
+        requests_mock.get(f"{BASE}/api/v1/libraries", json=LIBRARIES)
+        books = [{"id": i, "libraryId": 3, "title": f"B{i}", "addedAt": "2026-11-11T00:00:00Z"} for i in range(48)]
+        mock = requests_mock.get(RECENT_URL, json={"books": books, "total": 48})
+        body = client.get("/api/bookorbit/recent/Books?limit=48").get_json()
+        assert mock.last_request.qs == {"limit": ["48"]} and body["limit"] == 48 and body["more"] is True and len(body["items"]) == 48
+        body = client.get("/api/bookorbit/recent/Books?limit=9999").get_json()
+        assert body["limit"] == app_module.BOOKORBIT_RECENT_MAX and body["more"] is False  # nothing past the cap
+        body = client.get("/api/bookorbit/recent/Books?limit=-5").get_json()
+        assert body["limit"] == 1
+        requests_mock.get(RECENT_URL, json={"books": books[:3], "total": 3})
+        assert client.get("/api/bookorbit/recent/Books").get_json()["more"] is False  # fewer than asked for: that is all of them
+
+    def test_the_default_is_still_a_screenful(self, app_module, admin_session, requests_mock):
+        client, _ = admin_session
+        add_server(app_module, credential=KEY)
+        mock_bookorbit(requests_mock)
+        client.get("/api/bookorbit/recent/Books")
+        assert [r for r in requests_mock.request_history if r.path.endswith("recently-added")][0].qs == {"limit": ["24"]}
+
+
+class TestHomeSummary:
+    TODAY = _dt.date(2026, 11, 12)
+
+    def test_counting_what_was_added_this_week(self, app_module):
+        data = {"books": [{"addedAt": "2026-11-11T02:33:43Z"}, {"addedAt": "2026-11-05T00:00:00Z"},
+                          {"addedAt": "2026-11-04T23:59:59Z"}, {"addedAt": "2026-10-01T00:00:00Z"}, {"addedAt": None}, "junk"]}
+        assert app_module.bookorbit_added_since(data, 7, self.TODAY) == (2, False)
+        # every book listed is recent: the list ran out before the week did, so the count is a floor
+        assert app_module.bookorbit_added_since({"books": [{"addedAt": "2026-11-11"}, {"addedAt": "2026-11-12"}]}, 7, self.TODAY) == (2, True)
+        assert app_module.bookorbit_added_since({"books": []}, 7, self.TODAY) == (0, False)
+        assert app_module.bookorbit_added_since(None, 7, self.TODAY) == (0, False)
+
+    def test_the_summary_has_the_numbers_and_is_cached_for_a_minute(self, app_module, admin_session, requests_mock, monkeypatch):
+        client, _ = admin_session
+        add_server(app_module, credential=KEY)
+        mock_bookorbit(requests_mock)
+        recent_day = _dt.datetime.now(_dt.timezone.utc).date().isoformat()
+        requests_mock.get(RECENT_URL, json={"books": [{"id": 1, "addedAt": recent_day + "T01:00:00Z"}, {"id": 2, "addedAt": "2020-01-01T00:00:00Z"}]})
+        body = client.get("/api/bookorbit/summary/Books").get_json()
+        assert body["size_display"].endswith(" GB")
+        assert body == {"error": None, "needs_key": False, "books": 2388, "size_display": body["size_display"],
+                        "libraries": 2, "added_week": 1, "added_week_capped": False}
+        assert [r.qs for r in requests_mock.request_history if r.path.endswith("recently-added")] == [{"limit": ["100"]}]
+        calls = requests_mock.call_count
+        assert client.get("/api/bookorbit/summary/Books").get_json() == body
+        assert requests_mock.call_count == calls  # served from the cache
+        clock = [app_module.time.monotonic() + app_module.BOOKORBIT_SUMMARY_TTL + 1]
+        monkeypatch.setattr(app_module.time, "monotonic", lambda: clock[0])
+        client.get("/api/bookorbit/summary/Books")
+        assert requests_mock.call_count > calls  # asked again once the minute was up
+
+    def test_a_failure_is_not_cached_and_no_key_asks_for_nothing(self, app_module, admin_session, requests_mock):
+        client, _ = admin_session
+        add_server(app_module, credential=KEY)
+        requests_mock.get(f"{BASE}/api/v1/libraries", status_code=401)
+        assert "refused the API key" in client.get("/api/bookorbit/summary/Books").get_json()["error"]
+        mock_bookorbit(requests_mock)
+        requests_mock.get(RECENT_URL, json=RECENT)
+        assert client.get("/api/bookorbit/summary/Books").get_json()["error"] is None  # the next try was not poisoned
+        add_server(app_module, name="Nokey")
+        requests_mock.reset_mock()
+        assert client.get("/api/bookorbit/summary/Nokey").get_json() == {"error": None, "needs_key": True}
+        assert not requests_mock.called
+
+    def test_the_week_count_missing_does_not_break_the_card(self, app_module, admin_session, requests_mock):
+        client, _ = admin_session
+        add_server(app_module, credential=KEY)
+        mock_bookorbit(requests_mock)
+        requests_mock.get(RECENT_URL, status_code=500)
+        body = client.get("/api/bookorbit/summary/Books").get_json()
+        assert body["error"] is None and body["books"] == 2388 and body["added_week"] is None
+
+    def test_only_bookorbit_servers(self, app_module, admin_session):
+        client, _ = admin_session
+        add_server(app_module, name="Plexy", type="plex", credential="t")
+        assert client.get("/api/bookorbit/summary/Plexy").status_code == 404
+        assert client.get("/api/bookorbit/summary/Nope").status_code == 404
+
+
+class TestAlreadyInBookOrbit:
+    def _libraries(self, requests_mock, books3=None, books5=None):
+        requests_mock.get(f"{BASE}/api/v1/libraries", json=LIBRARIES)
+        requests_mock.post(LIST_URL, json=books3 if books3 is not None else BOOK_LIST, status_code=201)
+        requests_mock.post(LIB5_URL, json=books5 if books5 is not None else {"items": [], "total": 0, "page": 0, "size": 5}, status_code=201)
+
+    def test_matches_from_every_library_with_where_each_one_is(self, app_module, admin_session, requests_mock):
+        client, _ = admin_session
+        add_server(app_module, credential=KEY)
+        self._libraries(requests_mock, books5={"items": [{"id": 9001, "title": "White Gold Wielder (comic)", "authors": ["A"], "files": [{"format": "cbz"}]}], "total": 1})
+        body = client.get("/api/bookorbit/search?q=white%20%20gold").get_json()
+        [server] = body["servers"]
+        assert body["query"] == "white gold" and server["name"] == "Books" and server["error"] is None
+        assert server["total"] == 131 and [m["library"] for m in server["matches"]] == ["Books", "Books", "Comics"]
+        assert server["matches"][2] == {"id": 9001, "title": "White Gold Wielder (comic)", "authors": "A", "formats": ["cbz"], "library": "Comics"}
+        sent = [r for r in requests_mock.request_history if r.method == "POST"]
+        assert [r.path for r in sent] == ["/api/v1/libraries/3/books", "/api/v1/libraries/5/books"]
+        assert all(r.json()["q"] == "white gold" and r.json()["pagination"] == {"page": 0, "size": 5} and r.headers["X-Api-Key"] == KEY for r in sent)
+        assert "secret-folder" not in str(body)
+
+    def test_nothing_found_is_an_empty_list_not_an_error(self, app_module, admin_session, requests_mock):
+        client, _ = admin_session
+        add_server(app_module, credential=KEY)
+        self._libraries(requests_mock, books3={"items": [], "total": 0}, books5={"items": [], "total": 0})
+        [server] = client.get("/api/bookorbit/search?q=nothing").get_json()["servers"]
+        assert server["matches"] == [] and server["total"] == 0 and server["error"] is None
+
+    def test_one_library_failing_still_shows_the_rest_and_all_failing_is_an_error(self, app_module, admin_session, requests_mock):
+        client, _ = admin_session
+        add_server(app_module, credential=KEY)
+        requests_mock.get(f"{BASE}/api/v1/libraries", json=LIBRARIES)
+        requests_mock.post(LIST_URL, status_code=500)
+        requests_mock.post(LIB5_URL, json={"items": [{"id": 1, "title": "Hit"}], "total": 1}, status_code=201)
+        [server] = client.get("/api/bookorbit/search?q=hit").get_json()["servers"]
+        assert [m["title"] for m in server["matches"]] == ["Hit"] and server["error"] is None
+        requests_mock.post(LIB5_URL, status_code=403)
+        [server] = client.get("/api/bookorbit/search?q=hit").get_json()["servers"]
+        assert "Read access" in server["error"] and server["matches"] == []
+
+    def test_a_slow_bookorbit_is_cut_short_not_waited_for(self, app_module, admin_session, requests_mock, monkeypatch):
+        client, _ = admin_session
+        add_server(app_module, credential=KEY)
+        self._libraries(requests_mock)
+        monkeypatch.setattr(app_module, "BOOKORBIT_SEARCH_BUDGET", 0.0)
+        [server] = client.get("/api/bookorbit/search?q=slow").get_json()["servers"]
+        assert server["cut_short"] is True and server["matches"] == []
+        assert not [r for r in requests_mock.request_history if r.method == "POST"]
+
+    def test_only_servers_with_a_key_are_asked_and_a_list_is_capped(self, app_module, admin_session, requests_mock):
+        client, _ = admin_session
+        add_server(app_module, credential=KEY)
+        add_server(app_module, name="Nokey")
+        add_server(app_module, name="Plexy", type="plex", credential="t")
+        many = {"items": [{"id": i, "title": f"T{i}"} for i in range(5)], "total": 5}
+        self._libraries(requests_mock, books3=many, books5=many)
+        servers = client.get("/api/bookorbit/search?q=ok").get_json()["servers"]
+        assert [s["name"] for s in servers] == ["Books"] and len(servers[0]["matches"]) == app_module.BOOKORBIT_MATCHES_SHOWN
+
+    def test_no_bookorbit_at_all_is_an_empty_answer(self, app_module, admin_session, requests_mock):
+        client, _ = admin_session
+        assert client.get("/api/bookorbit/search?q=anything").get_json()["servers"] == []
+        assert not requests_mock.called
+
+    def test_the_query_is_checked_and_a_login_and_search_permission_are_needed(self, app_module, admin_session, requests_mock):
+        client, _ = admin_session
+        for bad in ("", "a", "x" * 101):
+            assert client.get(f"/api/bookorbit/search?q={bad}").status_code == 400
+        client.delete_cookie("session")
+        assert client.get("/api/bookorbit/search?q=hello").status_code in (401, 302)
+        assert not requests_mock.called

@@ -44,7 +44,7 @@ import time
 # same commit, so the image, the About panel, Copy diagnostics and the GitHub
 # release tag all say the same thing. (ARRVANTAGE_VERSION in the environment
 # wins, for a build that wants to stamp its own - the image does not today.)
-APP_VERSION = "1.6.0"
+APP_VERSION = "1.6.1"
 
 
 def resolve_app_version(raw=None) -> str:
@@ -4044,6 +4044,11 @@ BOOKORBIT_PAGE_SIZE = 60
 BOOKORBIT_MAX_PAGE = 2000  # a page number past any real library
 BOOKORBIT_SORTS = {"title": {"field": "title", "dir": "asc"}, "added": {"field": "addedAt", "dir": "desc"}}
 BOOKORBIT_DESCRIPTION_MAX = 4000
+BOOKORBIT_RECENT_MAX = 100  # "Show more" on Recently Added stops here
+BOOKORBIT_SUMMARY_TTL = 60  # seconds: Home reloads often, the numbers move slowly
+BOOKORBIT_MATCHES_PER_LIBRARY = 5
+BOOKORBIT_MATCHES_SHOWN = 8
+BOOKORBIT_SEARCH_BUDGET = 8.0  # seconds for the whole "is it already in BookOrbit" check
 
 
 def bookorbit_headers(server: dict) -> dict:
@@ -4161,10 +4166,11 @@ def bookorbit_recent_view(data, server_name: str, library_names: dict) -> list:
     return cards
 
 
-def fetch_bookorbit_recent(server: dict, server_name: str) -> dict:
+def fetch_bookorbit_recent(server: dict, server_name: str, limit: int = BOOKORBIT_RECENT_LIMIT) -> dict:
     if not server.get("credential"):
         return {"error": None, "needs_key": True, "items": []}
-    data, error = bookorbit_call(server, "/api/v1/dashboard/scrollers/recently-added", {"limit": BOOKORBIT_RECENT_LIMIT})
+    limit = min(max(limit, 1), BOOKORBIT_RECENT_MAX)
+    data, error = bookorbit_call(server, "/api/v1/dashboard/scrollers/recently-added", {"limit": limit})
     if error:
         return {"error": error, "items": []}
     if not isinstance(data, dict) or not isinstance(data.get("books"), list):
@@ -4174,7 +4180,9 @@ def fetch_bookorbit_recent(server: dict, server_name: str) -> dict:
     for lib in libs if isinstance(libs, list) else []:
         if isinstance(lib, dict) and _bookorbit_int(lib.get("id")) is not None:
             names[lib["id"]] = scrub_log_text(str(lib.get("name") or ""), 100)
-    return {"error": None, "needs_key": False, "items": bookorbit_recent_view(data, server_name, names)}
+    items = bookorbit_recent_view(data, server_name, names)
+    return {"error": None, "needs_key": False, "items": items, "limit": limit,
+            "more": len(data["books"]) >= limit and limit < BOOKORBIT_RECENT_MAX}
 
 
 def _bookorbit_size(size) -> str:
@@ -4317,6 +4325,75 @@ def fetch_bookorbit_book(server: dict, server_name: str, book_id: int) -> dict:
     if not details:
         return {"error": "answered, but not like BookOrbit's book - check the address"}
     return {"error": None, "needs_key": False, "book": details}
+
+
+_BOOKORBIT_SUMMARY: dict = {}  # (name, address, key) -> (monotonic time, answer); successes only, like _LIBRARY_CACHE
+
+
+def bookorbit_added_since(data, days: int = 7, today=None) -> tuple:
+    """How many of the recently-added scroller's books were added in the last `days` days, and whether
+    the list ended before the cutoff (False means every book listed was that recent, so the true count may be higher)."""
+    today = today or datetime.now(timezone.utc).date()
+    cutoff = (today - timedelta(days=days)).isoformat()
+    dates = [str(b.get("addedAt") or "")[:10] for b in (data.get("books") if isinstance(data, dict) else None) or [] if isinstance(b, dict)]
+    recent = [d for d in dates if d and d >= cutoff]
+    return len(recent), bool(dates) and len(recent) == len(dates)
+
+
+def fetch_bookorbit_summary(server: dict, server_name: str) -> dict:
+    """The few numbers on Home's BookOrbit card. Cached briefly; a failure is never cached."""
+    if not server.get("credential"):
+        return {"error": None, "needs_key": True}
+    key = (server_name, server["url"], server["credential"])
+    cached = _BOOKORBIT_SUMMARY.get(key)
+    if cached and time.monotonic() - cached[0] < BOOKORBIT_SUMMARY_TTL:
+        return cached[1]
+    libraries = fetch_bookorbit_libraries(server)
+    if libraries.get("error"):
+        return {"error": libraries["error"]}
+    recent, error = bookorbit_call(server, "/api/v1/dashboard/scrollers/recently-added", {"limit": BOOKORBIT_RECENT_MAX})
+    added, capped = (None, False) if error or not isinstance(recent, dict) else bookorbit_added_since(recent)
+    answer = {"error": None, "needs_key": False, "books": libraries["total_books"], "size_display": libraries["total_size_display"],
+              "libraries": len(libraries["libraries"]), "added_week": added, "added_week_capped": capped}
+    _BOOKORBIT_SUMMARY[key] = (time.monotonic(), answer)
+    return answer
+
+
+def fetch_bookorbit_matches(server: dict, server_name: str, query: str) -> dict:
+    """Is something that matches `query` already in BookOrbit? Searches every library (a few books each,
+    one library after another inside a shared time budget) and lists what it finds."""
+    if not server.get("credential"):
+        return {"error": None, "needs_key": True, "matches": [], "total": 0}
+    libraries, error = bookorbit_call(server, "/api/v1/libraries")
+    if error:
+        return {"error": error, "matches": [], "total": 0}
+    deadline = time.monotonic() + BOOKORBIT_SEARCH_BUDGET
+    matches, total, failed, first_error, cut_short = [], 0, 0, "", False
+    for lib in (libraries if isinstance(libraries, list) else [])[:BOOKORBIT_MAX_LIBRARIES]:
+        if not isinstance(lib, dict) or _bookorbit_int(lib.get("id")) is None:
+            continue
+        remaining = deadline - time.monotonic()
+        if remaining <= 0.5:
+            cut_short = True
+            break
+        body = {"sort": [BOOKORBIT_SORTS["title"]], "collapseSeries": False, "collapseLinked": False,
+                "pagination": {"page": 0, "size": BOOKORBIT_MATCHES_PER_LIBRARY}, "q": query}
+        data, err = bookorbit_call(server, f"/api/v1/libraries/{lib['id']}/books", body=body, timeout=min(8, remaining))
+        found = _bookorbit_int(data.get("total")) if isinstance(data, dict) else None
+        if err or found is None:
+            failed += 1
+            err = err or "answered, but not like BookOrbit's book list - check the address"
+            if not first_error or "API key" in err or "Read access" in err:  # a key problem is the useful thing to say
+                first_error = err
+            continue
+        total += found
+        library_name = scrub_log_text(str(lib.get("name") or ""), 100)
+        for card in bookorbit_book_cards(data, server_name):
+            matches.append({"id": card["id"], "title": card["title"], "authors": card["authors"], "formats": card["formats"],
+                            "library": library_name})
+    if failed and not matches and not total:
+        return {"error": first_error, "matches": [], "total": 0}
+    return {"error": None, "needs_key": False, "matches": matches[:BOOKORBIT_MATCHES_SHOWN], "total": total, "cut_short": cut_short}
 
 
 # ---------------------------------------------------------------------------
@@ -5188,7 +5265,28 @@ def api_bookorbit_recent(name):
     server = _bookorbit_server(name)
     if not server:
         return jsonify({"error": "unknown BookOrbit server"}), 404
-    return jsonify(fetch_bookorbit_recent(server, name))
+    return jsonify(fetch_bookorbit_recent(server, name, limit=request.args.get("limit", BOOKORBIT_RECENT_LIMIT, type=int)))
+
+
+@app.route("/api/bookorbit/summary/<name>")
+@login_required
+def api_bookorbit_summary(name):
+    server = _bookorbit_server(name)
+    if not server:
+        return jsonify({"error": "unknown BookOrbit server"}), 404
+    return jsonify(fetch_bookorbit_summary(server, name))
+
+
+@app.route("/api/bookorbit/search")
+@login_required
+@permission_required("searching")
+def api_bookorbit_search():
+    """For the Librarr search page: what you typed, looked up in every BookOrbit that has a key."""
+    query = " ".join(request.args.get("q", "").split())
+    if len(query) < 2 or len(query) > 100:
+        return jsonify({"error": "type 2 to 100 characters to search for"}), 400
+    servers = [s for s in MEDIA_SERVERS if s.get("type") == "bookorbit" and s.get("credential")]
+    return jsonify({"query": query, "servers": [{"name": s["name"], **fetch_bookorbit_matches(s, s["name"], query)} for s in servers[:3]]})
 
 
 @app.route("/api/bookorbit/cover/<name>/<int:book_id>")

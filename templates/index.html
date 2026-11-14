@@ -1247,6 +1247,7 @@
                                 <img class="stat-icon" src="${ms.icon_url}" alt="" onerror="this.style.display='none';">
                                 <span class="stat-card-name">${escapeHtml(ms.name)}</span>
                             </div>
+                            ${ms.type === 'bookorbit' ? `<div class="stat-detail" data-bo-summary="${escapeAttr(ms.name)}" hidden></div>` : ''}
                             <div class="stat-actions">
                                 <a href="${ms.open_url}" target="_blank" rel="noopener" class="mini-btn">Open</a>
                                 ${['plex', 'jellyfin', 'emby'].includes(ms.type) ? `<button class="mini-btn" onclick="rescanMediaServer('${ms.name}', this)">Rescan Library</button>` : ''}
@@ -1300,6 +1301,32 @@
                     `).join('');
         }
 
+        // BookOrbit's Home card fills in its numbers after the page is up, so a slow or sleeping BookOrbit
+        // never holds Home back. The last answer is repainted at once on a refresh to avoid a flicker.
+        const bookOrbitHomeSummary = {};
+
+        function paintBookOrbitHome(el, sum) {
+            if (!sum || sum.needs_key) { el.hidden = true; return; }
+            if (sum.error) { el.hidden = false; el.innerHTML = `<span class="test-fail">${escapeHtml(sum.error)}</span>`; return; }
+            const week = sum.added_week === null || sum.added_week === undefined ? '' :
+                `<div class="stat-foot">${sum.added_week.toLocaleString()}${sum.added_week_capped ? '+' : ''} added this week</div>`;
+            el.hidden = false;
+            el.innerHTML = `<strong>${sum.books.toLocaleString()}</strong> book${sum.books === 1 ? '' : 's'}${sum.size_display ? ' &middot; ' + escapeHtml(sum.size_display) : ''}${week}`;
+        }
+
+        function hydrateBookOrbitHome() {
+            document.querySelectorAll('[data-bo-summary]').forEach(async el => {
+                const name = el.dataset.boSummary;
+                if (bookOrbitHomeSummary[name]) paintBookOrbitHome(el, bookOrbitHomeSummary[name]);
+                try {
+                    const response = await fetch(`/api/bookorbit/summary/${encodeURIComponent(name)}`);
+                    const sum = await response.json();
+                    bookOrbitHomeSummary[name] = sum;
+                    if (el.isConnected) paintBookOrbitHome(el, sum);
+                } catch (err) { /* leave whatever is shown; the next refresh tries again */ }
+            });
+        }
+
         async function loadHomeStats() {
             const status = document.getElementById('home-stats-status');
             // Only show "Loading" the first time; on a refresh keep what's there.
@@ -1330,6 +1357,7 @@
                     if (items.length) any = true;
                 });
                 homeStatsLoaded = true;
+                hydrateBookOrbitHome();
 
                 if (any) {
                     status.hidden = true;
@@ -2648,6 +2676,13 @@
             return data;
         }
 
+        // The selected library's name: BookOrbit may not repeat it inside one book's details.
+        function libraryNameOf(name) {
+            const state = getBookOrbitState(name);
+            const lib = state.libraries && state.libraries.libraries ? state.libraries.libraries.find(l => l.id === state.libraryId) : null;
+            return lib ? lib.name : '';
+        }
+
         function renderBookOrbitStats(name) {
             const el = document.getElementById(`bo-stats-${name}`);
             const state = getBookOrbitState(name);
@@ -2699,11 +2734,11 @@
                 <button class="test-btn" ${page >= totalPages - 1 ? 'disabled' : ''} onclick="changeBookOrbitPage('${escapeAttr(name)}', ${page + 1})">Next &rarr;</button>`;
         }
 
-        function bookOrbitCardHTML(name, item) {
+        function bookOrbitCardHTML(name, item, libraryName) {
             const line = [item.series, item.year].filter(Boolean).join(' · ');
             return `
                 <div class="library-card" data-title="${escapeAttr(item.title)}">
-                    <div class="cover-wrap" role="button" tabindex="0" data-bo-book="${escapeAttr(String(item.id))}" data-bo-server="${escapeAttr(name)}">
+                    <div class="cover-wrap" role="button" tabindex="0" data-bo-book="${escapeAttr(String(item.id))}" data-bo-server="${escapeAttr(name)}" data-bo-library="${escapeAttr(libraryName || '')}">
                         ${item.cover_url ? `<img src="${escapeAttr(item.cover_url)}" alt="${escapeAttr(item.title)}" loading="lazy" onerror="this.style.display='none'; this.nextElementSibling.style.display='flex';">` : ''}
                         <div class="cover-fallback" ${item.cover_url ? 'style="display:none;"' : ''}>${escapeHtml(item.title)}</div>
                         ${item.formats.length ? `<span class="status-badge status-downloaded">${escapeHtml(item.formats.join(', ').toUpperCase())}</span>` : ''}
@@ -2717,7 +2752,7 @@
         // One delegated click handler: a cover opens that book's details (cards are rebuilt on every page).
         document.addEventListener('click', event => {
             const cover = event.target.closest('[data-bo-book]');
-            if (cover) openBookOrbitModal(cover.dataset.boServer, cover.dataset.boBook);
+            if (cover) openBookOrbitModal(cover.dataset.boServer, cover.dataset.boBook, cover.dataset.boLibrary || '');
         });
 
         async function loadBookOrbitLibrary(name, forceReload) {
@@ -2742,39 +2777,49 @@
                     return;
                 }
                 const found = state.search ? `<p class="muted-text--md spaced-block">${escapeHtml(bookOrbitPlural(data.total, 'match'))} for “${escapeHtml(state.search)}”</p>` : '';
-                grid.innerHTML = `${found}<div class="library-grid">${data.items.map(item => bookOrbitCardHTML(name, item)).join('')}</div>`;
+                grid.innerHTML = `${found}<div class="library-grid">${data.items.map(item => bookOrbitCardHTML(name, item, libraryNameOf(name))).join('')}</div>`;
                 renderBookOrbitPagination(name, data.page, data.pages);
             } catch (err) {
                 grid.innerHTML = '<div class="modal-empty">Something went wrong loading BookOrbit.</div>';
             }
         }
 
-        async function loadBookOrbitRecent(name) {
+        const bookOrbitRecentLimit = {};   // per server: how many Recently Added books to ask for
+        const BOOKORBIT_RECENT_STEP = 24;
+
+        function bookOrbitRecentMore(name) {
+            bookOrbitRecentLimit[name] = (bookOrbitRecentLimit[name] || BOOKORBIT_RECENT_STEP) + BOOKORBIT_RECENT_STEP;
+            loadBookOrbitRecent(name, true);
+        }
+
+        async function loadBookOrbitRecent(name, keepPlace) {
             const el = document.getElementById(`mediaserver-bo-recent-${name}`);
             if (!el) return;
+            if (!keepPlace) bookOrbitRecentLimit[name] = BOOKORBIT_RECENT_STEP;
             el.innerHTML = '<div class="modal-loading">Loading...</div>';
             try {
-                const response = await fetch(`/api/bookorbit/recent/${encodeURIComponent(name)}`);
+                const response = await fetch(`/api/bookorbit/recent/${encodeURIComponent(name)}?limit=${bookOrbitRecentLimit[name]}`);
                 const data = await response.json();
                 if (data.error) { el.innerHTML = `<div class="modal-empty">${escapeHtml(data.error)}</div>`; return; }
                 if (data.needs_key) { el.innerHTML = BOOKORBIT_NEEDS_KEY; return; }
                 if (!data.items.length) { el.innerHTML = '<div class="empty">Nothing added lately</div>'; return; }
                 el.innerHTML = `<div class="library-grid">${data.items.map(item => `
                     <div class="library-card" data-title="${escapeAttr(item.title)}">
-                        <div class="cover-wrap" role="button" tabindex="0" data-bo-book="${escapeAttr(String(item.id))}" data-bo-server="${escapeAttr(name)}">
+                        <div class="cover-wrap" role="button" tabindex="0" data-bo-book="${escapeAttr(String(item.id))}" data-bo-server="${escapeAttr(name)}" data-bo-library="${escapeAttr(item.library || '')}">
                             ${item.cover_url ? `<img src="${escapeAttr(item.cover_url)}" alt="${escapeAttr(item.title)}" loading="lazy" onerror="this.style.display='none'; this.nextElementSibling.style.display='flex';">` : ''}
                             <div class="cover-fallback" ${item.cover_url ? 'style="display:none;"' : ''}>${escapeHtml(item.title)}</div>
                         </div>
                         <div class="card-title">${escapeHtml(item.title)}</div>
                         <div class="card-genre">${escapeHtml(item.authors || item.series)}</div>
                         <div class="card-genre">${escapeHtml([item.formats.join(', ').toUpperCase(), item.library, item.added].filter(Boolean).join(' · '))}</div>
-                    </div>`).join('')}</div>`;
+                    </div>`).join('')}</div>` +
+                    (data.more ? `<div class="komga-pagination"><button class="test-btn" onclick="bookOrbitRecentMore('${escapeAttr(name)}')">Show more</button></div>` : '');
             } catch (err) {
                 el.innerHTML = '<div class="modal-empty">Something went wrong loading BookOrbit.</div>';
             }
         }
 
-        async function openBookOrbitModal(serverName, bookId) {
+        async function openBookOrbitModal(serverName, bookId, libraryName) {
             const overlay = document.getElementById('modal-overlay');
             const header = document.getElementById('modal-header');
             const body = document.getElementById('modal-body');
@@ -2793,7 +2838,7 @@
                 const facts = [
                     ['Author', b.authors.join(', ')], ['Series', b.series], ['Publisher', b.publisher], ['Published', b.published],
                     ['Language', b.language], ['Pages', b.pages], ['ISBN', b.isbn], ['Rating', b.rating === null ? '' : String(b.rating)],
-                    ['Library', b.library], ['Added', b.added],
+                    ['Library', b.library || libraryName || ''], ['Added', b.added],
                 ].filter(([, value]) => value !== '' && value !== null && value !== undefined);
                 header.innerHTML = `
                     <div class="modal-header">
@@ -3123,6 +3168,7 @@
             button.disabled = true;
             out.innerHTML = '<div class="empty">Searching every source. This can take up to a minute.</div>';
             const base = `/api/librarr/search/${encodeURIComponent(name)}`;
+            const ownedCheck = fetchBookOrbitMatches(query);   // runs while Librarr searches
             try {
                 const start = await fetch(base, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ q: query, kind: form.kind.value }) });
                 const started = await start.json();
@@ -3140,6 +3186,7 @@
                     }
                     if (data.state === 'error') throw new Error(data.error || 'the search failed');
                     renderLibrarrResults(started.id, out, data);
+                    showBookOrbitMatches(out, await ownedCheck, () => run === librarrRuns[name]);
                     return;
                 }
             } catch (err) {
@@ -3147,6 +3194,31 @@
             } finally {
                 if (run === librarrRuns[name]) button.disabled = false;
             }
+        }
+
+        // "Is it already in BookOrbit?": what was typed, looked up in each BookOrbit that has a key. Silent when
+        // there is no BookOrbit, no key, nothing found or a failure - it is a courtesy, never an error on the search.
+        async function fetchBookOrbitMatches(query) {
+            try {
+                const response = await fetch(`/api/bookorbit/search?q=${encodeURIComponent(query)}`);
+                return response.ok ? await response.json() : null;
+            } catch (err) { return null; }
+        }
+
+        function showBookOrbitMatches(out, data, stillCurrent) {
+            if (!data || !stillCurrent()) return;
+            const found = (data.servers || []).filter(srv => !srv.error && !srv.needs_key && srv.matches.length);
+            if (!found.length) return;
+            const note = document.createElement('div');
+            note.className = 'bo-owned';
+            note.setAttribute('role', 'status');
+            note.innerHTML = found.map(srv => {
+                const more = srv.total > srv.matches.length ? ` (${srv.total.toLocaleString()} in all)` : '';
+                const links = srv.matches.map(m => `<button type="button" class="bo-owned-link" data-bo-book="${escapeAttr(String(m.id))}" data-bo-server="${escapeAttr(srv.name)}" data-bo-library="${escapeAttr(m.library)}">${escapeHtml(m.title)}</button>` +
+                    `<span class="muted-text--sm"> ${escapeHtml([m.authors, m.formats.join(', ').toUpperCase(), m.library].filter(Boolean).join(' · '))}</span>`).join('<br>');
+                return `<div><strong>Already in ${escapeHtml(srv.name)}${escapeHtml(more)}:</strong><br>${links}</div>`;
+            }).join('');
+            out.insertBefore(note, out.firstChild);
         }
 
         function renderLibrarrResults(sid, out, data) {

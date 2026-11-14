@@ -103,7 +103,7 @@ arrVantage runs the same checks as **Needs attention** in the background, every 
   - **Webhook:** arrVantage sends a JSON `POST` to the address, for Home Assistant, n8n and the like:
 
     ```json
-    {"app": "arrVantage", "version": "1.6.0", "event": "opened", "title": "Radarr can't be reached",
+    {"app": "arrVantage", "version": "1.6.1", "event": "opened", "title": "Radarr can't be reached",
      "message": "Connection refused", "severity": "critical", "kind": "unreachable",
      "services": ["Radarr"], "since": "2026-11-01T10:00:00Z", "ended": null}
     ```
@@ -139,7 +139,7 @@ It's still evolving — I'm actively using it myself and tweaking it as I go. Fe
 | Indexers | Prowlarr — indexer health status, individual and bulk testing |
 | Downloaders | qBittorrent, SABnzbd |
 | Requests | Overseerr, Jellyseerr |
-| Media servers | Plex, Jellyfin, Emby — Now Playing, Recently Added, Watch History, Users, library rescan. Komga for comics and manga libraries. BookOrbit for ebooks, comics and audiobooks: arrVantage checks that it is up (it needs no token, just its address), warns you on Home and in the alerts when it is not, and links to it. With an API key (BookOrbit 3.8 or newer, Read access is enough) you can pick a library, search it and page through its books with covers, open any book to see its authors, series, description, publisher, ISBN, genres and files, and see what was added lately |
+| Media servers | Plex, Jellyfin, Emby — Now Playing, Recently Added, Watch History, Users, library rescan. Komga for comics and manga libraries. BookOrbit for ebooks, comics and audiobooks: arrVantage checks that it is up (it needs no token, just its address), warns you on Home and in the alerts when it is not, and links to it. With an API key (BookOrbit 3.8 or newer, Read access is enough) you can pick a library, search it and page through its books with covers, open any book to see its authors, series, description, publisher, ISBN, genres and files, and see what was added lately (with a Show more button). Home gets a BookOrbit card with the total books, size and how many were added this week, and the Librarr Search tab tells you when what you searched for is already in BookOrbit |
 | Activity data | Tautulli and/or Tracearr, for richer Now Playing / Watch History / Users than the media servers' own APIs provide alone |
 | Metadata | TMDB, TVDB, Fanart.tv, TheAudioDB |
 | Transcoding | Tdarr — stats overview, space saved, per-node worker/queue status |
@@ -161,7 +161,7 @@ What exists today, and what is on the list. The unchecked items are ideas, not p
 - [x] Slack, Pushover and Gotify alerts
 - [x] A Downloads panel on Home: qBittorrent and SABnzbd speeds and active queue in one place
 - [x] Book releases in Coming Up (Readarr / Chaptarr). Built from Readarr's published API; please report it if Chaptarr answers differently
-- [x] BookOrbit: uptime check, alerts and a link; with an API key (BookOrbit 3.8+) a Library tab (pick a library, sort, search, open any book for its details) and Recently Added
+- [x] BookOrbit: uptime check, alerts and a link; with an API key (BookOrbit 3.8+) a Library tab (pick a library, sort, search, open any book for its details), Recently Added, a Home card, and an "Already in BookOrbit" note on Librarr searches
 - [x] Librarr as an instance: Library (the manga, ebooks and audiobooks it has imported, grouped by title, with a Type filter), Queue with Retry, History, System, a Search tab with a Manga / Ebooks / Audiobooks choice that sends the result you pick, and a card in Home's libraries panel (built from its README and a real 1.5.0 server; only the failed-job shape was seen live, so please report anything it shows wrongly)
 - [x] Book and comic apps: Readarr, Chaptarr, Librarr, Komga, Kapowarr and BookOrbit are covered
 
