@@ -2964,7 +2964,7 @@
             const slice = found.slice(state.page * DISPATCHARR_PAGE_SIZE, (state.page + 1) * DISPATCHARR_PAGE_SIZE);
             grid.innerHTML = '<div class="library-grid">' + slice.map(c => `
                 <div class="library-card" data-title="${escapeAttr(c.name)}">
-                    <div class="cover-wrap dp-logo-wrap">
+                    <div class="cover-wrap dp-logo-wrap" role="button" tabindex="0" aria-label="Details for ${escapeAttr(c.name)}" data-dp-channel="${escapeAttr(String(c.id))}" data-dp-server="${escapeAttr(name)}">
                         ${c.logo_url ? `<img class="dp-logo" src="${escapeAttr(c.logo_url)}" alt="" loading="lazy" onerror="this.style.display='none'; this.nextElementSibling.style.display='flex';">` : ''}
                         <div class="cover-fallback" ${c.logo_url ? 'style="display:none;"' : ''}>${escapeHtml(c.name)}</div>
                     </div>
@@ -3060,6 +3060,101 @@
                     </div>`).join('');
             } catch (err) {
                 el.innerHTML = '<div class="modal-empty">Something went wrong loading Dispatcharr.</div>';
+            }
+        }
+
+        // A channel's details: what is on now and next, and a link a player can open. One delegated handler (cards are rebuilt on every page).
+        document.addEventListener('click', event => {
+            const card = event.target.closest('[data-dp-channel]');
+            if (card) openDispatcharrChannel(card.dataset.dpServer, parseInt(card.dataset.dpChannel, 10));
+        });
+
+        function dispatcharrClock(iso) {
+            const when = new Date(iso);
+            if (isNaN(when)) return '';
+            return when.toLocaleTimeString([], {hour: 'numeric', minute: '2-digit'});
+        }
+
+        function dispatcharrProgramHTML(label, prog, withBar) {
+            if (!prog) return '';
+            const times = `${dispatcharrClock(prog.start)} - ${dispatcharrClock(prog.end)}`;
+            return `
+                <div class="modal-section-title">${label}</div>
+                <div class="item dp-program">
+                    <span>${escapeHtml(prog.title)}${prog.subtitle ? `<br><span class="muted-text--sm">${escapeHtml(prog.subtitle)}</span>` : ''}</span>
+                    <span class="col-muted">${escapeHtml(times)}</span>
+                </div>
+                ${withBar ? `<div class="queue-progress-track" role="progressbar" aria-label="How far through the programme" aria-valuemin="0" aria-valuemax="100" aria-valuenow="${prog.percent}"><div class="queue-progress-fill" style="width:${prog.percent}%"></div></div>
+                <p class="muted-text--sm spaced-block">${prog.percent}% through</p>` : ''}
+                ${prog.description ? `<p class="muted-text--lg spaced-block bo-description">${escapeHtml(prog.description)}</p>` : ''}`;
+        }
+
+        // The page is usually opened over plain http on a home network, where navigator.clipboard does not exist, so fall back to selecting a hidden field.
+        async function dispatcharrCopy(text) {
+            try {
+                if (navigator.clipboard && window.isSecureContext) { await navigator.clipboard.writeText(text); return true; }
+            } catch (err) { /* fall through */ }
+            const field = document.createElement('textarea');
+            field.value = text; field.setAttribute('readonly', ''); field.className = 'sr-only';
+            document.body.appendChild(field); field.select();
+            let ok = false;
+            try { ok = document.execCommand('copy'); } catch (err) { ok = false; }
+            field.remove();
+            return ok;
+        }
+
+        async function openDispatcharrChannel(serverName, channelId) {
+            const overlay = document.getElementById('modal-overlay');
+            const header = document.getElementById('modal-header');
+            const body = document.getElementById('modal-body');
+            const known = ((getDispatcharrState(serverName).data || {}).channels || []).find(c => c.id === channelId) || {name: 'Channel', number: null, group: '', logo_url: ''};
+            const facts = [known.number === null ? '' : '#' + known.number, known.group].filter(Boolean).join(' · ');
+            header.innerHTML = `
+                <div class="modal-header">
+                    <div class="modal-cover dp-logo-wrap">
+                        ${known.logo_url
+                            ? `<img class="dp-logo" src="${escapeAttr(known.logo_url)}" alt="" onerror="this.style.display='none'; this.nextElementSibling.style.display='flex';">
+                               <div class="modal-cover-fallback" style="display:none;">${escapeHtml(known.name)}</div>`
+                            : `<div class="modal-cover-fallback">${escapeHtml(known.name)}</div>`}
+                    </div>
+                    <div class="modal-header-text">
+                        <div class="modal-title">${escapeHtml(known.name)}</div>
+                        <div class="muted-text--md muted-block">${escapeHtml(facts)}</div>
+                    </div>
+                </div>`;
+            body.innerHTML = '<div class="modal-loading">Loading...</div>';
+            overlay.classList.add('open');
+            try {
+                const response = await fetch(`/api/dispatcharr/channel/${encodeURIComponent(serverName)}/${channelId}`);
+                const data = await response.json();
+                if (data.needs_key) { body.innerHTML = DISPATCHARR_NEEDS_KEY; return; }
+                if (data.error) { body.innerHTML = `<div class="modal-empty">${escapeHtml(data.error)}</div>`; return; }
+                let html = '';
+                if (data.guide_error) html += `<div class="modal-empty">Could not read the guide: ${escapeHtml(data.guide_error)}</div>`;
+                else if (!data.has_guide) html += '<div class="modal-empty">No guide data is linked to this channel in Dispatcharr, so there is nothing to show for now and next.</div>';
+                else if (!data.now && !data.next) html += '<div class="modal-empty">The guide lists nothing for this channel in the next 12 hours.</div>';
+                else {
+                    html += data.now ? dispatcharrProgramHTML('On now', data.now, true) : '<div class="modal-section-title">On now</div><div class="modal-empty">The guide has a gap right now</div>';
+                    html += dispatcharrProgramHTML('Up next', data.next, false);
+                }
+                if (data.stream_url) {
+                    html += `
+                        <div class="modal-section-title">Stream link</div>
+                        <p class="muted-text--md spaced-block">Paste this into a player such as VLC (Open Network Stream). Opening it starts the stream, so it will show up under Now Watching.</p>
+                        <div class="dp-link-row">
+                            <input type="text" class="dp-link" readonly aria-label="Stream link" value="${escapeAttr(data.stream_url)}" onfocus="this.select()">
+                            <button type="button" class="test-btn" id="dp-copy-btn">Copy link</button>
+                        </div>
+                        <p class="muted-text--sm spaced-block" id="dp-copy-note" role="status"></p>`;
+                }
+                body.innerHTML = html;
+                const button = document.getElementById('dp-copy-btn');
+                if (button) button.addEventListener('click', async () => {
+                    const ok = await dispatcharrCopy(data.stream_url);
+                    document.getElementById('dp-copy-note').textContent = ok ? 'Copied.' : 'Could not copy automatically - select the link above and copy it.';
+                });
+            } catch (err) {
+                body.innerHTML = '<div class="modal-empty">Something went wrong loading this channel.</div>';
             }
         }
 

@@ -4484,10 +4484,11 @@ def _dispatcharr_words(err) -> str:
     return short_request_error(err)
 
 
-def dispatcharr_call(server: dict, path: str, timeout: float = 10):
+def dispatcharr_call(server: dict, path: str, timeout: float = 10, params: dict = None):
     """GET <server><path> with the key. Returns (data, None) or (None, "a few plain words")."""
     try:
-        response = requests.get(f"{server['url'].rstrip('/')}{path}", headers=dispatcharr_headers(server), timeout=timeout)
+        response = requests.get(f"{server['url'].rstrip('/')}{path}", headers=dispatcharr_headers(server),
+                                params=params, timeout=timeout)
         response.raise_for_status()
         return response.json(), None
     except requests.exceptions.JSONDecodeError:
@@ -4525,6 +4526,7 @@ def dispatcharr_channels_view(channels, groups, server_name: str) -> dict:
             "id": channel["id"], "name": scrub_log_text(str(channel.get("name") or "(unnamed)"), 150),
             "number": _dispatcharr_number(channel.get("channel_number")),
             "group_id": group_id, "group": group_names.get(group_id, ""),
+            "has_guide": _bookorbit_int(channel.get("epg_data_id")) is not None,
             "logo_url": f"/api/dispatcharr/logo/{quote(server_name, safe='')}/{logo}" if logo is not None else "",
         })
     rows.sort(key=lambda c: (c["number"] is None, c["number"] if c["number"] is not None else 0, c["name"].lower()))
@@ -4658,6 +4660,88 @@ def fetch_dispatcharr_watching(server: dict) -> dict:
             if isinstance(channel, dict) and isinstance(channel.get("uuid"), str):
                 names[channel["uuid"]] = str(channel.get("name") or "")
     return {"error": None, "needs_key": False, **dispatcharr_watching_view(status, names)}
+
+
+DISPATCHARR_GUIDE_HOURS = 12
+DISPATCHARR_UUID = re.compile(r"[A-Za-z0-9-]{1,64}")
+
+
+def _dispatcharr_text(value, limit: int) -> str:
+    """Programme text for display: addresses dropped, spaces collapsed, cut at `limit`. (Not scrub_log_text:
+    a question mark in a title or blurb would be mistaken for the start of a query string there.)"""
+    text = " ".join(_URL_IN_TEXT.sub("", str(value or "")).split())
+    return text if len(text) <= limit else text[:limit].rstrip() + "..."
+
+
+def _dispatcharr_time(value):
+    try:
+        when = datetime.fromisoformat(str(value).replace("Z", "+00:00"))
+    except ValueError:
+        return None
+    return when if when.tzinfo else when.replace(tzinfo=timezone.utc)
+
+
+def _dispatcharr_iso(when) -> str:
+    return when.astimezone(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+
+
+def dispatcharr_guide_view(programs, now=None) -> dict:
+    """Programmes of one channel -> what is on now and what is on next. Pure and defensive: the answer of
+    /api/epg/programs/search/ was read from the OpenAPI file only (a list of {title, sub_title, description,
+    start_time, end_time, ...}), so a paged {"results": [...]} is accepted too and anything odd is skipped."""
+    now = now or datetime.now(timezone.utc)
+    if isinstance(programs, dict):
+        programs = programs.get("results")
+    timed = []
+    for program in programs if isinstance(programs, list) else []:
+        if not isinstance(program, dict):
+            continue
+        start, end = _dispatcharr_time(program.get("start_time")), _dispatcharr_time(program.get("end_time"))
+        if start and end and end > start:
+            timed.append((start, end, program))
+    timed.sort(key=lambda t: t[0])
+
+    def shape(start, end, program):
+        return {"title": _dispatcharr_text(program.get("title"), 150) or "(untitled)",
+                "subtitle": _dispatcharr_text(program.get("sub_title"), 150),
+                "description": _dispatcharr_text(program.get("description"), 400),
+                "start": _dispatcharr_iso(start), "end": _dispatcharr_iso(end)}
+
+    current = upcoming = None
+    for start, end, program in timed:
+        if current is None and start <= now < end:
+            current = {**shape(start, end, program), "percent": int((now - start) / (end - start) * 100)}
+        elif upcoming is None and start > now:
+            upcoming = shape(start, end, program)
+    return {"now": current, "next": upcoming}
+
+
+def fetch_dispatcharr_channel(server: dict, channel_id: int) -> dict:
+    """One channel's details panel: the link a player can open, whether it has guide data, and what is on
+    now and next. Read-only. The link carries no key; opening it in a player starts a stream."""
+    if not server.get("credential"):
+        return {"error": None, "needs_key": True}
+    summary, error = dispatcharr_call(server, "/api/channels/channels/summary/", timeout=15)
+    if error:
+        return {"error": error}
+    channel = next((c for c in summary if isinstance(c, dict) and c.get("id") == channel_id), None) if isinstance(summary, list) else None
+    if channel is None:
+        return {"error": "that channel is no longer in Dispatcharr - refresh the Channels tab"}
+    uuid = channel.get("uuid")
+    stream_url = f"{server['url'].rstrip('/')}/proxy/ts/stream/{uuid}" if isinstance(uuid, str) and DISPATCHARR_UUID.fullmatch(uuid) else ""
+    answer = {"error": None, "needs_key": False, "stream_url": stream_url,
+              "has_guide": _bookorbit_int(channel.get("epg_data_id")) is not None,
+              "now": None, "next": None, "guide_error": None}
+    if answer["has_guide"]:
+        now = datetime.now(timezone.utc)
+        programs, guide_error = dispatcharr_call(server, "/api/epg/programs/search/", params={
+            "channel_id": channel_id, "end_after": _dispatcharr_iso(now),
+            "start_before": _dispatcharr_iso(now + timedelta(hours=DISPATCHARR_GUIDE_HOURS)), "page_size": 20})
+        if guide_error:
+            answer["guide_error"] = guide_error
+        else:
+            answer.update(dispatcharr_guide_view(programs, now))
+    return answer
 
 
 def fetch_dispatcharr_summary(server: dict, server_name: str) -> dict:
@@ -5637,6 +5721,15 @@ def api_dispatcharr_summary(name):
     if not server:
         return jsonify({"error": "unknown Dispatcharr server"}), 404
     return jsonify(fetch_dispatcharr_summary(server, name))
+
+
+@app.route("/api/dispatcharr/channel/<name>/<int:channel_id>")
+@login_required
+def api_dispatcharr_channel(name, channel_id):
+    server = _dispatcharr_server(name)
+    if not server:
+        return jsonify({"error": "unknown Dispatcharr server"}), 404
+    return jsonify(fetch_dispatcharr_channel(server, channel_id))
 
 
 @app.route("/api/dispatcharr/logo/<name>/<int:logo_id>")

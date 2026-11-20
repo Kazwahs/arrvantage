@@ -475,3 +475,126 @@ class TestPage:
                        "function loadDispatcharrChannels", "function loadDispatcharrSources", "function loadDispatcharrWatching",
                        "function hydrateDispatcharrHome"):
             assert needle in html, needle
+
+
+# ---- Channel details: a link for a player, and what is on now and next ----
+SEARCH = f"{BASE}/api/epg/programs/search/"
+
+
+def iso(delta_minutes):
+    return (datetime.now(timezone.utc) + timedelta(minutes=delta_minutes)).strftime("%Y-%m-%dT%H:%M:%SZ")
+
+
+def program(title, start_min, end_min, **extra):
+    return {"id": abs(hash(title)) % 1000, "title": title, "sub_title": None, "description": None,
+            "start_time": iso(start_min), "end_time": iso(end_min), "tvg_id": "x", **extra}
+
+
+class TestGuideView:
+    def test_now_and_next_with_progress(self):
+        import app as a
+        view = a.dispatcharr_guide_view([program("Later", 60, 90), program("Right now", -30, 30, sub_title="Ep 4",
+                                                                           description="What happens?  Everything."),
+                                         program("Up next", 30, 60), program("Earlier", -90, -30)])
+        assert view["now"]["title"] == "Right now" and view["now"]["subtitle"] == "Ep 4"
+        assert view["now"]["percent"] == 50 and view["next"]["title"] == "Up next"
+        # a question mark in the blurb survives (scrub_log_text would have cut it as a query string)
+        assert view["now"]["description"] == "What happens? Everything."
+        assert view["now"]["start"].endswith("Z")
+
+    def test_a_gap_means_no_now_but_still_a_next(self):
+        import app as a
+        view = a.dispatcharr_guide_view([program("Later", 20, 50)])
+        assert view["now"] is None and view["next"]["title"] == "Later"
+
+    def test_nothing_or_junk(self):
+        import app as a
+        assert a.dispatcharr_guide_view([]) == {"now": None, "next": None}
+        assert a.dispatcharr_guide_view(None) == {"now": None, "next": None}
+        junk = ["x", None, {"title": "no times"}, {"title": "bad", "start_time": "nope", "end_time": "nope"},
+                {"title": "backwards", "start_time": iso(10), "end_time": iso(5)}]
+        assert a.dispatcharr_guide_view(junk) == {"now": None, "next": None}
+
+    def test_a_paged_answer_is_understood_and_text_is_cut(self):
+        import app as a
+        view = a.dispatcharr_guide_view({"results": [program("T" * 400, -5, 5, description="d" * 900)]})
+        assert len(view["now"]["title"]) <= 154 and len(view["now"]["description"]) <= 404
+
+    def test_addresses_in_a_blurb_are_dropped(self):
+        import app as a
+        view = a.dispatcharr_guide_view([program("Show", -5, 5, description="More at http://tracker.example/x now")])
+        assert "tracker.example" not in view["now"]["description"]
+
+
+class TestChannelDetails:
+    def mock(self, requests_mock, programs=None, **kw):
+        mock_dispatcharr(requests_mock)
+        return requests_mock.get(SEARCH, json=programs if programs is not None else [program("Now", -10, 20), program("Next", 20, 50)], **kw)
+
+    def test_the_link_the_guide_and_the_exact_questions_asked(self, app_module, admin_session, requests_mock):
+        client, _ = admin_session
+        add_server(app_module, credential=KEY)
+        search = self.mock(requests_mock)
+        body = client.get("/api/dispatcharr/channel/IPTV/12").get_json()
+        assert body["error"] is None and body["has_guide"] is True and body["guide_error"] is None
+        assert body["stream_url"] == f"{BASE}/proxy/ts/stream/u-12"
+        assert body["now"]["title"] == "Now" and body["next"]["title"] == "Next"
+        asked = search.last_request.qs
+        assert asked["channel_id"] == ["12"] and asked["page_size"] == ["20"] and "end_after" in asked and "start_before" in asked
+        assert search.last_request.headers["X-Api-Key"] == KEY
+        assert KEY not in str(body)  # the link carries no key
+
+    def test_a_channel_without_guide_data_never_asks_the_guide(self, app_module, admin_session, requests_mock):
+        client, _ = admin_session
+        add_server(app_module, credential=KEY)
+        search = self.mock(requests_mock)
+        body = client.get("/api/dispatcharr/channel/IPTV/11").get_json()  # epg_data_id is None
+        assert body["has_guide"] is False and body["now"] is None and body["stream_url"].endswith("/u-11")
+        assert not search.called
+
+    def test_a_guide_that_cannot_be_read_still_gives_the_link(self, app_module, admin_session, requests_mock):
+        client, _ = admin_session
+        add_server(app_module, credential=KEY)
+        self.mock(requests_mock, status_code=500)
+        body = client.get("/api/dispatcharr/channel/IPTV/12").get_json()
+        assert body["error"] is None and body["guide_error"] == "HTTP 500" and body["stream_url"]
+
+    def test_a_channel_that_is_gone(self, app_module, admin_session, requests_mock):
+        client, _ = admin_session
+        add_server(app_module, credential=KEY)
+        self.mock(requests_mock)
+        assert "no longer in Dispatcharr" in client.get("/api/dispatcharr/channel/IPTV/4242").get_json()["error"]
+
+    def test_a_strange_uuid_gives_no_link(self, app_module, admin_session, requests_mock):
+        client, _ = admin_session
+        add_server(app_module, credential=KEY)
+        self.mock(requests_mock)
+        requests_mock.get(CHANNELS, json=[{**CHANNEL_LIST[0], "uuid": "../../etc?x=1"}])
+        assert client.get("/api/dispatcharr/channel/IPTV/12").get_json()["stream_url"] == ""
+
+    def test_no_key_and_failures(self, app_module, admin_session, requests_mock):
+        client, _ = admin_session
+        add_server(app_module)
+        assert client.get("/api/dispatcharr/channel/IPTV/12").get_json()["needs_key"] is True
+        assert not requests_mock.called
+        app_module.CONFIG["media_servers"][-1]["credential"] = KEY
+        app_module.apply_config(app_module.CONFIG)
+        requests_mock.get(CHANNELS, status_code=401)
+        assert "refused the API key" in client.get("/api/dispatcharr/channel/IPTV/12").get_json()["error"]
+
+    def test_unknown_server_and_login(self, app_module, admin_session):
+        client, _ = admin_session
+        assert client.get("/api/dispatcharr/channel/Nope/1").status_code == 404
+        assert app_module.app.test_client().get("/api/dispatcharr/channel/IPTV/1").status_code in (302, 401)
+
+    def test_the_channel_list_says_which_channels_have_a_guide(self):
+        import app as a
+        rows = {c["id"]: c["has_guide"] for c in a.dispatcharr_channels_view(CHANNEL_LIST, GROUP_LIST, "IPTV")["channels"]}
+        assert rows == {11: False, 12: True, 13: True, 14: False}
+
+    def test_the_page_has_the_panel_code(self, app_module, admin_session):
+        client, _ = admin_session
+        add_server(app_module)
+        html = client.get("/").get_data(as_text=True)
+        for needle in ("function openDispatcharrChannel", "function dispatcharrCopy", "data-dp-channel", "dp-copy-btn"):
+            assert needle in html, needle
