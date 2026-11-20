@@ -44,7 +44,7 @@ import time
 # same commit, so the image, the About panel, Copy diagnostics and the GitHub
 # release tag all say the same thing. (ARRVANTAGE_VERSION in the environment
 # wins, for a build that wants to stamp its own - the image does not today.)
-APP_VERSION = "1.6.1"
+APP_VERSION = "1.7.0"
 
 
 def resolve_app_version(raw=None) -> str:
@@ -271,6 +271,7 @@ MEDIA_SERVER_ICONS = {
     "jellyfin": f"{DASHBOARD_ICONS_BASE}/jellyfin.svg",
     "emby": f"{DASHBOARD_ICONS_BASE}/emby.svg",
     "komga": f"{DASHBOARD_ICONS_BASE}/komga.svg",
+    "dispatcharr": f"{DASHBOARD_ICONS_BASE}/dispatcharr.svg",
 }
 
 # Structural facts about each *kind* of arr app - which endpoints it uses,
@@ -359,6 +360,7 @@ MEDIA_SERVER_TYPES = {
     "emby": "Emby",
     "komga": "Komga",
     "bookorbit": "BookOrbit",
+    "dispatcharr": "Dispatcharr",
 }
 
 # Friendly message + CSS severity per Kapowarr system/status "type" -
@@ -4397,6 +4399,293 @@ def fetch_bookorbit_matches(server: dict, server_name: str, query: str) -> dict:
 
 
 # ---------------------------------------------------------------------------
+# Dispatcharr - an IPTV stream / playlist / guide manager
+# (github.com/Dispatcharr/Dispatcharr). Read on 20 Nov 2026 from the person's own
+# v0.34.1 through its OpenAPI file (GET /api/swagger.json, which is YAML despite
+# the name; Swagger UI at /api/swagger/ needs no sign-in) and read-only calls made
+# from Swagger's own "Try it out" with the key he authorized there:
+# - A user API key goes in the `X-API-Key` header (the other scheme is a 30 minute
+#   JWT from a username and password, which is not used here). The key is the media
+#   server's `credential`. Read-only: nothing is ever created, changed or deleted.
+# - GET /api/core/version/ answers {"version": "0.34.1", "timestamp": null} with NO key
+#   (its security list includes "no auth"), so it is the up/down check and a wrong
+#   key can never make a running Dispatcharr look down.
+# - GET /api/channels/channels/summary/ is a plain list (no paging) of {id, uuid, name,
+#   logo_id, channel_number, epg_data_id, channel_group_id}; GET /api/channels/groups/ a
+#   list of {id, name, channel_count, is_custom, m3u_account_count, m3u_accounts};
+#   GET /api/m3u/accounts/ a list of playlists and GET /api/epg/sources/ a list of guides,
+#   both with `status` (idle, fetching, parsing, error, success, disabled; playlists
+#   also pending_setup), `last_message`, `is_active`, `updated_at`, `refresh_interval`
+#   (hours). They also carry usernames, passwords and addresses, which are never read
+#   out or passed on. The built-in "custom" playlist (no address and no file: it holds
+#   hand-made channels) always says status "error", so it is never treated as a problem.
+# - GET /proxy/ts/status answered {"channels": [], "count": 0} with nobody watching;
+#   what an entry looks like while someone watches could NOT be seen, so
+#   dispatcharr_watching_view() reads several likely field names and falls back to
+#   the count alone.
+# - GET /api/channels/logos/<id>/cache/ serves a channel's logo without a key.
+# ---------------------------------------------------------------------------
+
+DISPATCHARR_MAX_CHANNELS = 5000
+DISPATCHARR_SUMMARY_TTL = 60
+DISPATCHARR_LOGO_MAX_BYTES = 1024 * 1024
+DISPATCHARR_STATUS_WORDS = {
+    "idle": "Waiting", "success": "Refreshed", "fetching": "Fetching", "parsing": "Reading", "error": "Failed",
+    "pending_setup": "Needs setup", "disabled": "Off",
+}
+_URL_IN_TEXT = re.compile(r"https?://\S+")
+_DISPATCHARR_SUMMARY: dict = {}  # (name, address, key) -> (monotonic time, answer); successes only
+
+
+def dispatcharr_headers(server: dict) -> dict:
+    return {"X-API-Key": server.get("credential", ""), "Accept": "application/json"}
+
+
+def fetch_dispatcharr_health(server: dict) -> dict:
+    """Is Dispatcharr answering? No key is sent: /api/core/version/ needs none. One more try after a
+    refused connection or a timeout. Failures are a few plain words (no address, no body)."""
+    url = f"{server['url'].rstrip('/')}/api/core/version/"
+    error = "could not connect"
+    for _ in range(2):
+        try:
+            response = requests.get(url, headers={"Accept": "application/json"}, timeout=10)
+            response.raise_for_status()
+        except requests.exceptions.HTTPError:
+            error = f"HTTP {response.status_code} - is this Dispatcharr's address?"
+            continue
+        except requests.exceptions.Timeout:
+            error = "timed out"
+            continue
+        except requests.exceptions.ConnectionError:
+            error = "could not connect"
+            continue
+        except requests.exceptions.RequestException:
+            error = "request failed"
+            continue
+        try:
+            body = response.json()
+        except ValueError:
+            return {"error": "answered, but not like Dispatcharr - check the address", "version": ""}
+        version = body.get("version") if isinstance(body, dict) else None
+        if isinstance(version, str) and version.strip():
+            return {"error": None, "version": scrub_log_text(version, 20)}
+        return {"error": "answered, but not like Dispatcharr - check the address", "version": ""}
+    return {"error": error, "version": ""}
+
+
+def _dispatcharr_words(err) -> str:
+    code = err.response.status_code if isinstance(err, requests.exceptions.HTTPError) and err.response is not None else None
+    if code == 401:
+        return "Dispatcharr refused the API key - copy it again from your user's API & XC tab (it may have been regenerated)"
+    if code == 403:
+        return "Dispatcharr does not let this user read that - use the API key of an administrator"
+    if code == 404:
+        return "not found - check the address, and that this is Dispatcharr"
+    return short_request_error(err)
+
+
+def dispatcharr_call(server: dict, path: str, timeout: float = 10):
+    """GET <server><path> with the key. Returns (data, None) or (None, "a few plain words")."""
+    try:
+        response = requests.get(f"{server['url'].rstrip('/')}{path}", headers=dispatcharr_headers(server), timeout=timeout)
+        response.raise_for_status()
+        return response.json(), None
+    except requests.exceptions.JSONDecodeError:
+        return None, "answered, but not like Dispatcharr - check the address"
+    except requests.exceptions.RequestException as err:
+        return None, _dispatcharr_words(err)
+
+
+def _dispatcharr_number(value):
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        return None
+    return int(value) if float(value).is_integer() else value
+
+
+def dispatcharr_channels_view(channels, groups, server_name: str) -> dict:
+    """The channel summary and the group list -> what the Channels tab shows. Pure and defensive."""
+    group_names = {}
+    group_rows = []
+    for group in groups if isinstance(groups, list) else []:
+        if not isinstance(group, dict) or _bookorbit_int(group.get("id")) is None:
+            continue
+        name = scrub_log_text(str(group.get("name") or "(unnamed)"), 100)
+        group_names[group["id"]] = name
+        count = _bookorbit_int(group.get("channel_count")) or 0
+        if count:
+            group_rows.append({"id": group["id"], "name": name, "count": count})
+    group_rows.sort(key=lambda g: g["name"].lower())
+    rows = []
+    for channel in channels if isinstance(channels, list) else []:
+        if not isinstance(channel, dict) or _bookorbit_int(channel.get("id")) is None:
+            continue
+        logo = _bookorbit_int(channel.get("logo_id"))
+        group_id = _bookorbit_int(channel.get("channel_group_id"))
+        rows.append({
+            "id": channel["id"], "name": scrub_log_text(str(channel.get("name") or "(unnamed)"), 150),
+            "number": _dispatcharr_number(channel.get("channel_number")),
+            "group_id": group_id, "group": group_names.get(group_id, ""),
+            "logo_url": f"/api/dispatcharr/logo/{quote(server_name, safe='')}/{logo}" if logo is not None else "",
+        })
+    rows.sort(key=lambda c: (c["number"] is None, c["number"] if c["number"] is not None else 0, c["name"].lower()))
+    return {"channels": rows, "groups": group_rows}
+
+
+def fetch_dispatcharr_channels(server: dict, server_name: str) -> dict:
+    if not server.get("credential"):
+        return {"error": None, "needs_key": True, "channels": [], "groups": []}
+    channels, error = dispatcharr_call(server, "/api/channels/channels/summary/", timeout=15)
+    if error:
+        return {"error": error, "channels": [], "groups": []}
+    if not isinstance(channels, list):
+        return {"error": "answered, but not like Dispatcharr's channel list - check the address", "channels": [], "groups": []}
+    groups, _ = dispatcharr_call(server, "/api/channels/groups/")  # only for the names; a failure leaves them out
+    view = dispatcharr_channels_view(channels[:DISPATCHARR_MAX_CHANNELS], groups, server_name)
+    return {"error": None, "needs_key": False, **view, "total": len(view["channels"]),
+            "cut_short": len(channels) > DISPATCHARR_MAX_CHANNELS}
+
+
+def _dispatcharr_age_hours(value, now):
+    try:
+        then = datetime.fromisoformat(str(value).replace("Z", "+00:00"))
+    except ValueError:
+        return None
+    if then.tzinfo is None:
+        then = then.replace(tzinfo=timezone.utc)
+    return max(0.0, (now - then).total_seconds() / 3600)
+
+
+def dispatcharr_message(value) -> str:
+    """A refresh's last message: it can quote the provider's address, so addresses are hidden."""
+    return scrub_log_text(_URL_IN_TEXT.sub("(address hidden)", str(value or "")), 200)
+
+
+def dispatcharr_sources_view(playlists, guides, now=None) -> list:
+    """Playlists (M3U accounts) and guides (EPG sources) -> one row each. Pure and defensive. Nothing that
+    can hold a login or an address is kept: only whether there is something to refresh.
+    `problem` is "error" (a refresh failed) or "stale" (a refresh is long overdue); a source that is switched
+    off, or has nothing to refresh (the built-in "custom" playlist), is never a problem."""
+    now = now or datetime.now(timezone.utc)
+    rows = []
+    for kind, entries in (("playlist", playlists), ("guide", guides)):
+        for entry in entries if isinstance(entries, list) else []:
+            if not isinstance(entry, dict) or _bookorbit_int(entry.get("id")) is None:
+                continue
+            status = str(entry.get("status") or "").strip().lower()
+            status = status if status in DISPATCHARR_STATUS_WORDS else "unknown"
+            active = entry.get("is_active") is not False
+            if kind == "playlist":
+                manual = not (entry.get("server_url") or entry.get("file_path"))
+            else:
+                manual = str(entry.get("source_type") or "").lower() == "dummy"
+            interval = _bookorbit_int(entry.get("refresh_interval")) or 0
+            age = _dispatcharr_age_hours(entry.get("updated_at"), now)
+            problem = ""
+            if active and not manual:
+                if status == "error":
+                    problem = "error"
+                elif interval and age is not None and status in ("idle", "success") and age > max(3 * interval, interval + 6):
+                    problem = "stale"
+            rows.append({
+                "id": entry["id"], "kind": kind, "name": scrub_log_text(str(entry.get("name") or "(unnamed)"), 100),
+                "status": status, "status_label": "Manual channels" if manual else DISPATCHARR_STATUS_WORDS.get(status, "Unknown"),
+                "active": active, "manual": manual, "problem": problem,
+                "updated": str(entry.get("updated_at") or "")[:19], "age_hours": None if age is None else round(age, 1),
+                "interval_hours": interval, "message": "" if manual else dispatcharr_message(entry.get("last_message")),
+                "streams_allowed": _bookorbit_int(entry.get("max_streams")) if kind == "playlist" else None,
+                "channels_found": _bookorbit_int(entry.get("epg_data_count")) if kind == "guide" else None,
+            })
+    return rows
+
+
+def fetch_dispatcharr_sources(server: dict) -> dict:
+    if not server.get("credential"):
+        return {"error": None, "needs_key": True, "sources": []}
+    playlists, playlist_error = dispatcharr_call(server, "/api/m3u/accounts/")
+    guides, guide_error = dispatcharr_call(server, "/api/epg/sources/")
+    if playlist_error and guide_error:
+        return {"error": playlist_error, "sources": []}
+    unavailable = [word for word, err in (("playlists", playlist_error), ("guides", guide_error)) if err]
+    rows = dispatcharr_sources_view(None if playlist_error else playlists, None if guide_error else guides)
+    return {"error": None, "needs_key": False, "sources": rows, "unavailable": unavailable,
+            "problems": sum(1 for r in rows if r["problem"])}
+
+
+def _first_text(entry: dict, keys) -> str:
+    for key in keys:
+        value = entry.get(key)
+        if isinstance(value, str) and value.strip():
+            return value.strip()
+    return ""
+
+
+def dispatcharr_watching_view(status, names_by_uuid: dict) -> dict:
+    """GET /proxy/ts/status -> who is watching what. The answer was only ever seen empty (nobody watching), so this
+    reads the likely field names and falls back to what is certain: how many channels are in use. Client addresses
+    and user names are never read."""
+    raw = status.get("channels") if isinstance(status, dict) else None
+    if isinstance(raw, dict):
+        raw = [({"channel_id": key, **value} if isinstance(value, dict) else {"channel_id": key}) for key, value in raw.items()]
+    entries = [e for e in raw if isinstance(e, dict)] if isinstance(raw, list) else []
+    channels = []
+    for entry in entries:
+        uuid = _first_text(entry, ("channel_id", "uuid", "id"))
+        name = names_by_uuid.get(uuid) or _first_text(entry, ("channel_name", "name", "stream_name")) or "(unknown channel)"
+        clients = entry.get("clients")
+        viewers = len(clients) if isinstance(clients, list) else _bookorbit_int(clients)
+        if viewers is None:
+            viewers = next((n for n in (_bookorbit_int(entry.get(k)) for k in ("client_count", "num_clients", "clients_count")) if n is not None), None)
+        uptime = entry.get("uptime")
+        channels.append({"name": scrub_log_text(name, 150), "viewers": viewers,
+                         "state": scrub_log_text(_first_text(entry, ("state", "status")), 30),
+                         "uptime": _bookorbit_duration(int(uptime)) if isinstance(uptime, (int, float)) and not isinstance(uptime, bool) and uptime == uptime and uptime != float("inf") else ""})
+    count = _bookorbit_int(status.get("count")) if isinstance(status, dict) else None
+    return {"channels": channels, "count": len(channels) if count is None else max(count, len(channels))}
+
+
+def fetch_dispatcharr_watching(server: dict) -> dict:
+    if not server.get("credential"):
+        return {"error": None, "needs_key": True, "channels": [], "count": 0}
+    status, error = dispatcharr_call(server, "/proxy/ts/status")
+    if error:
+        return {"error": error, "channels": [], "count": 0}
+    if not isinstance(status, dict):
+        return {"error": "answered, but not like Dispatcharr's live status - check the address", "channels": [], "count": 0}
+    names = {}
+    if status.get("channels"):  # names are only needed once somebody is watching
+        summary, _ = dispatcharr_call(server, "/api/channels/channels/summary/", timeout=15)
+        for channel in summary if isinstance(summary, list) else []:
+            if isinstance(channel, dict) and isinstance(channel.get("uuid"), str):
+                names[channel["uuid"]] = str(channel.get("name") or "")
+    return {"error": None, "needs_key": False, **dispatcharr_watching_view(status, names)}
+
+
+def fetch_dispatcharr_summary(server: dict, server_name: str) -> dict:
+    """The few numbers on Home's Dispatcharr card. Cached briefly; a failure is never cached."""
+    if not server.get("credential"):
+        return {"error": None, "needs_key": True}
+    key = (server_name, server["url"], server["credential"])
+    cached = _dispatcharr_cached_summary(key)
+    if cached:
+        return cached
+    channels = fetch_dispatcharr_channels(server, server_name)
+    if channels.get("error"):
+        return {"error": channels["error"]}
+    sources = fetch_dispatcharr_sources(server)
+    watching = fetch_dispatcharr_watching(server)
+    answer = {"error": None, "needs_key": False, "channels": channels["total"],
+              "problems": None if sources.get("error") else sources.get("problems", 0),
+              "watching": None if watching.get("error") else watching["count"]}
+    _DISPATCHARR_SUMMARY[key] = (time.monotonic(), answer)
+    return answer
+
+
+def _dispatcharr_cached_summary(key):
+    cached = _DISPATCHARR_SUMMARY.get(key)
+    return cached[1] if cached and time.monotonic() - cached[0] < DISPATCHARR_SUMMARY_TTL else None
+
+
+# ---------------------------------------------------------------------------
 # Komga - a comics/manga/book server. Unlike Plex/Jellyfin, there's no
 # "now playing" concept (no live streaming sessions to poll), so this
 # gets its own tabs entirely (Library, On Deck, Recently Added) rather
@@ -5309,6 +5598,67 @@ def api_bookorbit_cover(name, book_id):
     return reply
 
 
+def _dispatcharr_server(name: str):
+    server = get_media_server(name)
+    return server if server and server["type"] == "dispatcharr" else None
+
+
+@app.route("/api/dispatcharr/channels/<name>")
+@login_required
+def api_dispatcharr_channels(name):
+    server = _dispatcharr_server(name)
+    if not server:
+        return jsonify({"error": "unknown Dispatcharr server"}), 404
+    return jsonify(fetch_dispatcharr_channels(server, name))
+
+
+@app.route("/api/dispatcharr/sources/<name>")
+@login_required
+def api_dispatcharr_sources(name):
+    server = _dispatcharr_server(name)
+    if not server:
+        return jsonify({"error": "unknown Dispatcharr server"}), 404
+    return jsonify(fetch_dispatcharr_sources(server))
+
+
+@app.route("/api/dispatcharr/watching/<name>")
+@login_required
+def api_dispatcharr_watching(name):
+    server = _dispatcharr_server(name)
+    if not server:
+        return jsonify({"error": "unknown Dispatcharr server"}), 404
+    return jsonify(fetch_dispatcharr_watching(server))
+
+
+@app.route("/api/dispatcharr/summary/<name>")
+@login_required
+def api_dispatcharr_summary(name):
+    server = _dispatcharr_server(name)
+    if not server:
+        return jsonify({"error": "unknown Dispatcharr server"}), 404
+    return jsonify(fetch_dispatcharr_summary(server, name))
+
+
+@app.route("/api/dispatcharr/logo/<name>/<int:logo_id>")
+@login_required
+def api_dispatcharr_logo(name, logo_id):
+    server = _dispatcharr_server(name)
+    if not server:
+        return "", 404
+    try:
+        response = requests.get(f"{server['url'].rstrip('/')}/api/channels/logos/{logo_id}/cache/",
+                                headers=dispatcharr_headers(server), timeout=10)
+        response.raise_for_status()
+    except requests.exceptions.RequestException:
+        return "", 502
+    kind = response.headers.get("Content-Type", "").split(";")[0].strip().lower()
+    if not kind.startswith("image/") or kind == "image/svg+xml" or len(response.content) > DISPATCHARR_LOGO_MAX_BYTES:
+        return "", 502
+    reply = Response(response.content, mimetype=kind)
+    reply.headers["Cache-Control"] = "private, max-age=3600"
+    return reply
+
+
 @app.route("/api/mediaserver/now-playing/<name>")
 @login_required
 def api_mediaserver_now_playing(name):
@@ -5935,6 +6285,16 @@ def _summarize_services(services: dict) -> tuple:
                 })
                 continue
 
+            if group == "media_servers" and result.get("failing_sources"):
+                failing = result["failing_sources"]
+                what = _name_list([f"{f['name']} ({'refresh failed' if f['problem'] == 'error' else 'not refreshed lately'})" for f in failing])
+                items.append({
+                    "id": f"service:{service_type}:{name}:refresh", "severity": "warning", "kind": "service",
+                    "title": f"{'A playlist or guide is' if len(failing) == 1 else str(len(failing)) + ' playlists or guides are'} not refreshing in {name}",
+                    "detail": what, "services": [name], "service_type": service_type, "view": None,
+                    "hideable": True, "hide_key": f"service:{service_type}:{name}:refresh",
+                })
+
             if group == "indexers":
                 # Some indexers failing is routine and the arr apps already
                 # report it (by name), so only "nothing can search" is raised here.
@@ -6156,6 +6516,16 @@ def probe_media_server(server: dict) -> dict:
         return {"error": fetch_komga_libraries(server)["error"]}
     if server["type"] == "bookorbit":
         return {"error": fetch_bookorbit_health(server)["error"]}
+    if server["type"] == "dispatcharr":
+        health = fetch_dispatcharr_health(server)
+        if health["error"] or not server.get("credential"):
+            return {"error": health["error"]}
+        # With a key, a playlist or guide whose refresh keeps failing is a warning. A key that is refused
+        # never makes a running Dispatcharr look down: only the address answering matters for that.
+        sources = fetch_dispatcharr_sources(server)
+        failing = [{"name": r["name"], "kind": r["kind"], "problem": r["problem"], "message": r["message"]}
+                   for r in sources.get("sources") or [] if r["problem"]]
+        return {"error": None, "failing_sources": failing}
     path = "/identity" if server["type"] == "plex" else "/System/Info/Public"
     last_error = None
     for _ in range(2):
@@ -6845,6 +7215,19 @@ def _run_settings_test():
                     return jsonify({"ok": False, "error": error + hint})
                 if not isinstance(body, dict):
                     return jsonify({"ok": False, "error": "answered, but not like BookOrbit - check the address"})
+            return jsonify({"ok": True})
+        elif category == "media_server" and kind_or_type == "dispatcharr":
+            # The version endpoint needs no key, so a good answer there means the address is right;
+            # a typed key is then checked on a call that needs one (the user's own record).
+            health = fetch_dispatcharr_health({"url": url})
+            if health["error"]:
+                return jsonify({"ok": False, "error": health["error"]})
+            if credential:
+                body, error = dispatcharr_call({"url": url, "credential": credential}, "/api/accounts/users/me/", timeout=8)
+                if error:
+                    return jsonify({"ok": False, "error": error})
+                if not isinstance(body, dict):
+                    return jsonify({"ok": False, "error": "answered, but not like Dispatcharr - check the address"})
             return jsonify({"ok": True})
         elif category == "media_server" and kind_or_type == "komga":
             response = requests.get(

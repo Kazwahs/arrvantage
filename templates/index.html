@@ -317,6 +317,10 @@
                     <!-- BookOrbit (needs an API key, BookOrbit 3.8+; see app.py): browse its libraries and what was added lately. -->
                     <button class="view-tab mediaserver-subtab bookorbit-mstab" data-mstab="bo-library" onclick="selectMediaServerTab('bo-library')" style="display:none;">Library</button>
                     <button class="view-tab mediaserver-subtab bookorbit-mstab" data-mstab="bo-recent" onclick="selectMediaServerTab('bo-recent')" style="display:none;">Recently Added</button>
+                    <!-- Dispatcharr (needs an API key; see app.py): channels, the playlists and guides feeding them, and who is watching. -->
+                    <button class="view-tab mediaserver-subtab dispatcharr-mstab" data-mstab="dp-channels" onclick="selectMediaServerTab('dp-channels')" style="display:none;">Channels</button>
+                    <button class="view-tab mediaserver-subtab dispatcharr-mstab" data-mstab="dp-sources" onclick="selectMediaServerTab('dp-sources')" style="display:none;">Playlists &amp; Guides</button>
+                    <button class="view-tab mediaserver-subtab dispatcharr-mstab" data-mstab="dp-watching" onclick="selectMediaServerTab('dp-watching')" style="display:none;">Now Watching</button>
                 </div>
                 <div class="topbar-right">
                     <button class="test-btn" onclick="refreshCurrentMediaServerTab()">Refresh</button>
@@ -359,6 +363,22 @@
                     </div>
                     <div class="mediaserver-subpanel" data-mstab="bo-recent" style="display:none;">
                         <div id="mediaserver-bo-recent-{{ ms.name }}" class="modal-loading">Loading...</div>
+                    </div>
+                    {% elif ms.type == 'dispatcharr' %}
+                    <div class="mediaserver-subpanel" data-mstab="dp-channels" style="display:block;">
+                        <div class="komga-library-controls">
+                            <select id="dp-group-{{ ms.name }}" aria-label="Channel group" onchange="selectDispatcharrGroup('{{ ms.name }}', this.value)"></select>
+                            <input type="search" id="dp-search-{{ ms.name }}" aria-label="Search channels" placeholder="Search channels by name or number..." oninput="debounceDispatcharrSearch('{{ ms.name }}')">
+                        </div>
+                        <div class="bo-stats-line" id="dp-stats-{{ ms.name }}"></div>
+                        <div id="mediaserver-dp-channels-{{ ms.name }}" class="modal-loading">Loading...</div>
+                        <div class="komga-pagination" id="dp-pagination-{{ ms.name }}"></div>
+                    </div>
+                    <div class="mediaserver-subpanel" data-mstab="dp-sources" style="display:none;">
+                        <div id="mediaserver-dp-sources-{{ ms.name }}" class="modal-loading">Loading...</div>
+                    </div>
+                    <div class="mediaserver-subpanel" data-mstab="dp-watching" style="display:none;">
+                        <div id="mediaserver-dp-watching-{{ ms.name }}" class="modal-loading">Loading...</div>
                     </div>
                     {% else %}
                     {% for tab in ["now-playing", "recently-added", "watch-history", "users"] %}
@@ -1248,6 +1268,7 @@
                                 <span class="stat-card-name">${escapeHtml(ms.name)}</span>
                             </div>
                             ${ms.type === 'bookorbit' ? `<div class="stat-detail" data-bo-summary="${escapeAttr(ms.name)}" hidden></div>` : ''}
+                            ${ms.type === 'dispatcharr' ? `<div class="stat-detail" data-dp-summary="${escapeAttr(ms.name)}" hidden></div>` : ''}
                             <div class="stat-actions">
                                 <a href="${ms.open_url}" target="_blank" rel="noopener" class="mini-btn">Open</a>
                                 ${['plex', 'jellyfin', 'emby'].includes(ms.type) ? `<button class="mini-btn" onclick="rescanMediaServer('${ms.name}', this)">Rescan Library</button>` : ''}
@@ -1358,6 +1379,7 @@
                 });
                 homeStatsLoaded = true;
                 hydrateBookOrbitHome();
+                hydrateDispatcharrHome();
 
                 if (any) {
                     status.hidden = true;
@@ -2237,6 +2259,7 @@
 
         const KOMGA_MS_TABS = ['library', 'ondeck', 'recent'];
         const BOOKORBIT_MS_TABS = ['bo-library', 'bo-recent'];
+        const DISPATCHARR_MS_TABS = ['dp-channels', 'dp-sources', 'dp-watching'];
 
         function selectMediaServer(name) {
             currentMediaServer = name;
@@ -2260,7 +2283,9 @@
             const serverType = tabBtn ? tabBtn.dataset.mediaserverType : '';
             const isKomga = serverType === 'komga';
             const isBookOrbit = serverType === 'bookorbit';
-            document.querySelectorAll('.standard-mstab').forEach(el => { el.style.display = (isKomga || isBookOrbit) ? 'none' : ''; });
+            const isDispatcharr = serverType === 'dispatcharr';
+            document.querySelectorAll('.standard-mstab').forEach(el => { el.style.display = (isKomga || isBookOrbit || isDispatcharr) ? 'none' : ''; });
+            document.querySelectorAll('.dispatcharr-mstab').forEach(el => { el.style.display = isDispatcharr ? '' : 'none'; });
             document.querySelectorAll('.komga-mstab').forEach(el => { el.style.display = isKomga ? '' : 'none'; });
             document.querySelectorAll('.bookorbit-mstab').forEach(el => { el.style.display = isBookOrbit ? '' : 'none'; });
 
@@ -2269,9 +2294,11 @@
             // means nothing for Komga, and neither of them for BookOrbit).
             const tabIsKomgaTab = KOMGA_MS_TABS.includes(currentMediaServerTab);
             const tabIsBookOrbitTab = BOOKORBIT_MS_TABS.includes(currentMediaServerTab);
-            if (isBookOrbit) { if (!tabIsBookOrbitTab) currentMediaServerTab = 'bo-library'; }
+            const tabIsDispatcharrTab = DISPATCHARR_MS_TABS.includes(currentMediaServerTab);
+            if (isDispatcharr) { if (!tabIsDispatcharrTab) currentMediaServerTab = 'dp-channels'; }
+            else if (isBookOrbit) { if (!tabIsBookOrbitTab) currentMediaServerTab = 'bo-library'; }
             else if (isKomga && !tabIsKomgaTab) currentMediaServerTab = 'library';
-            else if (!isKomga && (tabIsKomgaTab || tabIsBookOrbitTab)) currentMediaServerTab = 'now-playing';
+            else if (!isKomga && (tabIsKomgaTab || tabIsBookOrbitTab || tabIsDispatcharrTab)) currentMediaServerTab = 'now-playing';
 
             selectMediaServerTab(currentMediaServerTab);
         }
@@ -2874,6 +2901,195 @@
             }
         }
 
+        // --- Dispatcharr (needs an API key; see app.py): channels, playlists and guides, who is watching ---
+
+        const DISPATCHARR_NEEDS_KEY = '<div class="modal-empty">Create an API key in Dispatcharr (your user, the API &amp; XC tab) and add it under Settings &gt; Media Servers to see your channels here.</div>';
+        const DISPATCHARR_PAGE_SIZE = 60;
+        const dispatcharrState = {};    // per server: {data, group, search, page}
+
+        function getDispatcharrState(name) {
+            if (!dispatcharrState[name]) dispatcharrState[name] = {data: null, group: '', search: '', page: 0};
+            return dispatcharrState[name];
+        }
+
+        function dispatcharrPlural(n, one, many) { return `${n.toLocaleString()} ${n === 1 ? one : many}`; }
+
+        function dispatcharrAgo(hours) {
+            if (hours === null || hours === undefined) return '';
+            if (hours < 1) return 'just now';
+            if (hours < 48) return `${Math.round(hours)} hour${Math.round(hours) === 1 ? '' : 's'} ago`;
+            return `${Math.round(hours / 24)} days ago`;
+        }
+
+        async function loadDispatcharrChannels(name) {
+            const grid = document.getElementById(`mediaserver-dp-channels-${name}`);
+            if (!grid) return;
+            const state = getDispatcharrState(name);
+            grid.innerHTML = '<div class="modal-loading">Loading...</div>';
+            try {
+                const response = await fetch(`/api/dispatcharr/channels/${encodeURIComponent(name)}`);
+                const data = await response.json();
+                if (data.error) { grid.innerHTML = `<div class="modal-empty">${escapeHtml(data.error)}</div>`; return; }
+                if (data.needs_key) { grid.innerHTML = DISPATCHARR_NEEDS_KEY; return; }
+                state.data = data;
+                if (state.group && !data.groups.some(g => String(g.id) === state.group)) state.group = '';
+                const sel = document.getElementById(`dp-group-${name}`);
+                sel.innerHTML = `<option value="">All groups (${data.total.toLocaleString()})</option>` +
+                    data.groups.map(g => `<option value="${escapeAttr(String(g.id))}">${escapeHtml(g.name)} (${g.count.toLocaleString()})</option>`).join('');
+                sel.value = state.group;
+                renderDispatcharrChannels(name);
+            } catch (err) {
+                grid.innerHTML = '<div class="modal-empty">Something went wrong loading Dispatcharr.</div>';
+            }
+        }
+
+        function renderDispatcharrChannels(name) {
+            const grid = document.getElementById(`mediaserver-dp-channels-${name}`);
+            const state = getDispatcharrState(name);
+            if (!grid || !state.data) return;
+            const words = state.search.toLowerCase().split(/\s+/).filter(Boolean);
+            const found = state.data.channels.filter(c =>
+                (!state.group || String(c.group_id) === state.group) &&
+                words.every(w => c.name.toLowerCase().includes(w) || String(c.number === null ? '' : c.number).includes(w)));
+            const pages = Math.max(1, Math.ceil(found.length / DISPATCHARR_PAGE_SIZE));
+            state.page = Math.min(state.page, pages - 1);
+            document.getElementById(`dp-stats-${name}`).innerHTML =
+                `<span class="muted-text--md">${escapeHtml(dispatcharrPlural(found.length, 'channel', 'channels'))}${state.search || state.group ? ' shown' : ''}</span>` +
+                (state.data.cut_short ? ' <span class="muted-text--md">(the first ' + state.data.total.toLocaleString() + ' only)</span>' : '');
+            if (!found.length) {
+                grid.innerHTML = `<div class="empty">${state.search || state.group ? 'No channels match' : 'No channels yet'}</div>`;
+                renderDispatcharrPagination(name, 0, 0);
+                return;
+            }
+            const slice = found.slice(state.page * DISPATCHARR_PAGE_SIZE, (state.page + 1) * DISPATCHARR_PAGE_SIZE);
+            grid.innerHTML = '<div class="library-grid">' + slice.map(c => `
+                <div class="library-card" data-title="${escapeAttr(c.name)}">
+                    <div class="cover-wrap dp-logo-wrap">
+                        ${c.logo_url ? `<img class="dp-logo" src="${escapeAttr(c.logo_url)}" alt="" loading="lazy" onerror="this.style.display='none'; this.nextElementSibling.style.display='flex';">` : ''}
+                        <div class="cover-fallback" ${c.logo_url ? 'style="display:none;"' : ''}>${escapeHtml(c.name)}</div>
+                    </div>
+                    <div class="card-title">${escapeHtml(c.name)}</div>
+                    <div class="card-genre">${escapeHtml([c.number === null ? '' : '#' + c.number, c.group].filter(Boolean).join(' · '))}</div>
+                </div>`).join('') + '</div>';
+            renderDispatcharrPagination(name, state.page, pages);
+        }
+
+        function renderDispatcharrPagination(name, page, totalPages) {
+            const el = document.getElementById(`dp-pagination-${name}`);
+            if (!el) return;
+            if (totalPages <= 1) { el.innerHTML = ''; return; }
+            el.innerHTML = `
+                <button class="test-btn" ${page <= 0 ? 'disabled' : ''} onclick="changeDispatcharrPage('${escapeAttr(name)}', ${page - 1})">&larr; Prev</button>
+                <span class="muted-text--sm">Page ${page + 1} of ${totalPages}</span>
+                <button class="test-btn" ${page >= totalPages - 1 ? 'disabled' : ''} onclick="changeDispatcharrPage('${escapeAttr(name)}', ${page + 1})">Next &rarr;</button>`;
+        }
+
+        function changeDispatcharrPage(name, page) { getDispatcharrState(name).page = page; renderDispatcharrChannels(name); }
+
+        function selectDispatcharrGroup(name, group) {
+            const state = getDispatcharrState(name);
+            state.group = group; state.page = 0;
+            renderDispatcharrChannels(name);
+        }
+
+        let dispatcharrSearchTimer = null;
+        function debounceDispatcharrSearch(name) {
+            clearTimeout(dispatcharrSearchTimer);
+            dispatcharrSearchTimer = setTimeout(() => {
+                const state = getDispatcharrState(name);
+                state.search = document.getElementById(`dp-search-${name}`).value.trim();
+                state.page = 0;
+                renderDispatcharrChannels(name);
+            }, 200);
+        }
+
+        function dispatcharrSourceRow(src) {
+            const bad = !!src.problem;
+            const status = !src.active ? 'Switched off' : (src.problem === 'stale' ? 'Not refreshed lately' : src.status_label);
+            const bits = [];
+            if (src.manual) bits.push('Nothing to refresh');
+            else if (src.age_hours !== null) bits.push('Updated ' + dispatcharrAgo(src.age_hours));
+            if (!src.manual && src.interval_hours) bits.push(`every ${src.interval_hours} hour${src.interval_hours === 1 ? '' : 's'}`);
+            if (src.streams_allowed) bits.push(`${src.streams_allowed.toLocaleString()} at once`);
+            if (src.channels_found) bits.push(`${src.channels_found.toLocaleString()} channels in the guide`);
+            return `
+                <div class="item">
+                    <span>${escapeHtml(src.name)}<br><span class="muted-text--sm">${escapeHtml(bits.join(' · '))}</span>${src.message && (bad || src.status === 'error') ? `<br><span class="muted-text--sm">${escapeHtml(src.message)}</span>` : ''}</span>
+                    <span class="${bad ? 'test-fail' : 'col-muted'}">${escapeHtml(status)}</span>
+                </div>`;
+        }
+
+        async function loadDispatcharrSources(name) {
+            const el = document.getElementById(`mediaserver-dp-sources-${name}`);
+            if (!el) return;
+            el.innerHTML = '<div class="modal-loading">Loading...</div>';
+            try {
+                const response = await fetch(`/api/dispatcharr/sources/${encodeURIComponent(name)}`);
+                const data = await response.json();
+                if (data.error) { el.innerHTML = `<div class="modal-empty">${escapeHtml(data.error)}</div>`; return; }
+                if (data.needs_key) { el.innerHTML = DISPATCHARR_NEEDS_KEY; return; }
+                const section = (title, kind) => {
+                    const rows = data.sources.filter(r => r.kind === kind);
+                    return `<div class="modal-section-title">${title}</div>` + (rows.length ? rows.map(dispatcharrSourceRow).join('') : '<div class="modal-empty">None set up</div>');
+                };
+                const note = (data.unavailable || []).length ? `<p class="muted-text--md spaced-block">Could not read: ${escapeHtml(data.unavailable.join(' and '))}.</p>` : '';
+                el.innerHTML = note + section('Playlists', 'playlist') + section('Guides', 'guide');
+            } catch (err) {
+                el.innerHTML = '<div class="modal-empty">Something went wrong loading Dispatcharr.</div>';
+            }
+        }
+
+        async function loadDispatcharrWatching(name) {
+            const el = document.getElementById(`mediaserver-dp-watching-${name}`);
+            if (!el) return;
+            el.innerHTML = '<div class="modal-loading">Loading...</div>';
+            try {
+                const response = await fetch(`/api/dispatcharr/watching/${encodeURIComponent(name)}`);
+                const data = await response.json();
+                if (data.error) { el.innerHTML = `<div class="modal-empty">${escapeHtml(data.error)}</div>`; return; }
+                if (data.needs_key) { el.innerHTML = DISPATCHARR_NEEDS_KEY; return; }
+                if (!data.count) { el.innerHTML = '<div class="empty">Nobody is watching right now</div>'; return; }
+                if (!data.channels.length) {
+                    el.innerHTML = `<div class="empty">${escapeHtml(dispatcharrPlural(data.count, 'channel', 'channels'))} in use right now</div>`;
+                    return;
+                }
+                el.innerHTML = data.channels.map(c => `
+                    <div class="item">
+                        <span>${escapeHtml(c.name)}</span>
+                        <span class="col-muted">${escapeHtml([c.viewers === null ? '' : dispatcharrPlural(c.viewers, 'viewer', 'viewers'), c.state, c.uptime].filter(Boolean).join(' · '))}</span>
+                    </div>`).join('');
+            } catch (err) {
+                el.innerHTML = '<div class="modal-empty">Something went wrong loading Dispatcharr.</div>';
+            }
+        }
+
+        // Home's Dispatcharr card, filled in after Home is up (like BookOrbit's); the last answer is repainted at once on a refresh.
+        const dispatcharrHomeSummary = {};
+
+        function paintDispatcharrHome(el, sum) {
+            if (!sum || sum.needs_key) { el.hidden = true; return; }
+            if (sum.error) { el.hidden = false; el.innerHTML = `<span class="test-fail">${escapeHtml(sum.error)}</span>`; return; }
+            const watching = sum.watching === null || sum.watching === undefined ? '' : ` &middot; ${sum.watching.toLocaleString()} watching`;
+            const health = sum.problems === null || sum.problems === undefined ? '' :
+                (sum.problems ? `<div class="stat-foot"><span class="test-fail">${dispatcharrPlural(sum.problems, 'playlist or guide', 'playlists or guides')} not refreshing</span></div>`
+                              : '<div class="stat-foot">Playlists and guides refreshing</div>');
+            el.hidden = false;
+            el.innerHTML = `<strong>${sum.channels.toLocaleString()}</strong> channel${sum.channels === 1 ? '' : 's'}${watching}${health}`;
+        }
+
+        function hydrateDispatcharrHome() {
+            document.querySelectorAll('[data-dp-summary]').forEach(async el => {
+                const name = el.dataset.dpSummary;
+                if (dispatcharrHomeSummary[name]) paintDispatcharrHome(el, dispatcharrHomeSummary[name]);
+                try {
+                    const response = await fetch(`/api/dispatcharr/summary/${encodeURIComponent(name)}`);
+                    const sum = await response.json();
+                    dispatcharrHomeSummary[name] = sum;
+                    if (el.isConnected) paintDispatcharrHome(el, sum);
+                } catch (err) { /* leave what is shown; the next refresh tries again */ }
+            });
+        }
+
         async function loadMediaServerTabData(name, tab, forceReload) {
             if (KOMGA_MS_TABS.includes(tab)) {
                 return loadKomgaTabData(name, tab, forceReload);
@@ -2881,6 +3097,9 @@
 
             if (tab === 'bo-library') return loadBookOrbitLibrary(name, true);
             if (tab === 'bo-recent') return loadBookOrbitRecent(name);
+            if (tab === 'dp-channels') return loadDispatcharrChannels(name);
+            if (tab === 'dp-sources') return loadDispatcharrSources(name);
+            if (tab === 'dp-watching') return loadDispatcharrWatching(name);
 
             const key = `${name}:${tab}`;
             if (loadedMediaServerTabs.has(key) && !forceReload) return;

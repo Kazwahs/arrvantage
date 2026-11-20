@@ -1540,3 +1540,5 @@ body {
 .bo-owned { border: 1px solid var(--border); border-radius: var(--radius-sm); padding: var(--space-3) var(--space-4); margin-bottom: var(--space-4); font-size: var(--text-sm); line-height: 1.6; }
 .bo-owned-link { background: none; border: 0; padding: 0; color: var(--accent, inherit); cursor: pointer; font: inherit; text-decoration: underline; text-align: left; }
 .bo-owned-link:hover { text-decoration: none; }
+.dp-logo-wrap { background: var(--panel); }
+.dp-logo { width: 100%; height: 100%; object-fit: contain; padding: var(--space-3); box-sizing: border-box; }
